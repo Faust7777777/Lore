@@ -6,6 +6,6 @@ tmp/
 *.test
 *.out
 coverage/
-vault/
+/vault/
 state/
 .DS_Store
