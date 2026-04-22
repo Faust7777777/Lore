@@ -14,11 +14,19 @@ type ManagedStatusView struct {
 	Health    HealthSnapshot      `json:"health"`
 }
 
+type AttachmentRef struct {
+	Raw   string `json:"raw,omitempty"`
+	Path  string `json:"path"`
+	Kind  string `json:"kind"`
+	Embed bool   `json:"embed,omitempty"`
+}
+
 type VaultDocument struct {
-	Path        string   `json:"path"`
-	DocClass    DocClass `json:"doc_class"`
-	BaseVersion string   `json:"base_version,omitempty"`
-	Content     string   `json:"content"`
+	Path        string          `json:"path"`
+	DocClass    DocClass        `json:"doc_class"`
+	BaseVersion string          `json:"base_version,omitempty"`
+	Content     string          `json:"content"`
+	Attachments []AttachmentRef `json:"attachments,omitempty"`
 }
 
 type VaultEntry struct {
@@ -51,5 +59,6 @@ type ContextPack struct {
 	TargetDoc   *VaultDocument    `json:"target_doc,omitempty"`
 	RelatedHits []SearchHit       `json:"related_hits,omitempty"`
 	Backlinks   []SearchHit       `json:"backlinks,omitempty"`
+	Attachments []AttachmentRef   `json:"attachments,omitempty"`
 	Notes       []string          `json:"notes,omitempty"`
 }

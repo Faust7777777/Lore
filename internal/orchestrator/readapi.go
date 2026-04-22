@@ -59,6 +59,9 @@ func (h *Harness) SystemDocGet(name string) (model.VaultDocument, error) {
 }
 
 func (h *Harness) VaultRead(relPath string) (model.VaultDocument, error) {
+	if !isMarkdownDocPath(relPath) {
+		return model.VaultDocument{}, fmt.Errorf("vault_read only supports markdown documents: %s", cleanRelPath(relPath))
+	}
 	classification := h.classifier.Classify(relPath)
 	doc, err := h.readDocument(relPath, classification.Class)
 	if err != nil {
@@ -220,6 +223,12 @@ func (h *Harness) ContextPack(targetPath string, task string, limit int) (model.
 	if pack.TargetDoc == nil && targetPath != "" {
 		pack.Notes = append(pack.Notes, "target document could not be loaded")
 	}
+	pack.Attachments = mergeAttachments(
+		pack.SystemDoc,
+		pack.ProgressDoc,
+		pack.CurrentWeek,
+		pack.TargetDoc,
+	)
 
 	h.recordReadAudit("context_pack", normalizeAuditTarget(targetPath), map[string]string{
 		"task":  strings.TrimSpace(task),
@@ -282,6 +291,7 @@ func (h *Harness) readDocument(relPath string, fallbackClass model.DocClass) (mo
 		DocClass:    docClass,
 		BaseVersion: hash,
 		Content:     string(data),
+		Attachments: vault.ExtractAttachmentRefs(string(data)),
 	}, nil
 }
 
@@ -363,6 +373,28 @@ func dedupeHits(hits []model.SearchHit, limit int) []model.SearchHit {
 	return out
 }
 
+func mergeAttachments(docs ...*model.VaultDocument) []model.AttachmentRef {
+	refs := make([]model.AttachmentRef, 0)
+	seen := make(map[string]int)
+	for _, doc := range docs {
+		if doc == nil {
+			continue
+		}
+		for _, ref := range doc.Attachments {
+			key := ref.Path + "|" + ref.Kind
+			if index, ok := seen[key]; ok {
+				if ref.Embed {
+					refs[index].Embed = true
+				}
+				continue
+			}
+			seen[key] = len(refs)
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
 func cleanRelPath(value string) string {
 	value = filepath.ToSlash(filepath.Clean(strings.TrimSpace(value)))
 	value = strings.TrimPrefix(value, "./")
@@ -370,6 +402,14 @@ func cleanRelPath(value string) string {
 		return ""
 	}
 	return value
+}
+
+func isMarkdownDocPath(value string) bool {
+	value = cleanRelPath(value)
+	if value == "" {
+		return false
+	}
+	return strings.EqualFold(filepath.Ext(value), ".md")
 }
 
 func normalizeAuditTarget(target string) string {
