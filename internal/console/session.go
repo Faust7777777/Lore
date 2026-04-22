@@ -31,7 +31,7 @@ type Session struct {
 }
 
 func NewSession(version string) *Session {
-	return NewSessionWithAgent(version, operatoragent.NewFallback())
+	return NewSessionWithAgent(version, operatoragent.NewDefault())
 }
 
 func NewSessionWithAgent(version string, agent operatoragent.Agent) *Session {

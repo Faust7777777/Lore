@@ -1,0 +1,120 @@
+package operatoragent
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	openai "obsidian-harness/internal/llm/openai"
+)
+
+type fakeCompletionClient struct {
+	response openai.ChatCompletionResponse
+	err      error
+	requests []openai.ChatCompletionRequest
+}
+
+func (f *fakeCompletionClient) ChatCompletion(_ context.Context, req openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
+	f.requests = append(f.requests, req)
+	return f.response, f.err
+}
+
+func TestLoadEnvConfigDisabledWhenUnset(t *testing.T) {
+	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", "")
+	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "")
+	t.Setenv("OBSIDIAN_HARNESS_LLM_MODEL", "")
+	t.Setenv("OBSIDIAN_HARNESS_OPERATOR_BASE_URL", "")
+	t.Setenv("OBSIDIAN_HARNESS_OPERATOR_API_KEY", "")
+	t.Setenv("OBSIDIAN_HARNESS_OPERATOR_MODEL", "")
+	t.Setenv("LORE_LLM_BASE_URL", "")
+	t.Setenv("LORE_LLM_API_KEY", "")
+	t.Setenv("LORE_LLM_MODEL", "")
+	t.Setenv("LORE_OPERATOR_BASE_URL", "")
+	t.Setenv("LORE_OPERATOR_API_KEY", "")
+	t.Setenv("LORE_OPERATOR_MODEL", "")
+
+	cfg, enabled, err := LoadEnvConfig()
+	if err != nil {
+		t.Fatalf("LoadEnvConfig() error = %v", err)
+	}
+	if enabled {
+		t.Fatalf("enabled = true, want false, cfg = %+v", cfg)
+	}
+}
+
+func TestLoadEnvConfigRequiresCompleteSharedConfig(t *testing.T) {
+	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", "https://example.test/v1")
+	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "secret")
+
+	_, _, err := LoadEnvConfig()
+	if err == nil {
+		t.Fatal("LoadEnvConfig() error = nil, want incomplete config error")
+	}
+	if !strings.Contains(err.Error(), "must be set together") {
+		t.Fatalf("error = %q, want must be set together", err)
+	}
+}
+
+func TestModelAgentDecideParsesSingleJSONDecision(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{
+			Content: "```json\n{\"action\":\"approve_draft\",\"use_focused_draft\":true}\n```",
+		},
+	}
+	agent := NewModelAgent(client)
+
+	decision, err := agent.Decide("approve it", Context{
+		CurrentDraftID: "draft-123",
+		DefaultAgentID: "codex",
+		Now:            time.Date(2026, 4, 22, 11, 0, 0, 0, time.Local),
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != ActionApproveDraft {
+		t.Fatalf("decision.Action = %q, want %q", decision.Action, ActionApproveDraft)
+	}
+	if !decision.UseFocusedDraft {
+		t.Fatal("decision.UseFocusedDraft = false, want true")
+	}
+	if decision.AgentID != "codex" {
+		t.Fatalf("decision.AgentID = %q, want codex", decision.AgentID)
+	}
+	if len(client.requests) != 1 || len(client.requests[0].Messages) != 2 {
+		t.Fatalf("requests = %+v, want one chat completion with system+user", client.requests)
+	}
+}
+
+func TestModelAgentDecideRejectsBackgroundTaskRequests(t *testing.T) {
+	client := &fakeCompletionClient{}
+	agent := NewModelAgent(client)
+
+	_, err := agent.Decide("每30分钟同步一下", Context{})
+	if err == nil {
+		t.Fatal("Decide() error = nil, want background task rejection")
+	}
+	if !strings.Contains(err.Error(), "timed and background") {
+		t.Fatalf("error = %q, want background rejection", err)
+	}
+	if len(client.requests) != 0 {
+		t.Fatalf("requests = %d, want 0", len(client.requests))
+	}
+}
+
+func TestModelAgentDecideErrorsOnInvalidModelOutput(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{
+			Content: "status please",
+		},
+	}
+	agent := NewModelAgent(client)
+
+	_, err := agent.Decide("show status", Context{})
+	if err == nil {
+		t.Fatal("Decide() error = nil, want invalid model output error")
+	}
+	if !strings.Contains(err.Error(), "invalid model response") {
+		t.Fatalf("error = %q, want invalid model response", err)
+	}
+}
