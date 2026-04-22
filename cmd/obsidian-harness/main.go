@@ -16,6 +16,7 @@ import (
 	"obsidian-harness/internal/console"
 	"obsidian-harness/internal/mcp"
 	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/operatoragent"
 	"obsidian-harness/internal/tui"
 )
 
@@ -115,6 +116,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runDraftCommand(args[1:], stdout, stderr)
 	case "process-sink":
 		return runProcessSinkCommand(args[1:], stdout, stderr)
+	case "models":
+		return runModelsCommand(args[1:], stdout, stderr)
 	case "mcp":
 		workDir, err := resolveWorkDir(args[1:])
 		if err != nil {
@@ -164,6 +167,7 @@ Commands:
   console              Operator console: NL -> one explicit reviewed action
   draft                Review and act on pending drafts
   process-sink         Inspect checkpoint and daily report status
+  models               List models from the configured LLM endpoint
   mcp [workdir]        Run the read-only MCP server over stdio
   import-codex-jsonl   Import a Codex session JSONL into checkpoints and daily reports
   sync-codex-jsonl     Sync a Codex session JSONL only when the file changed
@@ -374,6 +378,52 @@ func runProcessSinkCommand(args []string, stdout io.Writer, stderr io.Writer) in
 		return 0
 	default:
 		fmt.Fprintf(stderr, "process-sink: unknown subcommand %q\n", args[0])
+		return 1
+	}
+}
+
+func runModelsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "models: missing subcommand")
+		fmt.Fprintln(stderr, "usage: obsidian-harness models list")
+		return 1
+	}
+
+	switch args[0] {
+	case "list":
+		cfg, enabled, err := operatoragent.LoadEnvConfig()
+		if err != nil {
+			fmt.Fprintf(stderr, "models list: %v\n", err)
+			return 1
+		}
+		if !enabled {
+			fmt.Fprintln(stderr, "models list: configure OBSIDIAN_HARNESS_LLM_BASE_URL and OBSIDIAN_HARNESS_LLM_API_KEY first")
+			return 1
+		}
+
+		catalog, err := operatoragent.DiscoverModels(context.Background(), cfg)
+		if err != nil {
+			fmt.Fprintf(stderr, "models list: %v\n", err)
+			return 1
+		}
+
+		fmt.Fprintf(stdout, "Available models (%d)\n", len(catalog.Models))
+		for _, modelName := range catalog.Models {
+			marker := " "
+			if strings.EqualFold(modelName, catalog.Recommended) {
+				marker = "*"
+			}
+			fmt.Fprintf(stdout, "%s %s\n", marker, modelName)
+		}
+		if strings.TrimSpace(cfg.Model) != "" {
+			fmt.Fprintf(stdout, "\nConfigured model: %s\n", cfg.Model)
+		}
+		if catalog.Recommended != "" {
+			fmt.Fprintf(stdout, "Recommended model: %s\n", catalog.Recommended)
+		}
+		return 0
+	default:
+		fmt.Fprintf(stderr, "models: unknown subcommand %q\n", args[0])
 		return 1
 	}
 }

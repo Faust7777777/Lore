@@ -43,13 +43,31 @@ func TestLoadEnvConfigDisabledWhenUnset(t *testing.T) {
 	}
 }
 
-func TestLoadEnvConfigRequiresCompleteSharedConfig(t *testing.T) {
+func TestLoadEnvConfigAllowsDiscoveryWithoutModel(t *testing.T) {
 	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", "https://example.test/v1")
 	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "secret")
+	t.Setenv("OBSIDIAN_HARNESS_LLM_MODEL", "")
+
+	cfg, enabled, err := LoadEnvConfig()
+	if err != nil {
+		t.Fatalf("LoadEnvConfig() error = %v", err)
+	}
+	if !enabled {
+		t.Fatal("enabled = false, want true")
+	}
+	if cfg.BaseURL != "https://example.test/v1" || cfg.APIKey != "secret" || cfg.Model != "" {
+		t.Fatalf("cfg = %+v, want base+key and empty model", cfg)
+	}
+}
+
+func TestLoadEnvConfigRequiresBaseAndKeyTogether(t *testing.T) {
+	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", "https://example.test/v1")
+	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "")
+	t.Setenv("OBSIDIAN_HARNESS_LLM_MODEL", "")
 
 	_, _, err := LoadEnvConfig()
 	if err == nil {
-		t.Fatal("LoadEnvConfig() error = nil, want incomplete config error")
+		t.Fatal("LoadEnvConfig() error = nil, want incomplete base/key error")
 	}
 	if !strings.Contains(err.Error(), "must be set together") {
 		t.Fatalf("error = %q, want must be set together", err)
@@ -90,7 +108,7 @@ func TestModelAgentDecideRejectsBackgroundTaskRequests(t *testing.T) {
 	client := &fakeCompletionClient{}
 	agent := NewModelAgent(client)
 
-	_, err := agent.Decide("每30分钟同步一下", Context{})
+	_, err := agent.Decide("每30分钟同步一次", Context{})
 	if err == nil {
 		t.Fatal("Decide() error = nil, want background task rejection")
 	}
@@ -116,5 +134,35 @@ func TestModelAgentDecideErrorsOnInvalidModelOutput(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid model response") {
 		t.Fatalf("error = %q, want invalid model response", err)
+	}
+}
+
+func TestSelectOperatorModelPrefersGpt54(t *testing.T) {
+	modelName, err := selectOperatorModel([]string{"gpt-4.1", "gpt-5.4", "gpt-4o"})
+	if err != nil {
+		t.Fatalf("selectOperatorModel() error = %v", err)
+	}
+	if modelName != "gpt-5.4" {
+		t.Fatalf("modelName = %q, want gpt-5.4", modelName)
+	}
+}
+
+func TestSelectOperatorModelFallsBackToCompatibleTextModel(t *testing.T) {
+	modelName, err := selectOperatorModel([]string{"text-embedding-3-large", "claude-sonnet-4"})
+	if err != nil {
+		t.Fatalf("selectOperatorModel() error = %v", err)
+	}
+	if modelName != "claude-sonnet-4" {
+		t.Fatalf("modelName = %q, want claude-sonnet-4", modelName)
+	}
+}
+
+func TestSelectOperatorModelRejectsNonTextCatalog(t *testing.T) {
+	_, err := selectOperatorModel([]string{"text-embedding-3-large", "omni-moderation-latest"})
+	if err == nil {
+		t.Fatal("selectOperatorModel() error = nil, want no likely text model error")
+	}
+	if !strings.Contains(err.Error(), "no likely text model") {
+		t.Fatalf("error = %q, want no likely text model", err)
 	}
 }

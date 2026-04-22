@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,6 +114,39 @@ func TestRunConsoleOnceStatus(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Managed Status") {
 		t.Fatalf("expected managed status output, got %q", stdout.String())
+	}
+}
+
+func TestRunModelsList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Fatalf("path = %q, want /models", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "gpt-5.4"},
+				{"id": "gpt-4.1"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", server.URL)
+	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "secret")
+	t.Setenv("OBSIDIAN_HARNESS_LLM_MODEL", "")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"models", "list"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Available models (2)") {
+		t.Fatalf("expected models output, got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Recommended model: gpt-5.4") {
+		t.Fatalf("expected recommended model output, got %q", stdout.String())
 	}
 }
 

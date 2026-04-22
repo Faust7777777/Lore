@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,6 +41,11 @@ type EnvConfig struct {
 	Timeout time.Duration
 }
 
+type ModelCatalog struct {
+	Models      []string
+	Recommended string
+}
+
 func NewDefault() Agent {
 	agent, err := NewFromEnv()
 	if err != nil {
@@ -60,10 +66,15 @@ func NewFromEnv() (Agent, error) {
 		return nil, nil
 	}
 
+	modelName, err := ResolveModel(context.Background(), cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	client, err := openai.NewClient(openai.Config{
 		BaseURL: cfg.BaseURL,
 		APIKey:  cfg.APIKey,
-		Model:   cfg.Model,
+		Model:   modelName,
 		Timeout: cfg.Timeout,
 	})
 	if err != nil {
@@ -94,20 +105,63 @@ func LoadEnvConfig() (EnvConfig, bool, error) {
 		cfg.Timeout = timeout
 	}
 
-	values := []string{strings.TrimSpace(cfg.BaseURL), strings.TrimSpace(cfg.APIKey), strings.TrimSpace(cfg.Model)}
-	nonEmpty := 0
-	for _, value := range values {
-		if value != "" {
-			nonEmpty++
-		}
-	}
-	if nonEmpty == 0 {
+	baseURL := strings.TrimSpace(cfg.BaseURL)
+	apiKey := strings.TrimSpace(cfg.APIKey)
+	modelName := strings.TrimSpace(cfg.Model)
+
+	if baseURL == "" && apiKey == "" && modelName == "" {
 		return EnvConfig{}, false, nil
 	}
-	if nonEmpty != len(values) {
-		return EnvConfig{}, false, fmt.Errorf("operator agent: OBSIDIAN_HARNESS_LLM_BASE_URL, OBSIDIAN_HARNESS_LLM_API_KEY, and OBSIDIAN_HARNESS_LLM_MODEL must be set together")
+	if baseURL == "" || apiKey == "" {
+		return EnvConfig{}, false, fmt.Errorf("operator agent: OBSIDIAN_HARNESS_LLM_BASE_URL and OBSIDIAN_HARNESS_LLM_API_KEY must be set together")
 	}
 	return cfg, true, nil
+}
+
+func ResolveModel(ctx context.Context, cfg EnvConfig) (string, error) {
+	if modelName := strings.TrimSpace(cfg.Model); modelName != "" {
+		return modelName, nil
+	}
+
+	catalog, err := DiscoverModels(ctx, cfg)
+	if err != nil {
+		return "", err
+	}
+	if catalog.Recommended == "" {
+		return "", fmt.Errorf("operator agent: models were discovered but none matched the operator allowlist: %s", strings.Join(catalog.Models, ", "))
+	}
+	return catalog.Recommended, nil
+}
+
+func DiscoverModels(ctx context.Context, cfg EnvConfig) (ModelCatalog, error) {
+	client, err := openai.NewClient(openai.Config{
+		BaseURL: cfg.BaseURL,
+		APIKey:  cfg.APIKey,
+		Timeout: cfg.Timeout,
+	})
+	if err != nil {
+		return ModelCatalog{}, err
+	}
+
+	discovered, err := client.ListModels(ctx)
+	if err != nil {
+		return ModelCatalog{}, fmt.Errorf("operator agent: model discovery failed: %w", err)
+	}
+
+	models := make([]string, 0, len(discovered))
+	for _, item := range discovered {
+		models = append(models, item.ID)
+	}
+	sort.Strings(models)
+
+	recommended, err := selectOperatorModel(models)
+	if err != nil {
+		return ModelCatalog{Models: models}, nil
+	}
+	return ModelCatalog{
+		Models:      models,
+		Recommended: recommended,
+	}, nil
 }
 
 func (a ModelAgent) Decide(input string, ctx Context) (Decision, error) {
@@ -261,4 +315,48 @@ func firstNonEmptyEnv(names ...string) string {
 		}
 	}
 	return ""
+}
+
+func selectOperatorModel(models []string) (string, error) {
+	if len(models) == 0 {
+		return "", fmt.Errorf("no models available")
+	}
+
+	for _, preferred := range []string{"gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1", "gpt-5", "gpt-4.1"} {
+		for _, modelName := range models {
+			if strings.EqualFold(strings.TrimSpace(modelName), preferred) {
+				return modelName, nil
+			}
+		}
+	}
+
+	candidates := make([]string, 0, len(models))
+	for _, modelName := range models {
+		if isLikelyOperatorModel(modelName) {
+			candidates = append(candidates, modelName)
+		}
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no likely text model found")
+	}
+	sort.Strings(candidates)
+	return candidates[0], nil
+}
+
+func isLikelyOperatorModel(modelName string) bool {
+	value := strings.ToLower(strings.TrimSpace(modelName))
+	if value == "" {
+		return false
+	}
+	for _, blocked := range []string{"embedding", "moderation", "whisper", "tts", "audio", "realtime", "image", "vision-preview", "transcribe", "transcription", "search"} {
+		if strings.Contains(value, blocked) {
+			return false
+		}
+	}
+	for _, allowedPrefix := range []string{"gpt-", "o1", "o3", "o4", "claude", "gemini", "qwen", "kimi", "glm", "deepseek"} {
+		if strings.HasPrefix(value, allowedPrefix) {
+			return true
+		}
+	}
+	return strings.Contains(value, "instruct")
 }
