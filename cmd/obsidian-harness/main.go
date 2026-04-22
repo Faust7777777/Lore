@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
@@ -122,6 +123,10 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 0
 	case "import-codex-jsonl":
 		return runImportCodexJSONL(args[1:], stdout, stderr)
+	case "sync-codex-jsonl":
+		return runSyncCodexJSONL(args[1:], stdout, stderr)
+	case "attach-codex-jsonl":
+		return runAttachCodexJSONL(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage())
 		return 0
@@ -147,6 +152,8 @@ Commands:
   demo-p0b [workdir]   Run the checkpoint -> daily report demo chain
   mcp [workdir]        Run the read-only MCP server over stdio
   import-codex-jsonl   Import a Codex session JSONL into checkpoints and daily reports
+  sync-codex-jsonl     Sync a Codex session JSONL only when the file changed
+  attach-codex-jsonl   Poll a Codex session JSONL and keep syncing it
   version              Print the CLI version
   help                 Show this help text
 `
@@ -160,45 +167,19 @@ func resolveWorkDir(args []string) (string, error) {
 }
 
 func runImportCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int {
-	flags := flag.NewFlagSet("import-codex-jsonl", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-
-	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
-	inputPath := flags.String("input", "", "path to Codex session JSONL")
-	agentID := flags.String("agent", "", "override agent id")
-	sessionID := flags.String("session", "", "override session id")
-	windowSize := flags.Duration("window", 0, "override checkpoint window size, e.g. 30m")
-	skipRollup := flags.Bool("skip-rollup", false, "skip daily rollup after import")
-
-	if err := flags.Parse(args); err != nil {
+	params, workDir, _, _, err := parseCodexJSONLFlags("import-codex-jsonl", args, stderr, false, false)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if strings.TrimSpace(*inputPath) == "" {
-		fmt.Fprintln(stderr, "import-codex-jsonl: --input is required")
-		return 1
-	}
-	if strings.TrimSpace(*workDir) == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			fmt.Fprintf(stderr, "import-codex-jsonl: %v\n", err)
-			return 1
-		}
-		*workDir = cwd
-	}
 
-	runtime, err := app.OpenRuntime(filepath.Clean(*workDir))
+	runtime, err := app.OpenRuntime(workDir)
 	if err != nil {
 		fmt.Fprintf(stderr, "open runtime: %v\n", err)
 		return 1
 	}
 
-	result, err := runtime.ImportCodexJSONL(app.ImportCodexJSONLParams{
-		InputPath:  *inputPath,
-		AgentID:    *agentID,
-		SessionID:  *sessionID,
-		Window:     *windowSize,
-		SkipRollup: *skipRollup,
-	}, time.Now())
+	result, err := runtime.ImportCodexJSONL(params, time.Now())
 	if err != nil {
 		fmt.Fprintf(stderr, "import-codex-jsonl: %v\n", err)
 		return 1
@@ -213,6 +194,136 @@ func runImportCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int 
 		len(result.Reports),
 	)
 	return 0
+}
+
+func runSyncCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int {
+	params, workDir, _, _, err := parseCodexJSONLFlags("sync-codex-jsonl", args, stderr, false, false)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	runtime, err := app.OpenRuntime(workDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "open runtime: %v\n", err)
+		return 1
+	}
+
+	result, err := runtime.SyncCodexJSONL(params, time.Now())
+	if err != nil {
+		fmt.Fprintf(stderr, "sync-codex-jsonl: %v\n", err)
+		return 1
+	}
+	if !result.Changed {
+		fmt.Fprintf(stdout, "Codex JSONL unchanged\n- cursor: %s\n", result.Fingerprint)
+		return 0
+	}
+	fmt.Fprintf(
+		stdout,
+		"Codex JSONL synced\n- agent: %s\n- session: %s\n- cursor: %s\n- checkpoints: %d\n- daily reports: %d\n",
+		result.Import.AgentID,
+		result.Import.SessionID,
+		result.Fingerprint,
+		len(result.Import.Checkpoints),
+		len(result.Import.Reports),
+	)
+	return 0
+}
+
+func runAttachCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int {
+	params, workDir, pollEvery, once, err := parseAttachCodexJSONLFlags(args, stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	runtime, err := app.OpenRuntime(workDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "open runtime: %v\n", err)
+		return 1
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	fmt.Fprintf(stdout, "Attaching Codex JSONL\n- input: %s\n- poll: %s\n", params.InputPath, pollEvery)
+	for {
+		result, err := runtime.SyncCodexJSONL(params, time.Now())
+		if err != nil {
+			fmt.Fprintf(stderr, "attach-codex-jsonl: %v\n", err)
+			return 1
+		}
+		if result.Changed {
+			fmt.Fprintf(
+				stdout,
+				"Synced\n- agent: %s\n- session: %s\n- checkpoints: %d\n- daily reports: %d\n",
+				result.Import.AgentID,
+				result.Import.SessionID,
+				len(result.Import.Checkpoints),
+				len(result.Import.Reports),
+			)
+		} else {
+			fmt.Fprintln(stdout, "No changes")
+		}
+		if once {
+			return 0
+		}
+
+		timer := time.NewTimer(pollEvery)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			fmt.Fprintln(stdout, "Attach stopped")
+			return 0
+		case <-timer.C:
+		}
+	}
+}
+
+func parseCodexJSONLFlags(name string, args []string, stderr io.Writer, includePoll bool, includeOnce bool) (app.ImportCodexJSONLParams, string, time.Duration, bool, error) {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	inputPath := flags.String("input", "", "path to Codex session JSONL")
+	agentID := flags.String("agent", "", "override agent id")
+	sessionID := flags.String("session", "", "override session id")
+	windowSize := flags.Duration("window", 0, "override checkpoint window size, e.g. 30m")
+	skipRollup := flags.Bool("skip-rollup", false, "skip daily rollup after import")
+	pollEvery := 5 * time.Second
+	once := false
+	if includePoll {
+		flags.DurationVar(&pollEvery, "poll", 5*time.Second, "poll interval for attach mode")
+	}
+	if includeOnce {
+		flags.BoolVar(&once, "once", false, "run one sync cycle and exit")
+	}
+
+	if err := flags.Parse(args); err != nil {
+		return app.ImportCodexJSONLParams{}, "", 0, false, err
+	}
+	if strings.TrimSpace(*inputPath) == "" {
+		return app.ImportCodexJSONLParams{}, "", 0, false, fmt.Errorf("%s: --input is required", name)
+	}
+	if strings.TrimSpace(*workDir) == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return app.ImportCodexJSONLParams{}, "", 0, false, err
+		}
+		*workDir = cwd
+	}
+
+	return app.ImportCodexJSONLParams{
+		InputPath:  *inputPath,
+		AgentID:    *agentID,
+		SessionID:  *sessionID,
+		Window:     *windowSize,
+		SkipRollup: *skipRollup,
+	}, filepath.Clean(*workDir), pollEvery, once, nil
+}
+
+func parseAttachCodexJSONLFlags(args []string, stderr io.Writer) (app.ImportCodexJSONLParams, string, time.Duration, bool, error) {
+	return parseCodexJSONLFlags("attach-codex-jsonl", args, stderr, true, true)
 }
 
 func inferManagedState(cfg config.Config) string {

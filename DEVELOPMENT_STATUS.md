@@ -35,6 +35,8 @@ Updated: 2026-04-22
   - session JSONL parsing from local Codex transcript files
   - 30 minute windowing with empty-slot placeholder generation
   - manual import path from CLI into checkpoint and daily report writes
+  - cursor-backed file fingerprint sync to skip unchanged transcripts
+  - local attach mode via polling wrapper around sync
 - CLI:
   - `status [workdir]`
   - `bootstrap [workdir]`
@@ -42,6 +44,8 @@ Updated: 2026-04-22
   - `demo-p0b [workdir]`
   - `mcp [workdir]`
   - `import-codex-jsonl --workdir <dir> --input <session.jsonl>`
+  - `sync-codex-jsonl --workdir <dir> --input <session.jsonl>`
+  - `attach-codex-jsonl --workdir <dir> --input <session.jsonl> --once`
 
 ## Verified
 
@@ -55,6 +59,8 @@ Commands verified locally with the repo-managed Go toolchain:
 .tools\go\bin\go.exe run ./cmd/obsidian-harness status .\tmp\demo
 .tools\go\bin\go.exe run ./cmd/obsidian-harness mcp .\tmp\demo
 .tools\go\bin\go.exe run ./cmd/obsidian-harness import-codex-jsonl --workdir .\tmp\import-demo --input <codex-session.jsonl>
+.tools\go\bin\go.exe run ./cmd/obsidian-harness sync-codex-jsonl --workdir .\tmp\attach-demo --input <codex-session.jsonl>
+.tools\go\bin\go.exe run ./cmd/obsidian-harness attach-codex-jsonl --workdir .\tmp\attach-demo --input <codex-session.jsonl> --once
 ```
 
 ## Current Gaps
@@ -62,7 +68,7 @@ Commands verified locally with the repo-managed Go toolchain:
 - No real daemon loop yet
 - No file watcher yet
 - No provider/model adapter yet
-- No live external Codex adapter yet; current P0-B supports manual JSONL transcript import, but not daemonized tailing or app-server integration
+- No live app-server / offset-tail Codex adapter yet; current P0-B supports manual import plus file-fingerprint sync/attach over local JSONL files
 - No real TUI framework yet; current output is text-mode status and demo commands
 - No SQLite state store yet; JSON store is the minimal persisted recovery layer
 - Draft apply is append-based, not diff/patch-based
@@ -72,7 +78,7 @@ Commands verified locally with the repo-managed Go toolchain:
 ## Suggested Next Steps
 
 1. Add a real daemon service and watcher loop around `orchestrator.Harness`.
-2. Add a live Codex adapter interface for app-server / incremental session tailing on top of the manual JSONL importer.
+2. Upgrade JSONL attach from whole-file resync to a true offset/tail adapter with partial-line handling and source identity checks.
 3. Replace append-only draft apply with structured patch/diff application.
 4. Connect transcript import to a real summarizer/model pipeline instead of deterministic window rendering.
 5. Move from text status view to a real interactive TUI.
@@ -87,3 +93,4 @@ Commands verified locally with the repo-managed Go toolchain:
 - `225e7ab` `fix: track vault query helpers and root vault ignore`
 - `dadcc98` `fix: track vault atomic helpers`
 - `0a2e02b` `feat: surface markdown attachment refs in read api`
+- `6817ce5` `feat: import codex transcript jsonl`

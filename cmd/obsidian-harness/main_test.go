@@ -136,6 +136,74 @@ func TestRunImportCodexJSONLMissingInput(t *testing.T) {
 	}
 }
 
+func TestRunSyncCodexJSONL(t *testing.T) {
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "sync.jsonl")
+	content := "" +
+		"{\"timestamp\":\"2026-04-22T09:01:00+08:00\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-1\",\"agent_nickname\":\"Codex\"}}\n" +
+		"{\"timestamp\":\"2026-04-22T09:05:00+08:00\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"build adapter\"}}\n"
+	if err := os.WriteFile(transcriptPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(transcript) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"sync-codex-jsonl",
+		"--workdir", workDir,
+		"--input", transcriptPath,
+	}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Codex JSONL synced") {
+		t.Fatalf("expected sync summary, got %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = run([]string{
+		"sync-codex-jsonl",
+		"--workdir", workDir,
+		"--input", transcriptPath,
+	}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code on unchanged sync, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Codex JSONL unchanged") {
+		t.Fatalf("expected unchanged summary, got %q", stdout.String())
+	}
+}
+
+func TestRunAttachCodexJSONLOnce(t *testing.T) {
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "attach.jsonl")
+	content := "" +
+		"{\"timestamp\":\"2026-04-22T09:01:00+08:00\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-attach\",\"agent_nickname\":\"Codex\"}}\n" +
+		"{\"timestamp\":\"2026-04-22T09:05:00+08:00\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"attach mode\"}}\n"
+	if err := os.WriteFile(transcriptPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(transcript) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"attach-codex-jsonl",
+		"--workdir", workDir,
+		"--input", transcriptPath,
+		"--once",
+	}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Attaching Codex JSONL") {
+		t.Fatalf("expected attach banner, got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Synced") {
+		t.Fatalf("expected attach sync output, got %q", stdout.String())
+	}
+}
+
 func TestRunUnknownCommandReturnsUsageError(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

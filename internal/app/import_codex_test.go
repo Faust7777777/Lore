@@ -142,6 +142,145 @@ func TestRuntimeImportCodexJSONLRollsUpAcrossTouchedDays(t *testing.T) {
 	}
 }
 
+func TestRuntimeSyncCodexJSONLSkipsUnchangedFingerprint(t *testing.T) {
+	loc := useFixedLocalZone(t)
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "sync.jsonl")
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-sync","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"review the weekly drift"}}`,
+	)
+
+	runtime, err := OpenRuntime(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	first, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-sync",
+	}, time.Date(2026, 4, 22, 9, 10, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("first SyncCodexJSONL() error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("first sync Changed = false, want true")
+	}
+
+	second, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-sync",
+	}, time.Date(2026, 4, 22, 9, 11, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("second SyncCodexJSONL() error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second sync Changed = true, want false")
+	}
+	if second.Fingerprint != first.Fingerprint {
+		t.Fatalf("second fingerprint = %q, want %q", second.Fingerprint, first.Fingerprint)
+	}
+
+	cursor, err := runtime.Store.Cursors().GetCursor(first.CursorKey)
+	if err != nil {
+		t.Fatalf("GetCursor() error = %v", err)
+	}
+	if cursor != first.Fingerprint {
+		t.Fatalf("cursor = %q, want %q", cursor, first.Fingerprint)
+	}
+}
+
+func TestRuntimeSyncCodexJSONLReimportsWhenFileChanges(t *testing.T) {
+	loc := useFixedLocalZone(t)
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "sync-change.jsonl")
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-sync-change","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"first event"}}`,
+	)
+
+	runtime, err := OpenRuntime(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	first, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-sync-change",
+	}, time.Date(2026, 4, 22, 9, 10, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("first SyncCodexJSONL() error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("first sync Changed = false, want true")
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-sync-change","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"first event"}}`,
+		`{"timestamp":"2026-04-22T09:35:00+08:00","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"second event"}}`,
+	)
+
+	second, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-sync-change",
+	}, time.Date(2026, 4, 22, 9, 40, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("second SyncCodexJSONL() error = %v", err)
+	}
+	if !second.Changed {
+		t.Fatal("second sync Changed = false, want true")
+	}
+	if second.Fingerprint == first.Fingerprint {
+		t.Fatalf("second fingerprint = %q, want changed fingerprint", second.Fingerprint)
+	}
+	if len(second.Import.Checkpoints) != 2 {
+		t.Fatalf("len(second.Import.Checkpoints) = %d, want 2", len(second.Import.Checkpoints))
+	}
+}
+
+func TestRuntimeSyncCodexJSONLRejectsConcurrentSourceLock(t *testing.T) {
+	loc := useFixedLocalZone(t)
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "locked.jsonl")
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-locked","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"lock me"}}`,
+	)
+
+	runtime, err := OpenRuntime(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	absolutePath, err := filepath.Abs(transcriptPath)
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+	cursorKey := codexJSONLCursorKey(absolutePath)
+	lockPath := filepath.Join(runtime.Config.Paths.StateDir, "locks", codexJSONLLockName(cursorKey))
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(lock dir) error = %v", err)
+	}
+	if err := os.WriteFile(lockPath, []byte("busy\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(lockPath) error = %v", err)
+	}
+
+	_, err = runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-locked",
+	}, time.Date(2026, 4, 22, 9, 10, 0, 0, loc))
+	if err == nil || !strings.Contains(err.Error(), "already syncing") {
+		t.Fatalf("SyncCodexJSONL() error = %v, want source lock rejection", err)
+	}
+}
+
 func useFixedLocalZone(t *testing.T) *time.Location {
 	t.Helper()
 

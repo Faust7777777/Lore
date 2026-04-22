@@ -7,6 +7,7 @@ import (
 	"obsidian-harness/internal/config"
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/orchestrator"
+	"obsidian-harness/internal/store"
 	"obsidian-harness/internal/store/jsonstore"
 	"obsidian-harness/internal/vault"
 )
@@ -14,6 +15,7 @@ import (
 type Runtime struct {
 	Config  config.Config
 	Harness *orchestrator.Harness
+	Store   store.StateStore
 }
 
 type DemoP0BResult struct {
@@ -35,6 +37,7 @@ func OpenRuntime(workDir string) (*Runtime, error) {
 	return &Runtime{
 		Config:  cfg,
 		Harness: h,
+		Store:   st,
 	}, nil
 }
 
