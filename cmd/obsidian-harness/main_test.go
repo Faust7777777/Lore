@@ -100,6 +100,20 @@ func TestRunDemoP0B(t *testing.T) {
 	}
 }
 
+func TestRunConsoleOnceStatus(t *testing.T) {
+	workDir := t.TempDir()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"console", "--workdir", workDir, "--once", "show current status"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Managed Status") {
+		t.Fatalf("expected managed status output, got %q", stdout.String())
+	}
+}
+
 func TestRunImportCodexJSONL(t *testing.T) {
 	workDir := t.TempDir()
 	transcriptPath := filepath.Join(workDir, "sample.jsonl")
@@ -285,6 +299,28 @@ func TestRunProcessSinkDay(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Process Sink Day") || !strings.Contains(stdout.String(), "09:00-09:30") {
 		t.Fatalf("expected process-sink day output, got %q", stdout.String())
+	}
+}
+
+func TestRunConsoleREPLDraftFlow(t *testing.T) {
+	workDir := t.TempDir()
+	seedDraftForCLI(t, workDir, "console flow")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	input := strings.NewReader("review draft\napprove current draft\nexit\n")
+	exitCode := runConsoleCommand([]string{"--workdir", workDir}, input, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Draft Review") {
+		t.Fatalf("expected draft review output, got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "approved") {
+		t.Fatalf("expected approve output, got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Console stopped") {
+		t.Fatalf("expected console stop output, got %q", stdout.String())
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"obsidian-harness/internal/app"
+	"obsidian-harness/internal/console"
 	"obsidian-harness/internal/mcp"
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/tui"
@@ -107,6 +109,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "P0-B completed\n- checkpoint: %s\n- report: %s\n", result.Checkpoint.Path, result.Report.Path)
 		return 0
+	case "console":
+		return runConsoleCommand(args[1:], os.Stdin, stdout, stderr)
 	case "draft":
 		return runDraftCommand(args[1:], stdout, stderr)
 	case "process-sink":
@@ -157,6 +161,7 @@ Commands:
   bootstrap [workdir]  Scaffold the managed vault skeleton
   demo-p0a [workdir]   Run the managed doc -> draft -> apply demo chain
   demo-p0b [workdir]   Run the checkpoint -> daily report demo chain
+  console              Operator console: NL -> one explicit reviewed action
   draft                Review and act on pending drafts
   process-sink         Inspect checkpoint and daily report status
   mcp [workdir]        Run the read-only MCP server over stdio
@@ -203,6 +208,63 @@ func runImportCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int 
 		len(result.Reports),
 	)
 	return 0
+}
+
+func runConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	workDir, utterance, err := parseConsoleFlags(args, stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	runtime, err := app.OpenRuntime(workDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "open runtime: %v\n", err)
+		return 1
+	}
+	session := console.NewSession(version)
+
+	if strings.TrimSpace(utterance) != "" {
+		output, err := session.Handle(utterance, runtime)
+		if err != nil {
+			fmt.Fprintf(stderr, "console: %v\n", err)
+			return 1
+		}
+		fmt.Fprint(stdout, output)
+		return 0
+	}
+
+	fmt.Fprintln(stdout, "Obsidian Harness Console")
+	fmt.Fprintln(stdout, "The operator agent picks one explicit action per prompt. Type `help` for examples. Type `exit` to quit.")
+	scanner := bufio.NewScanner(stdin)
+	for {
+		fmt.Fprint(stdout, "> ")
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				fmt.Fprintf(stderr, "console: %v\n", err)
+				return 1
+			}
+			return 0
+		}
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if isConsoleExit(line) {
+			fmt.Fprintln(stdout, "Console stopped")
+			return 0
+		}
+
+		output, err := session.Handle(line, runtime)
+		if err != nil {
+			fmt.Fprintf(stderr, "console: %v\n", err)
+			continue
+		}
+		fmt.Fprint(stdout, output)
+		if !strings.HasSuffix(output, "\n") {
+			fmt.Fprintln(stdout)
+		}
+	}
 }
 
 func runDraftCommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -446,6 +508,25 @@ func parseAttachCodexJSONLFlags(args []string, stderr io.Writer) (app.ImportCode
 	return parseCodexJSONLFlags("attach-codex-jsonl", args, stderr, true, true)
 }
 
+func parseConsoleFlags(args []string, stderr io.Writer) (string, string, error) {
+	flags := flag.NewFlagSet("console", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	once := flags.String("once", "", "single utterance to execute")
+	if err := flags.Parse(args); err != nil {
+		return "", "", err
+	}
+	if strings.TrimSpace(*workDir) == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", "", err
+		}
+		*workDir = cwd
+	}
+	return filepath.Clean(*workDir), strings.TrimSpace(*once), nil
+}
+
 func parseDraftFlags(name string, args []string, stderr io.Writer, requireID bool) (string, string, error) {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -472,6 +553,15 @@ func parseDraftFlags(name string, args []string, stderr io.Writer, requireID boo
 	}
 
 	return filepath.Clean(*workDir), draftID, nil
+}
+
+func isConsoleExit(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "exit", "quit", "q", "退出":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseProcessSinkDayFlags(args []string, stderr io.Writer) (string, string, time.Time, error) {
