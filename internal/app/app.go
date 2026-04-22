@@ -16,6 +16,7 @@ type Config struct {
 	Version   string
 	VaultPath string
 	Profile   string
+	State     string
 }
 
 type Status struct {
@@ -37,7 +38,7 @@ func New(cfg Config) *Application {
 		status: Status{
 			Name:          defaultName,
 			Version:       withFallback(cfg.Version, defaultVersion),
-			State:         defaultState,
+			State:         withFallback(cfg.State, defaultState),
 			ViewMode:      defaultViewMode,
 			VaultPath:     withFallback(cfg.VaultPath, defaultVaultPath),
 			ActiveProfile: withFallback(cfg.Profile, defaultProfile),
