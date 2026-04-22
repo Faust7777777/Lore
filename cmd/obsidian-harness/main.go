@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"obsidian-harness/internal/app"
@@ -118,6 +120,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	case "import-codex-jsonl":
+		return runImportCodexJSONL(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage())
 		return 0
@@ -142,6 +146,7 @@ Commands:
   demo-p0a [workdir]   Run the managed doc -> draft -> apply demo chain
   demo-p0b [workdir]   Run the checkpoint -> daily report demo chain
   mcp [workdir]        Run the read-only MCP server over stdio
+  import-codex-jsonl   Import a Codex session JSONL into checkpoints and daily reports
   version              Print the CLI version
   help                 Show this help text
 `
@@ -152,6 +157,62 @@ func resolveWorkDir(args []string) (string, error) {
 		return filepath.Clean(args[0]), nil
 	}
 	return os.Getwd()
+}
+
+func runImportCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("import-codex-jsonl", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	inputPath := flags.String("input", "", "path to Codex session JSONL")
+	agentID := flags.String("agent", "", "override agent id")
+	sessionID := flags.String("session", "", "override session id")
+	windowSize := flags.Duration("window", 0, "override checkpoint window size, e.g. 30m")
+	skipRollup := flags.Bool("skip-rollup", false, "skip daily rollup after import")
+
+	if err := flags.Parse(args); err != nil {
+		return 1
+	}
+	if strings.TrimSpace(*inputPath) == "" {
+		fmt.Fprintln(stderr, "import-codex-jsonl: --input is required")
+		return 1
+	}
+	if strings.TrimSpace(*workDir) == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(stderr, "import-codex-jsonl: %v\n", err)
+			return 1
+		}
+		*workDir = cwd
+	}
+
+	runtime, err := app.OpenRuntime(filepath.Clean(*workDir))
+	if err != nil {
+		fmt.Fprintf(stderr, "open runtime: %v\n", err)
+		return 1
+	}
+
+	result, err := runtime.ImportCodexJSONL(app.ImportCodexJSONLParams{
+		InputPath:  *inputPath,
+		AgentID:    *agentID,
+		SessionID:  *sessionID,
+		Window:     *windowSize,
+		SkipRollup: *skipRollup,
+	}, time.Now())
+	if err != nil {
+		fmt.Fprintf(stderr, "import-codex-jsonl: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(
+		stdout,
+		"Codex JSONL imported\n- agent: %s\n- session: %s\n- checkpoints: %d\n- daily reports: %d\n",
+		result.AgentID,
+		result.SessionID,
+		len(result.Checkpoints),
+		len(result.Reports),
+	)
+	return 0
 }
 
 func inferManagedState(cfg config.Config) string {

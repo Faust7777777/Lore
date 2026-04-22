@@ -31,12 +31,17 @@ Updated: 2026-04-22
   - managed doc change -> draft -> approve -> apply
   - session window ingest -> checkpoint -> daily report
   - read-only vault/context API for managed status, system docs, search, backlinks, and context pack
+- Codex import adapter:
+  - session JSONL parsing from local Codex transcript files
+  - 30 minute windowing with empty-slot placeholder generation
+  - manual import path from CLI into checkpoint and daily report writes
 - CLI:
   - `status [workdir]`
   - `bootstrap [workdir]`
   - `demo-p0a [workdir]`
   - `demo-p0b [workdir]`
   - `mcp [workdir]`
+  - `import-codex-jsonl --workdir <dir> --input <session.jsonl>`
 
 ## Verified
 
@@ -49,6 +54,7 @@ Commands verified locally with the repo-managed Go toolchain:
 .tools\go\bin\go.exe run ./cmd/obsidian-harness demo-p0b .\tmp\demo
 .tools\go\bin\go.exe run ./cmd/obsidian-harness status .\tmp\demo
 .tools\go\bin\go.exe run ./cmd/obsidian-harness mcp .\tmp\demo
+.tools\go\bin\go.exe run ./cmd/obsidian-harness import-codex-jsonl --workdir .\tmp\import-demo --input <codex-session.jsonl>
 ```
 
 ## Current Gaps
@@ -56,19 +62,19 @@ Commands verified locally with the repo-managed Go toolchain:
 - No real daemon loop yet
 - No file watcher yet
 - No provider/model adapter yet
-- No real external Codex transcript adapter yet; current P0-B is still a demo ingest path
+- No live external Codex adapter yet; current P0-B supports manual JSONL transcript import, but not daemonized tailing or app-server integration
 - No real TUI framework yet; current output is text-mode status and demo commands
 - No SQLite state store yet; JSON store is the minimal persisted recovery layer
 - Draft apply is append-based, not diff/patch-based
-- Process-sink currently uses direct content input; summarizer/model integration not wired
+- Process-sink import currently uses deterministic transcript rendering; model summarizer integration is not wired
 - Attachment refs are surfaced in read APIs, but binary/media extraction is not implemented yet
 
 ## Suggested Next Steps
 
 1. Add a real daemon service and watcher loop around `orchestrator.Harness`.
-2. Add adapter interfaces for external agent transcript ingestion.
+2. Add a live Codex adapter interface for app-server / incremental session tailing on top of the manual JSONL importer.
 3. Replace append-only draft apply with structured patch/diff application.
-4. Add a real Codex transcript/session adapter on top of the MCP read-only surface.
+4. Connect transcript import to a real summarizer/model pipeline instead of deterministic window rendering.
 5. Move from text status view to a real interactive TUI.
 6. Add SQLite-backed state/audit store once the shape stabilizes.
 
@@ -80,3 +86,4 @@ Commands verified locally with the repo-managed Go toolchain:
 - `e24ae21` `feat: add read-only mcp context tools`
 - `225e7ab` `fix: track vault query helpers and root vault ignore`
 - `dadcc98` `fix: track vault atomic helpers`
+- `0a2e02b` `feat: surface markdown attachment refs in read api`

@@ -96,6 +96,46 @@ func TestRunDemoP0B(t *testing.T) {
 	}
 }
 
+func TestRunImportCodexJSONL(t *testing.T) {
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "sample.jsonl")
+	content := "" +
+		"{\"timestamp\":\"2026-04-22T09:01:00+08:00\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-1\",\"agent_nickname\":\"Codex\"}}\n" +
+		"{\"timestamp\":\"2026-04-22T09:05:00+08:00\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"build adapter\"}}\n" +
+		"{\"timestamp\":\"2026-04-22T09:35:00+08:00\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"phase\":\"commentary\",\"message\":\"adapter imported\"}}\n"
+	if err := os.WriteFile(transcriptPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(transcript) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"import-codex-jsonl",
+		"--workdir", workDir,
+		"--input", transcriptPath,
+	}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Codex JSONL imported") {
+		t.Fatalf("expected import summary, got %q", stdout.String())
+	}
+}
+
+func TestRunImportCodexJSONLMissingInput(t *testing.T) {
+	workDir := t.TempDir()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"import-codex-jsonl", "--workdir", workDir}, &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "--input is required") {
+		t.Fatalf("expected missing input error, got %q", stderr.String())
+	}
+}
+
 func TestRunUnknownCommandReturnsUsageError(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
