@@ -1,9 +1,10 @@
 package codexjsonl
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,11 +17,13 @@ import (
 const maxJSONLLine = 4 * 1024 * 1024
 
 type Event struct {
-	Timestamp time.Time
-	Role      string
-	Phase     string
-	Text      string
-	RawLine   string
+	Timestamp   time.Time
+	Role        string
+	Phase       string
+	Text        string
+	RawLine     string
+	OffsetStart int64
+	OffsetEnd   int64
 }
 
 type Transcript struct {
@@ -36,6 +39,7 @@ type WindowSummary struct {
 	Content       string
 	RawTranscript string
 	EventCount    int
+	SourceOffset  int64
 }
 
 type envelope struct {
@@ -48,51 +52,47 @@ type envelope struct {
 }
 
 func LoadFile(path string) (Transcript, error) {
-	inferredSessionID := inferSessionID(path)
+	transcript, _, err := LoadTail(path, 0)
+	return transcript, err
+}
+
+func LoadTail(path string, startOffset int64) (Transcript, int64, error) {
+	if startOffset < 0 {
+		startOffset = 0
+	}
+
 	file, err := os.Open(path)
 	if err != nil {
-		return Transcript{}, err
+		return Transcript{}, 0, err
 	}
 	defer file.Close()
 
 	transcript := Transcript{
 		AgentID:    "codex",
-		SessionID:  inferredSessionID,
+		SessionID:  inferSessionID(path),
 		SourcePath: filepath.Clean(path),
 	}
-
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), maxJSONLLine)
-
-	lineNumber := 0
-	for scanner.Scan() {
-		lineNumber++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		event, meta, ok, err := parseLine(line)
-		if err != nil {
-			return Transcript{}, fmt.Errorf("parse %s line %d: %w", path, lineNumber, err)
-		}
-		if meta.SessionID != "" {
-			if transcript.SessionID == "" || transcript.SessionID == "history" {
-				transcript.SessionID = meta.SessionID
-			}
-		}
-		if meta.AgentID != "" {
-			if transcript.AgentID == "" || transcript.AgentID == "codex" {
-				transcript.AgentID = meta.AgentID
-			}
-		}
-		if ok {
-			transcript.Events = append(transcript.Events, event)
+	if startOffset > 0 {
+		if _, err := file.Seek(startOffset, io.SeekStart); err != nil {
+			return Transcript{}, 0, err
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return Transcript{}, err
-	}
 
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return Transcript{}, 0, err
+	}
+	safeLen := lastCompleteJSONLPrefix(data)
+	if safeLen > 0 {
+		if err := parseJSONLChunk(&transcript, data[:safeLen], startOffset); err != nil {
+			return Transcript{}, 0, err
+		}
+	}
+	finalizeTranscript(&transcript)
+	return transcript, startOffset + int64(safeLen), nil
+}
+
+func finalizeTranscript(transcript *Transcript) {
 	sort.Slice(transcript.Events, func(i, j int) bool {
 		if transcript.Events[i].Timestamp.Equal(transcript.Events[j].Timestamp) {
 			if transcript.Events[i].Role == transcript.Events[j].Role {
@@ -108,9 +108,62 @@ func LoadFile(path string) (Transcript, error) {
 		transcript.AgentID = "codex"
 	}
 	if transcript.SessionID == "" {
-		transcript.SessionID = inferredSessionID
+		transcript.SessionID = inferSessionID(transcript.SourcePath)
 	}
-	return transcript, nil
+}
+
+func parseJSONLChunk(transcript *Transcript, chunk []byte, startOffset int64) error {
+	lineStart := 0
+	lineNumber := 0
+	for lineStart < len(chunk) {
+		lineEnd := bytes.IndexByte(chunk[lineStart:], '\n')
+		if lineEnd < 0 {
+			break
+		}
+		lineEnd += lineStart
+		lineNumber++
+
+		raw := string(chunk[lineStart:lineEnd])
+		line := strings.TrimSpace(raw)
+		absoluteStart := startOffset + int64(lineStart)
+		absoluteEnd := startOffset + int64(lineEnd) + 1
+		lineStart = lineEnd + 1
+
+		if len(raw) > maxJSONLLine {
+			return fmt.Errorf("parse %s line %d: line exceeds %d bytes", transcript.SourcePath, lineNumber, maxJSONLLine)
+		}
+		if line == "" {
+			continue
+		}
+
+		event, meta, ok, err := parseLine(line)
+		if err != nil {
+			return fmt.Errorf("parse %s line %d offset %d: %w", transcript.SourcePath, lineNumber, absoluteStart, err)
+		}
+		if meta.SessionID != "" {
+			if transcript.SessionID == "" || transcript.SessionID == "history" {
+				transcript.SessionID = meta.SessionID
+			}
+		}
+		if meta.AgentID != "" {
+			if transcript.AgentID == "" || transcript.AgentID == "codex" {
+				transcript.AgentID = meta.AgentID
+			}
+		}
+		if ok {
+			event.OffsetStart = absoluteStart
+			event.OffsetEnd = absoluteEnd
+			transcript.Events = append(transcript.Events, event)
+		}
+	}
+	return nil
+}
+
+func lastCompleteJSONLPrefix(data []byte) int {
+	if len(data) == 0 {
+		return 0
+	}
+	return bytes.LastIndexByte(data, '\n') + 1
 }
 
 func BuildWindows(transcript Transcript, every time.Duration) []WindowSummary {
@@ -137,6 +190,7 @@ func BuildWindows(transcript Transcript, every time.Duration) []WindowSummary {
 	firstStart := transcript.Events[0].Timestamp.Truncate(every)
 	lastStart := transcript.Events[len(transcript.Events)-1].Timestamp.Truncate(every)
 	out := make([]WindowSummary, 0)
+	var lastSourceOffset int64
 	for start := firstStart; !start.After(lastStart); start = start.Add(every) {
 		window := model.SessionWindow{
 			AgentID:     transcript.AgentID,
@@ -145,12 +199,18 @@ func BuildWindows(transcript Transcript, every time.Duration) []WindowSummary {
 			WindowEnd:   start.Add(every),
 		}
 		events := grouped[window.Key()]
+		sourceOffset := lastSourceOffset
+		if len(events) > 0 {
+			sourceOffset = events[0].OffsetStart
+			lastSourceOffset = sourceOffset
+		}
 		out = append(out, WindowSummary{
 			Window:        window,
 			Title:         buildTitle(window, events),
 			Content:       summarizeWindow(transcript.SourcePath, events),
 			RawTranscript: joinRawLines(events),
 			EventCount:    len(events),
+			SourceOffset:  sourceOffset,
 		})
 	}
 	return out

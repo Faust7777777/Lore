@@ -11,11 +11,11 @@ import (
 )
 
 type ImportCodexJSONLParams struct {
-	InputPath   string
-	AgentID     string
-	SessionID   string
-	Window      time.Duration
-	SkipRollup  bool
+	InputPath  string
+	AgentID    string
+	SessionID  string
+	Window     time.Duration
+	SkipRollup bool
 }
 
 type ImportCodexJSONLResult struct {
@@ -37,20 +37,36 @@ func (r *Runtime) ImportCodexJSONL(params ImportCodexJSONLParams, now time.Time)
 	if err != nil {
 		return ImportCodexJSONLResult{}, err
 	}
+	applyCodexJSONLIdentity(&transcript, params, codexjsonl.Cursor{}, false)
+	windows := codexjsonl.BuildWindows(transcript, resolveCodexWindowSize(r.Config.ProcessSink.CheckpointEvery, params.Window))
+	return r.importCodexWindows(inputPath, transcript, windows, params.SkipRollup, now)
+}
 
+func resolveCodexWindowSize(defaultWindow time.Duration, requested time.Duration) time.Duration {
+	if requested > 0 {
+		return requested
+	}
+	return defaultWindow
+}
+
+func applyCodexJSONLIdentity(transcript *codexjsonl.Transcript, params ImportCodexJSONLParams, cursor codexjsonl.Cursor, allowCursor bool) {
+	if allowCursor {
+		if strings.TrimSpace(cursor.AgentID) != "" {
+			transcript.AgentID = strings.TrimSpace(cursor.AgentID)
+		}
+		if strings.TrimSpace(cursor.SessionID) != "" {
+			transcript.SessionID = strings.TrimSpace(cursor.SessionID)
+		}
+	}
 	if agentID := strings.TrimSpace(params.AgentID); agentID != "" {
 		transcript.AgentID = strings.ToLower(agentID)
 	}
 	if sessionID := strings.TrimSpace(params.SessionID); sessionID != "" {
 		transcript.SessionID = sessionID
 	}
+}
 
-	windowSize := params.Window
-	if windowSize <= 0 {
-		windowSize = r.Config.ProcessSink.CheckpointEvery
-	}
-	windows := codexjsonl.BuildWindows(transcript, windowSize)
-
+func (r *Runtime) importCodexWindows(inputPath string, transcript codexjsonl.Transcript, windows []codexjsonl.WindowSummary, skipRollup bool, now time.Time) (ImportCodexJSONLResult, error) {
 	result := ImportCodexJSONLResult{
 		InputPath: filepath.Clean(inputPath),
 		AgentID:   transcript.AgentID,
@@ -74,7 +90,7 @@ func (r *Runtime) ImportCodexJSONL(params ImportCodexJSONLParams, now time.Time)
 		reportDays[day.Format("2006-01-02")] = day
 	}
 
-	if params.SkipRollup {
+	if skipRollup {
 		return result, nil
 	}
 
@@ -92,4 +108,3 @@ func (r *Runtime) ImportCodexJSONL(params ImportCodexJSONLParams, now time.Time)
 	}
 	return result, nil
 }
-

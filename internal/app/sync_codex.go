@@ -8,6 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"obsidian-harness/internal/adapter/codexjsonl"
+	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/store"
 )
 
 type SyncCodexJSONLResult struct {
@@ -27,52 +31,282 @@ func (r *Runtime) SyncCodexJSONL(params ImportCodexJSONLParams, now time.Time) (
 		return SyncCodexJSONLResult{}, err
 	}
 
-	info, err := os.Stat(absolutePath)
+	source, err := codexjsonl.ReadSourceState(absolutePath)
 	if err != nil {
 		r.Harness.UpdateDependencies(true, false)
 		return SyncCodexJSONLResult{}, err
 	}
 	r.Harness.UpdateDependencies(true, true)
+	if _, err := r.Bootstrap(now); err != nil {
+		return SyncCodexJSONLResult{}, err
+	}
 
 	cursorKey := codexJSONLCursorKey(absolutePath)
-	fingerprint := codexJSONLFingerprint(info)
 	releaseLock, err := acquireCodexJSONLLock(r.Config.Paths.StateDir, cursorKey)
 	if err != nil {
 		return SyncCodexJSONLResult{}, err
 	}
 	defer releaseLock()
 
-	if saved, err := r.Store.Cursors().GetCursor(cursorKey); err == nil && saved == fingerprint {
-		return SyncCodexJSONLResult{
-			Changed:     false,
-			CursorKey:   cursorKey,
-			Fingerprint: fingerprint,
-		}, nil
-	}
-
-	params.InputPath = absolutePath
-	imported, err := r.ImportCodexJSONL(params, now)
+	savedCursorRaw, cursor, err := r.loadCodexJSONLCursor(cursorKey)
 	if err != nil {
 		return SyncCodexJSONLResult{}, err
 	}
-	if err := r.Store.Cursors().SaveCursor(cursorKey, fingerprint); err != nil {
+
+	windowSize := resolveCodexWindowSize(r.Config.ProcessSink.CheckpointEvery, params.Window)
+	if savedCursorRaw != "" && codexJSONLSourceUnchanged(cursor, source) {
+		return r.syncCodexJSONLPlaceholders(params, now, source, cursorKey, savedCursorRaw, cursor, windowSize)
+	}
+
+	baseCursor := codexjsonl.Cursor{}
+	readFrom := int64(0)
+	allowCursorIdentity := false
+	if savedCursorRaw != "" && codexJSONLCanResume(cursor, source) {
+		baseCursor = cursor
+		readFrom = codexJSONLReplayOffset(cursor)
+		allowCursorIdentity = true
+	}
+
+	transcript, nextOffset, err := codexjsonl.LoadTail(source.Path, readFrom)
+	if err != nil {
 		return SyncCodexJSONLResult{}, err
+	}
+	applyCodexJSONLIdentity(&transcript, params, baseCursor, allowCursorIdentity)
+
+	hasNewEvent := codexJSONLHasEventBeyondOffset(transcript.Events, baseCursor.Offset)
+	windows := codexjsonl.BuildWindows(transcript, windowSize)
+	if allowCursorIdentity && !hasNewEvent {
+		windows = nil
+	}
+	trailing := codexJSONLTrailingPlaceholders(transcript, baseCursor, windows, windowSize, now)
+	if allowCursorIdentity && !hasNewEvent && nextOffset == baseCursor.Offset && len(trailing) == 0 {
+		return SyncCodexJSONLResult{
+			Changed:     false,
+			CursorKey:   cursorKey,
+			Fingerprint: savedCursorRaw,
+		}, nil
+	}
+	windows = append(windows, trailing...)
+
+	imported, err := r.importCodexWindows(source.Path, transcript, windows, params.SkipRollup, now)
+	if err != nil {
+		return SyncCodexJSONLResult{}, err
+	}
+
+	updatedCursor := codexJSONLBuildCursor(baseCursor, transcript, source, windows, nextOffset)
+	encodedCursor, err := codexjsonl.EncodeCursor(updatedCursor)
+	if err != nil {
+		return SyncCodexJSONLResult{}, err
+	}
+	if encodedCursor != savedCursorRaw {
+		if err := r.Store.Cursors().SaveCursor(cursorKey, encodedCursor); err != nil {
+			return SyncCodexJSONLResult{}, err
+		}
+	}
+
+	return SyncCodexJSONLResult{
+		Changed:     encodedCursor != savedCursorRaw,
+		CursorKey:   cursorKey,
+		Fingerprint: encodedCursor,
+		Import:      imported,
+	}, nil
+}
+
+func (r *Runtime) syncCodexJSONLPlaceholders(
+	params ImportCodexJSONLParams,
+	now time.Time,
+	source codexjsonl.SourceState,
+	cursorKey string,
+	savedCursorRaw string,
+	cursor codexjsonl.Cursor,
+	windowSize time.Duration,
+) (SyncCodexJSONLResult, error) {
+	transcript := codexjsonl.Transcript{
+		AgentID:    cursor.AgentID,
+		SessionID:  cursor.SessionID,
+		SourcePath: source.Path,
+	}
+	applyCodexJSONLIdentity(&transcript, params, cursor, true)
+
+	windows := codexJSONLTrailingPlaceholders(transcript, cursor, nil, windowSize, now)
+	if len(windows) == 0 {
+		return SyncCodexJSONLResult{
+			Changed:     false,
+			CursorKey:   cursorKey,
+			Fingerprint: savedCursorRaw,
+		}, nil
+	}
+
+	imported, err := r.importCodexWindows(source.Path, transcript, windows, params.SkipRollup, now)
+	if err != nil {
+		return SyncCodexJSONLResult{}, err
+	}
+
+	updatedCursor := codexJSONLBuildCursor(cursor, transcript, source, windows, cursor.Offset)
+	updatedCursor.Offset = cursor.Offset
+	updatedCursor.ReplayOffset = cursor.ReplayOffset
+	if updatedCursor.LastEventAt.IsZero() {
+		updatedCursor.LastEventAt = cursor.LastEventAt
+	}
+	encodedCursor, err := codexjsonl.EncodeCursor(updatedCursor)
+	if err != nil {
+		return SyncCodexJSONLResult{}, err
+	}
+	if encodedCursor != savedCursorRaw {
+		if err := r.Store.Cursors().SaveCursor(cursorKey, encodedCursor); err != nil {
+			return SyncCodexJSONLResult{}, err
+		}
 	}
 
 	return SyncCodexJSONLResult{
 		Changed:     true,
 		CursorKey:   cursorKey,
-		Fingerprint: fingerprint,
+		Fingerprint: encodedCursor,
 		Import:      imported,
 	}, nil
 }
 
-func codexJSONLCursorKey(path string) string {
-	return "codexjsonl:" + filepath.Clean(path)
+func (r *Runtime) loadCodexJSONLCursor(cursorKey string) (string, codexjsonl.Cursor, error) {
+	savedCursorRaw, err := r.Store.Cursors().GetCursor(cursorKey)
+	if err != nil {
+		if err == store.ErrNotFound {
+			return "", codexjsonl.Cursor{}, nil
+		}
+		return "", codexjsonl.Cursor{}, err
+	}
+	cursor, err := codexjsonl.DecodeCursor(savedCursorRaw)
+	if err != nil {
+		return "", codexjsonl.Cursor{}, err
+	}
+	return savedCursorRaw, cursor, nil
 }
 
-func codexJSONLFingerprint(info os.FileInfo) string {
-	return fmt.Sprintf("size=%d|mtime=%d", info.Size(), info.ModTime().UTC().UnixNano())
+func codexJSONLSourceUnchanged(cursor codexjsonl.Cursor, source codexjsonl.SourceState) bool {
+	if cursor.Version == 0 {
+		return cursor.Fingerprint != "" && cursor.Fingerprint == source.Fingerprint
+	}
+	return cursor.FileSize == source.Size &&
+		cursor.FileModTimeNS == source.ModTimeNS &&
+		cursor.FileHeadSHA256 == source.HeadSHA256
+}
+
+func codexJSONLCanResume(cursor codexjsonl.Cursor, source codexjsonl.SourceState) bool {
+	if cursor.Version == 0 {
+		return false
+	}
+	if !cursor.MatchesSource(source) {
+		return false
+	}
+	if source.Size <= cursor.FileSize {
+		return false
+	}
+	return true
+}
+
+func codexJSONLReplayOffset(cursor codexjsonl.Cursor) int64 {
+	if cursor.ReplayOffset > 0 && cursor.ReplayOffset < cursor.Offset {
+		return cursor.ReplayOffset
+	}
+	return 0
+}
+
+func codexJSONLHasEventBeyondOffset(events []codexjsonl.Event, offset int64) bool {
+	for _, event := range events {
+		if event.OffsetEnd > offset {
+			return true
+		}
+	}
+	return false
+}
+
+func codexJSONLTrailingPlaceholders(
+	transcript codexjsonl.Transcript,
+	cursor codexjsonl.Cursor,
+	windows []codexjsonl.WindowSummary,
+	windowSize time.Duration,
+	now time.Time,
+) []codexjsonl.WindowSummary {
+	if windowSize <= 0 {
+		return nil
+	}
+	closedBoundary := now.In(time.Local).Truncate(windowSize)
+	if closedBoundary.IsZero() {
+		return nil
+	}
+
+	anchorStart, sourceOffset := codexJSONLPlaceholderAnchor(cursor, windows)
+	if anchorStart.IsZero() {
+		return nil
+	}
+
+	out := make([]codexjsonl.WindowSummary, 0)
+	for start := anchorStart.Add(windowSize); start.Before(closedBoundary); start = start.Add(windowSize) {
+		window := codexjsonl.WindowSummary{
+			Window: model.SessionWindow{
+				AgentID:     transcript.AgentID,
+				SessionID:   transcript.SessionID,
+				WindowStart: start,
+				WindowEnd:   start.Add(windowSize),
+			},
+			EventCount:   0,
+			SourceOffset: sourceOffset,
+		}
+		out = append(out, window)
+	}
+	return out
+}
+
+func codexJSONLPlaceholderAnchor(cursor codexjsonl.Cursor, windows []codexjsonl.WindowSummary) (time.Time, int64) {
+	if len(windows) > 0 {
+		last := windows[len(windows)-1]
+		return last.Window.WindowStart, last.SourceOffset
+	}
+	if cursor.LastWindowStart.IsZero() {
+		return time.Time{}, 0
+	}
+	return cursor.LastWindowStart, cursor.ReplayOffset
+}
+
+func codexJSONLBuildCursor(
+	base codexjsonl.Cursor,
+	transcript codexjsonl.Transcript,
+	source codexjsonl.SourceState,
+	windows []codexjsonl.WindowSummary,
+	nextOffset int64,
+) codexjsonl.Cursor {
+	cursor := base
+	cursor.Version = 1
+	cursor.Fingerprint = source.Fingerprint
+	cursor.Offset = nextOffset
+	cursor.FileSize = source.Size
+	cursor.FileModTimeNS = source.ModTimeNS
+	cursor.FileHeadSHA256 = source.HeadSHA256
+	cursor.AgentID = transcript.AgentID
+	cursor.SessionID = transcript.SessionID
+	if len(windows) > 0 {
+		cursor.LastWindowStart = windows[len(windows)-1].Window.WindowStart
+		cursor.ReplayOffset = clampCodexJSONLOffset(windows[len(windows)-1].SourceOffset, nextOffset)
+	} else {
+		cursor.ReplayOffset = clampCodexJSONLOffset(cursor.ReplayOffset, nextOffset)
+	}
+	if len(transcript.Events) > 0 {
+		cursor.LastEventAt = transcript.Events[len(transcript.Events)-1].Timestamp
+	}
+	return cursor
+}
+
+func clampCodexJSONLOffset(offset int64, limit int64) int64 {
+	if offset < 0 {
+		return 0
+	}
+	if limit >= 0 && offset > limit {
+		return limit
+	}
+	return offset
+}
+
+func codexJSONLCursorKey(path string) string {
+	return "codexjsonl:" + filepath.Clean(path)
 }
 
 func acquireCodexJSONLLock(stateDir string, cursorKey string) (func(), error) {

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"obsidian-harness/internal/adapter/codexjsonl"
 	"obsidian-harness/internal/model"
 )
 
@@ -142,7 +143,7 @@ func TestRuntimeImportCodexJSONLRollsUpAcrossTouchedDays(t *testing.T) {
 	}
 }
 
-func TestRuntimeSyncCodexJSONLSkipsUnchangedFingerprint(t *testing.T) {
+func TestRuntimeSyncCodexJSONLStoresStructuredCursorAndSkipsUnchangedTail(t *testing.T) {
 	loc := useFixedLocalZone(t)
 	workDir := t.TempDir()
 	transcriptPath := filepath.Join(workDir, "sync.jsonl")
@@ -189,6 +190,19 @@ func TestRuntimeSyncCodexJSONLSkipsUnchangedFingerprint(t *testing.T) {
 	}
 	if cursor != first.Fingerprint {
 		t.Fatalf("cursor = %q, want %q", cursor, first.Fingerprint)
+	}
+	decoded, err := codexjsonl.DecodeCursor(cursor)
+	if err != nil {
+		t.Fatalf("DecodeCursor() error = %v", err)
+	}
+	if decoded.Version != 1 {
+		t.Fatalf("decoded.Version = %d, want 1", decoded.Version)
+	}
+	if decoded.Offset == 0 {
+		t.Fatal("decoded.Offset = 0, want non-zero safe offset")
+	}
+	if decoded.LastWindowStart.Hour() != 9 || decoded.LastWindowStart.Minute() != 0 {
+		t.Fatalf("decoded.LastWindowStart = %s, want 09:00 local window", decoded.LastWindowStart.Format(time.RFC3339))
 	}
 }
 
@@ -278,6 +292,185 @@ func TestRuntimeSyncCodexJSONLRejectsConcurrentSourceLock(t *testing.T) {
 	}, time.Date(2026, 4, 22, 9, 10, 0, 0, loc))
 	if err == nil || !strings.Contains(err.Error(), "already syncing") {
 		t.Fatalf("SyncCodexJSONL() error = %v, want source lock rejection", err)
+	}
+}
+
+func TestRuntimeSyncCodexJSONLReplaysLastWindowWithoutDuplicatingCheckpoint(t *testing.T) {
+	loc := useFixedLocalZone(t)
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "same-window.jsonl")
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-same-window","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"first event"}}`,
+	)
+
+	runtime, err := OpenRuntime(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	first, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-same-window",
+	}, time.Date(2026, 4, 22, 9, 10, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("first SyncCodexJSONL() error = %v", err)
+	}
+	if len(first.Import.Checkpoints) != 1 {
+		t.Fatalf("len(first.Import.Checkpoints) = %d, want 1", len(first.Import.Checkpoints))
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-same-window","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"first event"}}`,
+		`{"timestamp":"2026-04-22T09:20:00+08:00","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"second event in same window"}}`,
+	)
+
+	second, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-same-window",
+	}, time.Date(2026, 4, 22, 9, 25, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("second SyncCodexJSONL() error = %v", err)
+	}
+	if len(second.Import.Checkpoints) != 1 {
+		t.Fatalf("len(second.Import.Checkpoints) = %d, want 1", len(second.Import.Checkpoints))
+	}
+
+	windowKey := first.Import.Checkpoints[0].WindowKey
+	stored, err := runtime.Store.ProcessSink().GetCheckpointByWindowKey(windowKey)
+	if err != nil {
+		t.Fatalf("GetCheckpointByWindowKey() error = %v", err)
+	}
+	if stored.CreatedAt != first.Import.Checkpoints[0].CreatedAt {
+		t.Fatalf("CreatedAt changed: %s != %s", stored.CreatedAt.Format(time.RFC3339Nano), first.Import.Checkpoints[0].CreatedAt.Format(time.RFC3339Nano))
+	}
+	if !strings.Contains(stored.Content, "second event in same window") {
+		t.Fatalf("stored.Content = %q, want updated second event", stored.Content)
+	}
+
+	report, err := runtime.Store.ProcessSink().GetDailyReport("codex", time.Date(2026, 4, 22, 12, 0, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("GetDailyReport() error = %v", err)
+	}
+	if len(report.WindowKeys) != 1 {
+		t.Fatalf("len(report.WindowKeys) = %d, want 1", len(report.WindowKeys))
+	}
+}
+
+func TestRuntimeSyncCodexJSONLDefersIncompleteTailUntilRecordCompletes(t *testing.T) {
+	loc := useFixedLocalZone(t)
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "partial-tail.jsonl")
+	metaLine := `{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-partial","agent_nickname":"Codex"}}`
+	firstLine := `{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"first event"}}`
+	partialLine := `{"timestamp":"2026-04-22T09:20:00+08:00","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"completed later"}}`
+	writeCodexJSONL(t, transcriptPath, metaLine, firstLine)
+
+	runtime, err := OpenRuntime(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	first, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-partial",
+	}, time.Date(2026, 4, 22, 9, 10, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("first SyncCodexJSONL() error = %v", err)
+	}
+
+	if err := os.WriteFile(transcriptPath, []byte(metaLine+"\n"+firstLine+"\n"+partialLine), 0o644); err != nil {
+		t.Fatalf("WriteFile(partial) error = %v", err)
+	}
+	second, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-partial",
+	}, time.Date(2026, 4, 22, 9, 21, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("second SyncCodexJSONL() error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second sync Changed = true, want false for incomplete tail")
+	}
+	if second.Fingerprint != first.Fingerprint {
+		t.Fatalf("second.Fingerprint = %q, want %q", second.Fingerprint, first.Fingerprint)
+	}
+
+	if err := os.WriteFile(transcriptPath, []byte(metaLine+"\n"+firstLine+"\n"+partialLine+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(completed) error = %v", err)
+	}
+	third, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-partial",
+	}, time.Date(2026, 4, 22, 9, 22, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("third SyncCodexJSONL() error = %v", err)
+	}
+	if !third.Changed {
+		t.Fatal("third sync Changed = false, want true after line completion")
+	}
+	if len(third.Import.Checkpoints) != 1 {
+		t.Fatalf("len(third.Import.Checkpoints) = %d, want 1", len(third.Import.Checkpoints))
+	}
+	if !strings.Contains(third.Import.Checkpoints[0].Content, "completed later") {
+		t.Fatalf("checkpoint content = %q, want completed later snippet", third.Import.Checkpoints[0].Content)
+	}
+}
+
+func TestRuntimeSyncCodexJSONLGeneratesPlaceholderForClosedIdleWindow(t *testing.T) {
+	loc := useFixedLocalZone(t)
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "idle-slot.jsonl")
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-idle","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"only one active slot"}}`,
+	)
+
+	runtime, err := OpenRuntime(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	if _, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-idle",
+	}, time.Date(2026, 4, 22, 9, 10, 0, 0, loc)); err != nil {
+		t.Fatalf("first SyncCodexJSONL() error = %v", err)
+	}
+
+	second, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-idle",
+	}, time.Date(2026, 4, 22, 10, 1, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("second SyncCodexJSONL() error = %v", err)
+	}
+	if !second.Changed {
+		t.Fatal("second sync Changed = false, want placeholder sync")
+	}
+	if len(second.Import.Checkpoints) != 1 {
+		t.Fatalf("len(second.Import.Checkpoints) = %d, want 1 placeholder", len(second.Import.Checkpoints))
+	}
+	if second.Import.Checkpoints[0].State != model.CheckpointPlaceholder {
+		t.Fatalf("checkpoint state = %q, want %q", second.Import.Checkpoints[0].State, model.CheckpointPlaceholder)
+	}
+	if second.Import.Checkpoints[0].Window.WindowStart.Hour() != 9 || second.Import.Checkpoints[0].Window.WindowStart.Minute() != 30 {
+		t.Fatalf("placeholder window = %s, want 09:30", second.Import.Checkpoints[0].Window.WindowStart.Format(time.RFC3339))
+	}
+	if len(second.Import.Reports) != 1 {
+		t.Fatalf("len(second.Import.Reports) = %d, want 1", len(second.Import.Reports))
+	}
+	if len(second.Import.Reports[0].WindowKeys) != 2 {
+		t.Fatalf("len(second.Import.Reports[0].WindowKeys) = %d, want 2", len(second.Import.Reports[0].WindowKeys))
 	}
 }
 
