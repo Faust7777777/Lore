@@ -1,0 +1,11 @@
+.tools/
+bin/
+dist/
+tmp/
+*.exe
+*.test
+*.out
+coverage/
+vault/
+state/
+.DS_Store
