@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"obsidian-harness/internal/app"
 	"obsidian-harness/internal/config"
+	"obsidian-harness/internal/mcp"
 	"obsidian-harness/internal/tui"
 )
 
@@ -99,6 +101,23 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "P0-B completed\n- checkpoint: %s\n- report: %s\n", result.Checkpoint.Path, result.Report.Path)
 		return 0
+	case "mcp":
+		workDir, err := resolveWorkDir(args[1:])
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		server := mcp.NewServer(runtime.Harness, version)
+		if err := server.Serve(context.Background(), os.Stdin, stdout); err != nil {
+			fmt.Fprintf(stderr, "mcp: %v\n", err)
+			return 1
+		}
+		return 0
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage())
 		return 0
@@ -122,6 +141,7 @@ Commands:
   bootstrap [workdir]  Scaffold the managed vault skeleton
   demo-p0a [workdir]   Run the managed doc -> draft -> apply demo chain
   demo-p0b [workdir]   Run the checkpoint -> daily report demo chain
+  mcp [workdir]        Run the read-only MCP server over stdio
   version              Print the CLI version
   help                 Show this help text
 `

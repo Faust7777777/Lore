@@ -10,6 +10,7 @@ const (
 	AuditDraftApplied     AuditKind = "draft_applied"
 	AuditCheckpointWrite  AuditKind = "checkpoint_write"
 	AuditDailyRollup      AuditKind = "daily_rollup"
+	AuditMCPRead          AuditKind = "mcp_read"
 	AuditRuntimeHealth    AuditKind = "runtime_health"
 )
 
