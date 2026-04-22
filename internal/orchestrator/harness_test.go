@@ -110,6 +110,60 @@ func TestApplyDraftDetectsConflict(t *testing.T) {
 	}
 }
 
+func TestRejectDraftTransitionsPendingReviewToRejected(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+
+	draft, err := h.ObserveDocumentChange(filepath.Join("0-\u6392\u671f", "04-\u6267\u884c", "week.md"), []byte("reject me"), time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ObserveDocumentChange() error = %v", err)
+	}
+
+	rejected, err := h.RejectDraft(draft.ID, time.Date(2026, 4, 22, 10, 5, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("RejectDraft() error = %v", err)
+	}
+	if rejected.State != model.DraftRejected {
+		t.Fatalf("rejected.State = %q, want %q", rejected.State, model.DraftRejected)
+	}
+}
+
+func TestRequestDraftRevisionTransitionsPendingReviewToRevisionRequested(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+
+	draft, err := h.ObserveDocumentChange(filepath.Join("0-\u6392\u671f", "04-\u6267\u884c", "week.md"), []byte("revise me"), time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ObserveDocumentChange() error = %v", err)
+	}
+
+	revised, err := h.RequestDraftRevision(draft.ID, time.Date(2026, 4, 22, 10, 5, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("RequestDraftRevision() error = %v", err)
+	}
+	if revised.State != model.DraftRevisionRequested {
+		t.Fatalf("revised.State = %q, want %q", revised.State, model.DraftRevisionRequested)
+	}
+}
+
 func TestProcessSinkChainWritesCheckpointAndDailyReport(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := config.Default(workDir)

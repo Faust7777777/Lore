@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"obsidian-harness/internal/app"
-	"obsidian-harness/internal/config"
 	"obsidian-harness/internal/mcp"
+	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/tui"
 )
 
@@ -38,14 +38,17 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		cfg := config.Default(workDir)
-		application = app.New(app.Config{
-			Version:   version,
-			VaultPath: cfg.Paths.VaultRoot,
-			Profile:   "local",
-			State:     inferManagedState(cfg),
-		})
-		fmt.Fprint(stdout, tui.RenderStatus(application.Status()))
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		managed, err := runtime.ManagedStatus()
+		if err != nil {
+			fmt.Fprintf(stderr, "status: %v\n", err)
+			return 1
+		}
+		fmt.Fprint(stdout, tui.RenderManagedStatus(version, managed))
 		return 0
 	case "bootstrap":
 		workDir, err := resolveWorkDir(args[1:])
@@ -104,6 +107,10 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "P0-B completed\n- checkpoint: %s\n- report: %s\n", result.Checkpoint.Path, result.Report.Path)
 		return 0
+	case "draft":
+		return runDraftCommand(args[1:], stdout, stderr)
+	case "process-sink":
+		return runProcessSinkCommand(args[1:], stdout, stderr)
 	case "mcp":
 		workDir, err := resolveWorkDir(args[1:])
 		if err != nil {
@@ -150,6 +157,8 @@ Commands:
   bootstrap [workdir]  Scaffold the managed vault skeleton
   demo-p0a [workdir]   Run the managed doc -> draft -> apply demo chain
   demo-p0b [workdir]   Run the checkpoint -> daily report demo chain
+  draft                Review and act on pending drafts
+  process-sink         Inspect checkpoint and daily report status
   mcp [workdir]        Run the read-only MCP server over stdio
   import-codex-jsonl   Import a Codex session JSONL into checkpoints and daily reports
   sync-codex-jsonl     Sync a Codex session JSONL only when the file changed
@@ -194,6 +203,117 @@ func runImportCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int 
 		len(result.Reports),
 	)
 	return 0
+}
+
+func runDraftCommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "draft: missing subcommand")
+		fmt.Fprintln(stderr, "usage: obsidian-harness draft <list|review|approve|reject|request-revision|apply> [flags] [id]")
+		return 1
+	}
+
+	switch args[0] {
+	case "list":
+		workDir, _, err := parseDraftFlags("draft list", args[1:], stderr, false)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		drafts, err := runtime.ListDrafts()
+		if err != nil {
+			fmt.Fprintf(stderr, "draft list: %v\n", err)
+			return 1
+		}
+		fmt.Fprint(stdout, tui.RenderDraftList(drafts))
+		return 0
+	case "review":
+		workDir, draftID, err := parseDraftFlags("draft review", args[1:], stderr, true)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		review, err := runtime.ReviewDraft(draftID)
+		if err != nil {
+			fmt.Fprintf(stderr, "draft review: %v\n", err)
+			return 1
+		}
+		fmt.Fprint(stdout, tui.RenderDraftReview(review))
+		return 0
+	case "approve", "reject", "request-revision", "apply":
+		workDir, draftID, err := parseDraftFlags("draft "+args[0], args[1:], stderr, true)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+
+		var updated model.Draft
+		switch args[0] {
+		case "approve":
+			updated, err = runtime.ApproveDraft(draftID)
+		case "reject":
+			updated, err = runtime.RejectDraft(draftID)
+		case "request-revision":
+			updated, err = runtime.RequestDraftRevision(draftID)
+		case "apply":
+			updated, err = runtime.ApplyDraft(draftID)
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "draft %s: %v\n", args[0], err)
+			return 1
+		}
+		fmt.Fprint(stdout, tui.RenderDraftActionResult(args[0], updated))
+		return 0
+	default:
+		fmt.Fprintf(stderr, "draft: unknown subcommand %q\n", args[0])
+		return 1
+	}
+}
+
+func runProcessSinkCommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "process-sink: missing subcommand")
+		fmt.Fprintln(stderr, "usage: obsidian-harness process-sink day [--workdir <dir>] [--agent <id>] [--day YYYY-MM-DD]")
+		return 1
+	}
+
+	switch args[0] {
+	case "day":
+		workDir, agentID, day, err := parseProcessSinkDayFlags(args[1:], stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		view, err := runtime.ProcessSinkDay(agentID, day)
+		if err != nil {
+			fmt.Fprintf(stderr, "process-sink day: %v\n", err)
+			return 1
+		}
+		fmt.Fprint(stdout, tui.RenderProcessSinkDay(view))
+		return 0
+	default:
+		fmt.Fprintf(stderr, "process-sink: unknown subcommand %q\n", args[0])
+		return 1
+	}
 }
 
 func runSyncCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -326,16 +446,55 @@ func parseAttachCodexJSONLFlags(args []string, stderr io.Writer) (app.ImportCode
 	return parseCodexJSONLFlags("attach-codex-jsonl", args, stderr, true, true)
 }
 
-func inferManagedState(cfg config.Config) string {
-	paths := []string{
-		filepath.Join(cfg.Paths.VaultRoot, cfg.Vault.ManagedCore.SystemDoc),
-		filepath.Join(cfg.Paths.VaultRoot, cfg.Vault.ManagedCore.ProgressIndex),
-		filepath.Join(cfg.Paths.VaultRoot, cfg.Vault.ManagedCore.Persona),
+func parseDraftFlags(name string, args []string, stderr io.Writer, requireID bool) (string, string, error) {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	if err := flags.Parse(args); err != nil {
+		return "", "", err
 	}
-	for _, path := range paths {
-		if _, err := os.Stat(path); err != nil {
-			return "bootstrap"
+	if strings.TrimSpace(*workDir) == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", "", err
 		}
+		*workDir = cwd
 	}
-	return "ready"
+
+	var draftID string
+	if requireID {
+		remaining := flags.Args()
+		if len(remaining) == 0 || strings.TrimSpace(remaining[0]) == "" {
+			return "", "", fmt.Errorf("%s: draft id is required", name)
+		}
+		draftID = strings.TrimSpace(remaining[0])
+	}
+
+	return filepath.Clean(*workDir), draftID, nil
+}
+
+func parseProcessSinkDayFlags(args []string, stderr io.Writer) (string, string, time.Time, error) {
+	flags := flag.NewFlagSet("process-sink day", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	agentID := flags.String("agent", "codex", "agent id")
+	dayValue := flags.String("day", time.Now().Format("2006-01-02"), "report day in YYYY-MM-DD")
+	if err := flags.Parse(args); err != nil {
+		return "", "", time.Time{}, err
+	}
+	if strings.TrimSpace(*workDir) == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", "", time.Time{}, err
+		}
+		*workDir = cwd
+	}
+
+	day, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(*dayValue), time.Local)
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("process-sink day: invalid --day value: %w", err)
+	}
+	return filepath.Clean(*workDir), strings.TrimSpace(*agentID), day, nil
 }

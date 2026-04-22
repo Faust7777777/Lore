@@ -154,6 +154,14 @@ func (h *Harness) ObserveDocumentChange(relPath string, content []byte, at time.
 	return draft, nil
 }
 
+func (h *Harness) ListDrafts() ([]model.Draft, error) {
+	return h.store.Drafts().ListDrafts()
+}
+
+func (h *Harness) GetDraft(id string) (model.Draft, error) {
+	return h.store.Drafts().GetDraft(id)
+}
+
 func (h *Harness) ApproveDraft(id string, at time.Time) (model.Draft, error) {
 	draft, err := h.store.Drafts().GetDraft(id)
 	if err != nil {
@@ -163,29 +171,31 @@ func (h *Harness) ApproveDraft(id string, at time.Time) (model.Draft, error) {
 		return model.Draft{}, ErrDraftNotReady
 	}
 
-	updated, err := h.store.Drafts().UpdateDraftState(id, model.DraftApproved, at)
+	return h.transitionDraftState(id, model.DraftApproved, "approve_draft", "draft-approved", "reviewer", at)
+}
+
+func (h *Harness) RejectDraft(id string, at time.Time) (model.Draft, error) {
+	draft, err := h.store.Drafts().GetDraft(id)
 	if err != nil {
 		return model.Draft{}, err
 	}
-	_ = h.broker.Publish(context.Background(), hruntime.Event{
-		ID:         updated.ID,
-		Type:       hruntime.EventDraftStateChanged,
-		Source:     "approve_draft",
-		OccurredAt: at,
-		Payload:    updated,
-	})
-	_ = h.auditor.Record(context.Background(), model.AuditRecord{
-		ID:         auditID("draft-approved", at),
-		Kind:       model.AuditDraftStateChange,
-		Actor:      "reviewer",
-		Target:     updated.Target.Path,
-		OccurredAt: at,
-		Metadata: map[string]string{
-			"draft_id": updated.ID,
-			"state":    string(updated.State),
-		},
-	})
-	return updated, nil
+	if draft.State != model.DraftPendingReview {
+		return model.Draft{}, ErrDraftNotReady
+	}
+
+	return h.transitionDraftState(id, model.DraftRejected, "reject_draft", "draft-rejected", "reviewer", at)
+}
+
+func (h *Harness) RequestDraftRevision(id string, at time.Time) (model.Draft, error) {
+	draft, err := h.store.Drafts().GetDraft(id)
+	if err != nil {
+		return model.Draft{}, err
+	}
+	if draft.State != model.DraftPendingReview {
+		return model.Draft{}, ErrDraftNotReady
+	}
+
+	return h.transitionDraftState(id, model.DraftRevisionRequested, "request_draft_revision", "draft-revision-requested", "reviewer", at)
 }
 
 func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
@@ -244,6 +254,32 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 		},
 	})
 	return applied, nil
+}
+
+func (h *Harness) transitionDraftState(id string, next model.DraftState, source string, auditPrefix string, actor string, at time.Time) (model.Draft, error) {
+	updated, err := h.store.Drafts().UpdateDraftState(id, next, at)
+	if err != nil {
+		return model.Draft{}, err
+	}
+	_ = h.broker.Publish(context.Background(), hruntime.Event{
+		ID:         updated.ID,
+		Type:       hruntime.EventDraftStateChanged,
+		Source:     source,
+		OccurredAt: at,
+		Payload:    updated,
+	})
+	_ = h.auditor.Record(context.Background(), model.AuditRecord{
+		ID:         auditID(auditPrefix, at),
+		Kind:       model.AuditDraftStateChange,
+		Actor:      actor,
+		Target:     updated.Target.Path,
+		OccurredAt: at,
+		Metadata: map[string]string{
+			"draft_id": updated.ID,
+			"state":    string(updated.State),
+		},
+	})
+	return updated, nil
 }
 
 func (h *Harness) IngestSessionWindow(window model.SessionWindow, title string, content string, rawTranscript string, at time.Time) (model.CheckpointDoc, error) {

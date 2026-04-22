@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"obsidian-harness/internal/app"
+	"obsidian-harness/internal/model"
 )
 
 func TestRunDefaultsToStatus(t *testing.T) {
@@ -204,6 +208,86 @@ func TestRunAttachCodexJSONLOnce(t *testing.T) {
 	}
 }
 
+func TestRunDraftListAndReview(t *testing.T) {
+	workDir := t.TempDir()
+	draftID := seedDraftForCLI(t, workDir, "list review me")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"draft", "list", "--workdir", workDir}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Draft Inbox") || !strings.Contains(stdout.String(), draftID[:16]) {
+		t.Fatalf("expected draft inbox output, got %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = run([]string{"draft", "review", "--workdir", workDir, draftID}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Draft Review") || !strings.Contains(stdout.String(), draftID) {
+		t.Fatalf("expected draft review output, got %q", stdout.String())
+	}
+}
+
+func TestRunDraftApproveAndApply(t *testing.T) {
+	workDir := t.TempDir()
+	draftID := seedDraftForCLI(t, workDir, "apply me")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"draft", "approve", "--workdir", workDir, draftID}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "approved") {
+		t.Fatalf("expected approved output, got %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = run([]string{"draft", "apply", "--workdir", workDir, draftID}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "applied") {
+		t.Fatalf("expected applied output, got %q", stdout.String())
+	}
+}
+
+func TestRunDraftReject(t *testing.T) {
+	workDir := t.TempDir()
+	draftID := seedDraftForCLI(t, workDir, "reject me")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"draft", "reject", "--workdir", workDir, draftID}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "rejected") {
+		t.Fatalf("expected rejected output, got %q", stdout.String())
+	}
+}
+
+func TestRunProcessSinkDay(t *testing.T) {
+	workDir := t.TempDir()
+	seedProcessSinkForCLI(t, workDir)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"process-sink", "day", "--workdir", workDir, "--agent", "codex", "--day", "2026-04-22"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Process Sink Day") || !strings.Contains(stdout.String(), "09:00-09:30") {
+		t.Fatalf("expected process-sink day output, got %q", stdout.String())
+	}
+}
+
 func TestRunUnknownCommandReturnsUsageError(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -217,5 +301,44 @@ func TestRunUnknownCommandReturnsUsageError(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "status") {
 		t.Fatalf("expected usage text in stderr, got %q", stderr.String())
+	}
+}
+
+func seedDraftForCLI(t *testing.T, workDir string, content string) string {
+	t.Helper()
+
+	runtime, err := app.OpenRuntime(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	if _, err := runtime.Bootstrap(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	draft, err := runtime.Harness.ObserveDocumentChange(filepath.Join("0-\u6392\u671f", "04-\u6267\u884c", "week.md"), []byte(content), time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ObserveDocumentChange() error = %v", err)
+	}
+	return draft.ID
+}
+
+func seedProcessSinkForCLI(t *testing.T, workDir string) {
+	t.Helper()
+
+	runtime, err := app.OpenRuntime(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	windowStart := time.Date(2026, 4, 22, 9, 0, 0, 0, time.Local)
+	window := model.SessionWindow{
+		AgentID:     "codex",
+		SessionID:   "session-1",
+		WindowStart: windowStart,
+		WindowEnd:   windowStart.Add(30 * time.Minute),
+	}
+	if _, err := runtime.Harness.IngestSessionWindow(window, "morning checkpoint", "summary", "raw", window.WindowEnd); err != nil {
+		t.Fatalf("IngestSessionWindow() error = %v", err)
+	}
+	if _, err := runtime.Harness.RollupDaily("codex", windowStart, windowStart.Add(12*time.Hour)); err != nil {
+		t.Fatalf("RollupDaily() error = %v", err)
 	}
 }
