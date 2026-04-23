@@ -286,6 +286,43 @@ func TestModelAgentRespondPromptIncludesGovernanceSummaryAndModes(t *testing.T) 
 	}
 }
 
+func TestModelAgentRespondPromptListsGitToolsWhenShellModeIsDisabled(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{
+			Content: `{"type":"final","message":"ok"}`,
+		},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{
+			{Name: "managed_status", Description: "show status"},
+			{Name: "workspace_read", Description: "read workspace file"},
+			{Name: "git_status", Description: "show git status for the local repo"},
+			{Name: "git_diff_summary", Description: "summarize git diff for the local repo"},
+		},
+	}
+
+	_, err := agent.Respond("inspect git status in the local repo", Context{DefaultAgentID: "codex"}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if len(client.requests) != 1 || len(client.requests[0].Messages) == 0 {
+		t.Fatalf("requests = %+v, want one request with system prompt", client.requests)
+	}
+	systemPrompt := client.requests[0].Messages[0].Content
+	for _, want := range []string{
+		"workspace_* and shell_exec are only for explicit local file/code/run requests",
+		"local_exec_mode: enabled",
+		"shell_exec_mode: disabled",
+		"- git_status: show git status for the local repo",
+		"- git_diff_summary: summarize git diff for the local repo",
+	} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
+		}
+	}
+}
+
 func TestModelAgentRespondFallsBackToLegacyDecisionJSON(t *testing.T) {
 	client := &fakeCompletionClient{
 		response: openai.ChatCompletionResponse{

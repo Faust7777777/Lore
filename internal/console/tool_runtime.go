@@ -52,6 +52,8 @@ func (r toolRuntime) DescribeTools(_ operatoragent.Context) []operatoragent.Tool
 	}
 	if r.localWorkToolsEnabled() {
 		tools = append(tools,
+			operatoragent.ToolDefinition{Name: "git_status", Description: "Show concise git status for the local workdir or one relative path. Safer than shell_exec for repo inspection.", Arguments: `{"path":"."}`},
+			operatoragent.ToolDefinition{Name: "git_diff_summary", Description: "Show a concise git diff summary for the local workdir or one relative path. Use staged=true for the index.", Arguments: `{"path":".","staged":false}`},
 			operatoragent.ToolDefinition{Name: "workspace_list", Description: "List files under the local workdir outside Lore vault/state.", Arguments: `{"path":"."}`},
 			operatoragent.ToolDefinition{Name: "workspace_read", Description: "Read a local workspace file outside Lore vault/state.", Arguments: `{"path":"relative/path"}`},
 			operatoragent.ToolDefinition{Name: "workspace_write", Description: "Write or overwrite a local workspace file outside Lore vault/state.", Arguments: `{"path":"relative/path","content":"..."}`},
@@ -238,6 +240,10 @@ func (r toolRuntime) CallTool(name string, arguments map[string]any) (operatorag
 			"doc_class":    doc.DocClass,
 			"base_version": doc.BaseVersion,
 		})
+	case "git_status":
+		return r.gitStatus(arguments)
+	case "git_diff_summary":
+		return r.gitDiffSummary(arguments)
 	case "workspace_list":
 		return r.workspaceList(arguments)
 	case "workspace_read":
@@ -308,6 +314,61 @@ func (r toolRuntime) workspaceList(arguments map[string]any) (operatoragent.Tool
 		out = append(out, workspaceEntry{Path: name, Kind: kind})
 	}
 	return jsonToolResult(out)
+}
+
+func (r toolRuntime) gitStatus(arguments map[string]any) (operatoragent.ToolResult, error) {
+	if err := r.requireLocalWorkTools("git_status"); err != nil {
+		return operatoragent.ToolResult{}, err
+	}
+	if err := r.requireExplicitLocalIntent("git_status"); err != nil {
+		return operatoragent.ToolResult{}, err
+	}
+
+	scope, err := r.gitScopeArg(arguments)
+	if err != nil {
+		return operatoragent.ToolResult{}, err
+	}
+
+	args := []string{"status", "--short", "--branch", "--untracked-files=all"}
+	if scope != "." {
+		args = append(args, "--", scope)
+	}
+	return r.runGitCommand("git_status", scope, args...)
+}
+
+func (r toolRuntime) gitDiffSummary(arguments map[string]any) (operatoragent.ToolResult, error) {
+	if err := r.requireLocalWorkTools("git_diff_summary"); err != nil {
+		return operatoragent.ToolResult{}, err
+	}
+	if err := r.requireExplicitLocalIntent("git_diff_summary"); err != nil {
+		return operatoragent.ToolResult{}, err
+	}
+
+	scope, err := r.gitScopeArg(arguments)
+	if err != nil {
+		return operatoragent.ToolResult{}, err
+	}
+
+	args := []string{"diff", "--stat", "--no-color", "--no-ext-diff"}
+	mode := "working_tree"
+	if boolArg(arguments, "staged") {
+		args = []string{"diff", "--cached", "--stat", "--no-color", "--no-ext-diff"}
+		mode = "staged"
+	}
+	if scope != "." {
+		args = append(args, "--", scope)
+	}
+
+	result, err := r.runGitCommand("git_diff_summary", scope, args...)
+	if err != nil {
+		return result, err
+	}
+	if strings.Contains(result.Content, "\n\n(empty output)") {
+		result.Content = fmt.Sprintf("tool: git_diff_summary\nstatus: ok\nmode: %s\nexit_code: 0\nworkdir: %s\nscope: %s\n\nno changes", mode, r.runtime.WorkDirPath(), scope)
+		return result, nil
+	}
+	result.Content = fmt.Sprintf("mode: %s\n%s", mode, result.Content)
+	return result, nil
 }
 
 func (r toolRuntime) workspaceRead(arguments map[string]any) (operatoragent.ToolResult, error) {
@@ -454,6 +515,44 @@ func (r toolRuntime) shellExec(arguments map[string]any) (operatoragent.ToolResu
 	return operatoragent.ToolResult{
 		Content: fmt.Sprintf("status: %s\nexit_code: %d\nworkdir: %s\n\n%s", status, exitCode, r.runtime.WorkDirPath(), strings.TrimSpace(string(output))),
 	}, err
+}
+
+func (r toolRuntime) runGitCommand(toolName string, scope string, gitArgs ...string) (operatoragent.ToolResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	args := append([]string{"-C", r.runtime.WorkDirPath()}, gitArgs...)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	output, err := cmd.CombinedOutput()
+
+	status := "ok"
+	if err != nil {
+		status = "error"
+	}
+	exitCode := 0
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+
+	body := strings.TrimSpace(string(output))
+	if body == "" {
+		body = "(empty output)"
+	}
+	return operatoragent.ToolResult{
+		Content: fmt.Sprintf("tool: %s\nstatus: %s\nexit_code: %d\nworkdir: %s\nscope: %s\n\n%s", toolName, status, exitCode, r.runtime.WorkDirPath(), scope, body),
+	}, err
+}
+
+func (r toolRuntime) gitScopeArg(arguments map[string]any) (string, error) {
+	raw := strings.TrimSpace(stringArg(arguments, "path", "."))
+	if raw == "" || raw == "." {
+		return ".", nil
+	}
+	_, relPath, err := r.resolveWorkspacePath(raw)
+	if err != nil {
+		return "", err
+	}
+	return relPath, nil
 }
 
 func (r toolRuntime) resolveWorkspacePath(rawPath string) (string, string, error) {
@@ -700,6 +799,14 @@ func hasExplicitLocalWorkIntent(input string) bool {
 		"run command",
 		"shell command",
 		"terminal command",
+		"git status",
+		"git diff",
+		"git log",
+		"working tree",
+		"staged changes",
+		"commit history",
+		"current branch",
+		"branch status",
 		"open file",
 		"read file",
 		"list files",

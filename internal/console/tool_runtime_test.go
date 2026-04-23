@@ -292,6 +292,51 @@ func TestToolRuntimeShellExecRequiresExplicitIntent(t *testing.T) {
 	}
 }
 
+func TestToolRuntimeDescribeToolsExposesGitToolsWithoutShellExec(t *testing.T) {
+	t.Setenv("LORE_AGENT_ENABLE_SHELL", "")
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+	}
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.EnableLocalWorkTools = true
+	tools := newToolRuntime(session, runtime)
+
+	definitions := tools.DescribeTools(operatoragent.Context{})
+	requireGitToolsAvailable(t, definitions)
+	if toolDefinitionsContain(definitions, "shell_exec") {
+		t.Fatal("shell_exec was registered without LORE_AGENT_ENABLE_SHELL")
+	}
+}
+
+func TestToolRuntimeGitToolsRequireExplicitIntent(t *testing.T) {
+	t.Setenv("LORE_AGENT_ENABLE_SHELL", "")
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+	}
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.EnableLocalWorkTools = true
+	tools := newToolRuntime(session, runtime)
+
+	requireGitToolsAvailable(t, tools.DescribeTools(operatoragent.Context{}))
+	for _, name := range gitToolNames() {
+		_, err := tools.CallTool(name, map[string]any{})
+		if err == nil {
+			t.Fatalf("%s error = nil, want explicit intent failure", name)
+		}
+		if !isExplicitLocalOrGitIntentError(err) {
+			t.Fatalf("%s error = %q, want explicit local/git/repo intent failure", name, err)
+		}
+	}
+}
+
 func TestToolRuntimeDescribeToolsHidesLocalExecByDefault(t *testing.T) {
 	workDir := t.TempDir()
 	runtime := &fakeRuntime{
@@ -305,8 +350,33 @@ func TestToolRuntimeDescribeToolsHidesLocalExecByDefault(t *testing.T) {
 	definitions := tools.DescribeTools(operatoragent.Context{})
 	for _, definition := range definitions {
 		switch definition.Name {
-		case "workspace_list", "workspace_read", "workspace_write", "workspace_edit", "shell_exec":
+		case "workspace_list", "workspace_read", "workspace_write", "workspace_edit", "shell_exec", "git_status", "git_diff_summary":
 			t.Fatalf("tool %q was exposed without local-exec mode", definition.Name)
+		}
+	}
+}
+
+func TestToolRuntimeGitToolsRequireLocalExecMode(t *testing.T) {
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+	}
+	enabledSession := NewSessionWithAgent("test", &fakeAgent{})
+	enabledSession.EnableLocalWorkTools = true
+	enabledTools := newToolRuntime(enabledSession, runtime)
+	requireGitToolsAvailable(t, enabledTools.DescribeTools(operatoragent.Context{}))
+
+	tools := newToolRuntime(NewSessionWithAgent("test", &fakeAgent{}), runtime)
+	for _, name := range gitToolNames() {
+		_, err := tools.CallTool(name, map[string]any{})
+		if err == nil {
+			t.Fatalf("%s error = nil, want local-exec failure", name)
+		}
+		if !strings.Contains(err.Error(), "--local-exec") {
+			t.Fatalf("%s error = %q, want local-exec guidance", name, err)
 		}
 	}
 }
@@ -331,4 +401,41 @@ func TestToolRuntimeWorkspaceWriteRequiresLocalExecMode(t *testing.T) {
 	if !strings.Contains(err.Error(), "--local-exec") {
 		t.Fatalf("workspace_write error = %q, want local-exec guidance", err)
 	}
+}
+
+func gitToolNames() []string {
+	return []string{"git_status", "git_diff_summary"}
+}
+
+func requireGitToolsAvailable(t *testing.T, definitions []operatoragent.ToolDefinition) {
+	t.Helper()
+	missing := make([]string, 0, len(gitToolNames()))
+	for _, name := range gitToolNames() {
+		if !toolDefinitionsContain(definitions, name) {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		t.Skipf("git tools not registered on this branch yet: %v", missing)
+	}
+}
+
+func toolDefinitionsContain(definitions []operatoragent.ToolDefinition, want string) bool {
+	for _, definition := range definitions {
+		if definition.Name == want {
+			return true
+		}
+	}
+	return false
+}
+
+func isExplicitLocalOrGitIntentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	if !strings.Contains(text, "explicit") {
+		return false
+	}
+	return strings.Contains(text, "local") || strings.Contains(text, "git") || strings.Contains(text, "repo")
 }

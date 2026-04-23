@@ -442,6 +442,10 @@ func loopSystemPrompt(tools []ToolDefinition, ctx Context) string {
 	if toolListContains(tools, "workspace_read") || toolListContains(tools, "workspace_list") {
 		localExecMode = "enabled"
 	}
+	gitMode := "disabled"
+	if toolListContains(tools, "git_status") || toolListContains(tools, "git_diff_summary") {
+		gitMode = "enabled"
+	}
 	shellMode := "disabled"
 	if toolListContains(tools, "shell_exec") {
 		shellMode = "enabled"
@@ -457,6 +461,7 @@ You may respond in exactly one of two forms:
 Rules:
 - call at most one tool per response
 - prefer Lore governance/read tools over workspace and shell tools
+- prefer git_* over shell_exec for repository inspection
 - workspace_* and shell_exec are only for explicit local file/code/run requests
 - vault_write_low is only for explicit note/diary/journal write requests
 - never use workspace_* or shell_exec on Lore-managed vault docs or runtime state files
@@ -471,6 +476,8 @@ Rules:
 	builder.WriteString("- process-sink docs are runtime-owned outputs, not direct chat writes\n")
 	builder.WriteString("- local_exec_mode: ")
 	builder.WriteString(localExecMode)
+	builder.WriteString("\n- git_mode: ")
+	builder.WriteString(gitMode)
 	builder.WriteString("\n- shell_exec_mode: ")
 	builder.WriteString(shellMode)
 	builder.WriteString("\n\nAvailable tools:\n")
@@ -526,7 +533,7 @@ func buildLoopUserPrompt(input string, ctx Context) string {
 	var builder strings.Builder
 	builder.WriteString("User request:\n")
 	builder.WriteString(strings.TrimSpace(input))
-	if history := renderHistory(ctx.History, 6); history != "" {
+	if history := renderHistory(ctx.History, 10); history != "" {
 		builder.WriteString("\n\nRecent conversation:\n")
 		builder.WriteString(history)
 	}

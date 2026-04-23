@@ -204,8 +204,8 @@ func (s *Session) rememberTurn(input string, output string) {
 		operatoragent.ConversationTurn{Role: "user", Content: strings.TrimSpace(input)},
 		operatoragent.ConversationTurn{Role: "assistant", Content: strings.TrimSpace(output)},
 	)
-	if len(s.History) > 12 {
-		s.History = append([]operatoragent.ConversationTurn(nil), s.History[len(s.History)-12:]...)
+	if len(s.History) > 20 {
+		s.History = append([]operatoragent.ConversationTurn(nil), s.History[len(s.History)-20:]...)
 	}
 }
 
