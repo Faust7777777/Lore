@@ -7,6 +7,7 @@ import (
 
 	"obsidian-harness/internal/app"
 	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/operatoragent"
 )
 
 func TestRenderWorkbenchIncludesCorePanels(t *testing.T) {
@@ -59,6 +60,11 @@ func TestRenderWorkbenchIncludesCorePanels(t *testing.T) {
 			},
 			BaseVersionMatches: true,
 		},
+		[]operatoragent.ToolCallTrace{{
+			Name:      "managed_status",
+			Status:    "ok",
+			Arguments: map[string]any{},
+		}},
 		true,
 		false,
 		"Managed Status\n============\nReady: yes",
@@ -70,6 +76,8 @@ func TestRenderWorkbenchIncludesCorePanels(t *testing.T) {
 		"Pending Drafts",
 		"Focused Draft",
 		"Process Sink",
+		"Tool Trace",
+		"managed_status",
 		"Last Action",
 		"Runtime Snapshot",
 		"Profile",

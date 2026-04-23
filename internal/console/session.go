@@ -39,6 +39,7 @@ type Session struct {
 	DefaultAgentID       string
 	EnableLocalWorkTools bool
 	LastInput            string
+	LastToolTrace        []operatoragent.ToolCallTrace
 	History              []operatoragent.ConversationTurn
 	Now                  func() time.Time
 	Agent                operatoragent.Agent
@@ -62,11 +63,13 @@ func NewSessionWithAgent(version string, agent operatoragent.Agent) *Session {
 
 func (s *Session) Handle(input string, runtime Runtime) (string, error) {
 	s.LastInput = strings.TrimSpace(input)
+	s.LastToolTrace = nil
 	if loopAgent, ok := s.Agent.(operatoragent.LoopAgent); ok {
 		response, err := loopAgent.Respond(input, s.agentContext(), newToolRuntime(s, runtime))
 		if err != nil {
 			return "", err
 		}
+		s.LastToolTrace = append([]operatoragent.ToolCallTrace(nil), response.Trace...)
 		if response.Decision != nil {
 			output, err := s.executeDecision(*response.Decision, runtime)
 			if err != nil {

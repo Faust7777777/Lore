@@ -313,7 +313,7 @@ func runTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 				focusedReview = &review
 			}
 		}
-		fmt.Fprint(stdout, tui.RenderWorkbench(version, managed, drafts, processSink, focusedReview, localExec, shellProfileEnabled(localExec), lastOutput))
+		fmt.Fprint(stdout, tui.RenderWorkbench(version, managed, drafts, processSink, focusedReview, session.LastToolTrace, localExec, shellProfileEnabled(localExec), lastOutput))
 		return nil
 	}
 

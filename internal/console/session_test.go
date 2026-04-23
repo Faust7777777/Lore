@@ -283,6 +283,10 @@ func TestSessionHandleUsesLoopAgentResponseAndStoresHistory(t *testing.T) {
 	agent := &fakeLoopAgent{
 		response: operatoragent.Response{
 			Final: "Managed Status\n--------------\nready\n",
+			Trace: []operatoragent.ToolCallTrace{{
+				Name:   "managed_status",
+				Status: "ok",
+			}},
 		},
 	}
 	session := NewSessionWithAgent("test", agent)
@@ -309,5 +313,8 @@ func TestSessionHandleUsesLoopAgentResponseAndStoresHistory(t *testing.T) {
 	}
 	if len(session.History) != 2 {
 		t.Fatalf("history len = %d, want 2", len(session.History))
+	}
+	if len(session.LastToolTrace) != 1 || session.LastToolTrace[0].Name != "managed_status" {
+		t.Fatalf("last tool trace = %+v, want managed_status", session.LastToolTrace)
 	}
 }

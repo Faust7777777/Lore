@@ -228,6 +228,7 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 	}
 
 	toolHistory := make([]string, 0, maxLoopSteps)
+	trace := make([]ToolCallTrace, 0, maxLoopSteps)
 	for step := 0; step < maxLoopSteps; step++ {
 		resp, err := a.client.ChatCompletion(context.Background(), openai.ChatCompletionRequest{
 			Messages:    messages,
@@ -242,7 +243,7 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 			return Response{}, fmt.Errorf("operator agent: invalid loop response: %w", err)
 		}
 		if legacyDecision != nil {
-			return Response{Decision: legacyDecision}, nil
+			return Response{Decision: legacyDecision, Trace: append([]ToolCallTrace(nil), trace...)}, nil
 		}
 
 		switch envelope.Type {
@@ -251,7 +252,7 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 			if final == "" {
 				return Response{}, fmt.Errorf("operator agent: final response is empty")
 			}
-			return Response{Final: final}, nil
+			return Response{Final: final, Trace: append([]ToolCallTrace(nil), trace...)}, nil
 		case "tool_call":
 			toolName := strings.TrimSpace(envelope.Tool)
 			if toolName == "" {
@@ -267,6 +268,12 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 			}
 
 			toolResult, toolErr := runtime.CallTool(toolName, envelope.Arguments)
+			trace = append(trace, ToolCallTrace{
+				Name:      toolName,
+				Arguments: cloneToolArguments(envelope.Arguments),
+				Status:    toolTraceStatus(toolErr),
+				Error:     toolTraceError(toolErr),
+			})
 			toolContent := strings.TrimSpace(toolResult.Content)
 			if toolErr != nil && toolContent != "" {
 				toolErr = fmt.Errorf("%w\n%s", toolErr, toolContent)
@@ -553,6 +560,31 @@ func buildToolResultPrompt(toolName string, content string, toolErr error) strin
 		content = "(empty result)"
 	}
 	return fmt.Sprintf("Tool result for %s:\n%s", toolName, content)
+}
+
+func toolTraceStatus(err error) string {
+	if err != nil {
+		return "error"
+	}
+	return "ok"
+}
+
+func toolTraceError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return strings.TrimSpace(err.Error())
+}
+
+func cloneToolArguments(arguments map[string]any) map[string]any {
+	if len(arguments) == 0 {
+		return map[string]any{}
+	}
+	cloned := make(map[string]any, len(arguments))
+	for key, value := range arguments {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func toolCallSignature(toolName string, arguments map[string]any) string {

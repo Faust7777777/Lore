@@ -2,13 +2,15 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"obsidian-harness/internal/app"
 	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/operatoragent"
 )
 
-func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, localExec bool, shellEnabled bool, lastOutput string) string {
+func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, toolTrace []operatoragent.ToolCallTrace, localExec bool, shellEnabled bool, lastOutput string) string {
 	var builder strings.Builder
 	pendingDrafts := filterDraftsByState(drafts, model.DraftPendingReview)
 	builder.WriteString("Lore Workbench\n")
@@ -103,6 +105,24 @@ func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []m
 		}
 	}
 
+	builder.WriteString("\nTool Trace\n")
+	builder.WriteString("----------\n")
+	if len(toolTrace) == 0 {
+		builder.WriteString("No tool calls in the last turn.\n")
+	} else {
+		fmt.Fprintf(&builder, "%-18s %-8s %-34s %s\n", "TOOL", "STATUS", "ARGUMENTS", "ERROR")
+		for _, item := range toolTrace {
+			fmt.Fprintf(
+				&builder,
+				"%-18s %-8s %-34s %s\n",
+				oneLine(item.Name, 18),
+				oneLine(item.Status, 8),
+				oneLine(formatToolArguments(item.Arguments), 34),
+				oneLine(item.Error, 64),
+			)
+		}
+	}
+
 	builder.WriteString("\nLast Action\n")
 	builder.WriteString("-----------\n")
 	if strings.TrimSpace(lastOutput) == "" {
@@ -161,4 +181,21 @@ func enabledDisabled(value bool) string {
 		return "enabled"
 	}
 	return "disabled"
+}
+
+func formatToolArguments(arguments map[string]any) string {
+	if len(arguments) == 0 {
+		return "{}"
+	}
+	keys := make([]string, 0, len(arguments))
+	for key := range arguments {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(arguments))
+	for _, key := range keys {
+		value := arguments[key]
+		parts = append(parts, fmt.Sprintf("%s=%v", key, value))
+	}
+	return strings.Join(parts, ", ")
 }

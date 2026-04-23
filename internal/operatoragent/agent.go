@@ -52,6 +52,13 @@ type ToolResult struct {
 	Content string
 }
 
+type ToolCallTrace struct {
+	Name      string
+	Arguments map[string]any
+	Status    string
+	Error     string
+}
+
 type ToolRuntime interface {
 	DescribeTools(ctx Context) []ToolDefinition
 	CallTool(name string, arguments map[string]any) (ToolResult, error)
@@ -60,6 +67,7 @@ type ToolRuntime interface {
 type Response struct {
 	Final    string
 	Decision *Decision
+	Trace    []ToolCallTrace
 }
 
 type LoopAgent interface {

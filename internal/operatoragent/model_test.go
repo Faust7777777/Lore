@@ -239,6 +239,9 @@ func TestModelAgentRespondRunsToolLoopThenFinal(t *testing.T) {
 	if strings.TrimSpace(response.Final) != "Managed Status\n--------------\nready" {
 		t.Fatalf("response.Final = %q", response.Final)
 	}
+	if len(response.Trace) != 1 || response.Trace[0].Name != "managed_status" || response.Trace[0].Status != "ok" {
+		t.Fatalf("response.Trace = %+v, want one managed_status ok trace", response.Trace)
+	}
 	if len(runtime.calls) != 1 || runtime.calls[0] != "managed_status" {
 		t.Fatalf("tool calls = %+v, want managed_status", runtime.calls)
 	}
