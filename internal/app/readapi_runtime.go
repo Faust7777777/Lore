@@ -1,6 +1,10 @@
 package app
 
-import "obsidian-harness/internal/model"
+import (
+	"time"
+
+	"obsidian-harness/internal/model"
+)
 
 func (r *Runtime) SystemDocGet(name string) (model.VaultDocument, error) {
 	return r.Harness.SystemDocGet(name)
@@ -40,4 +44,8 @@ func (r *Runtime) VaultRootPath() string {
 
 func (r *Runtime) StateDirPath() string {
 	return r.Config.Paths.StateDir
+}
+
+func (r *Runtime) WriteLowRiskNote(relPath string, content string, overwrite bool) (model.VaultDocument, error) {
+	return r.Harness.WriteLowRiskNote(relPath, []byte(content), overwrite, time.Now())
 }

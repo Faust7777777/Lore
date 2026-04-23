@@ -24,6 +24,7 @@ var (
 	ErrDraftNotReady       = errors.New("orchestrator: draft is not ready for requested operation")
 	ErrUnsupportedDraft    = errors.New("orchestrator: unsupported draft kind for apply")
 	ErrInvalidDraftPatch   = errors.New("orchestrator: invalid draft patch payload")
+	ErrDirectWriteDenied   = errors.New("orchestrator: direct vault write denied by governance policy")
 )
 
 type Harness struct {
@@ -262,6 +263,67 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 	return applied, nil
 }
 
+func (h *Harness) WriteLowRiskNote(relPath string, content []byte, overwrite bool, at time.Time) (model.VaultDocument, error) {
+	normalizedPath := cleanRelPath(relPath)
+	if !isLowRiskWritePath(normalizedPath) {
+		return model.VaultDocument{}, ErrDirectWriteDenied
+	}
+	if !h.allowsLowRiskDirectWrite(normalizedPath) {
+		return model.VaultDocument{}, ErrDirectWriteDenied
+	}
+
+	targetAbs := filepath.Join(h.cfg.Paths.VaultRoot, filepath.FromSlash(normalizedPath))
+	if !overwrite {
+		if _, err := os.Stat(targetAbs); err == nil {
+			return model.VaultDocument{}, os.ErrExist
+		} else if !os.IsNotExist(err) {
+			return model.VaultDocument{}, err
+		}
+	}
+
+	hash, err := vault.WriteFileAtomic(targetAbs, content, h.cfg.Vault.TempSuffix)
+	if err != nil {
+		return model.VaultDocument{}, err
+	}
+
+	doc := model.VaultDocument{
+		Path:        normalizedPath,
+		DocClass:    model.DocClassNote,
+		BaseVersion: hash,
+		Content:     string(content),
+		Attachments: vault.ExtractAttachmentRefs(string(content)),
+	}
+	_ = h.auditor.Record(context.Background(), model.AuditRecord{
+		ID:         auditID("low-risk-write", at),
+		Kind:       model.AuditLowRiskVaultWrite,
+		Actor:      "operator",
+		Target:     normalizedPath,
+		OccurredAt: at,
+		Metadata: map[string]string{
+			"doc_class": string(doc.DocClass),
+			"overwrite": fmt.Sprintf("%t", overwrite),
+		},
+	})
+	return doc, nil
+}
+
+func (h *Harness) allowsLowRiskDirectWrite(relPath string) bool {
+	if relPath == "" || vault.ShouldIgnoreRelativePath(relPath) {
+		return false
+	}
+	if sameRelPath(relPath, h.cfg.Vault.ManagedCore.SystemDoc) ||
+		sameRelPath(relPath, h.cfg.Vault.ManagedCore.ProgressIndex) ||
+		sameRelPath(relPath, h.cfg.Vault.ManagedCore.Persona) {
+		return false
+	}
+	if isUnderRelPath(relPath, processSinkRelDir(h.cfg.Paths.VaultRoot, h.cfg.Paths.ProcessSinkDir)) {
+		return false
+	}
+
+	classification := h.classifier.Classify(relPath)
+	return classification.Class == model.DocClassUnknown || classification.Class == model.DocClassNote
+}
+
 func (h *Harness) transitionDraftState(id string, next model.DraftState, source string, auditPrefix string, actor string, at time.Time) (model.Draft, error) {
 	updated, err := h.store.Drafts().UpdateDraftState(id, next, at)
 	if err != nil {
@@ -350,6 +412,38 @@ func (h *Harness) publishDailyRollup(agentID string, report model.DailyReport, a
 		},
 	})
 	return report
+}
+
+func isLowRiskWritePath(relPath string) bool {
+	relPath = cleanRelPath(relPath)
+	if relPath == "" || relPath == ".." || strings.HasPrefix(relPath, "../") {
+		return false
+	}
+	if filepath.IsAbs(filepath.FromSlash(relPath)) || strings.Contains(relPath, ":") {
+		return false
+	}
+	return strings.EqualFold(filepath.Ext(relPath), ".md")
+}
+
+func sameRelPath(left string, right string) bool {
+	return strings.EqualFold(cleanRelPath(left), cleanRelPath(right))
+}
+
+func isUnderRelPath(pathValue string, rootValue string) bool {
+	pathValue = cleanRelPath(pathValue)
+	rootValue = cleanRelPath(rootValue)
+	if pathValue == "" || rootValue == "" {
+		return false
+	}
+	return pathValue == rootValue || strings.HasPrefix(pathValue, strings.TrimRight(rootValue, "/")+"/")
+}
+
+func processSinkRelDir(vaultRoot string, processSinkDir string) string {
+	rel, err := filepath.Rel(filepath.Clean(vaultRoot), filepath.Clean(processSinkDir))
+	if err != nil {
+		return ""
+	}
+	return cleanRelPath(rel)
 }
 
 type fileWriter struct {

@@ -5,13 +5,14 @@ import "time"
 type AuditKind string
 
 const (
-	AuditDraftCreated     AuditKind = "draft_created"
-	AuditDraftStateChange AuditKind = "draft_state_change"
-	AuditDraftApplied     AuditKind = "draft_applied"
-	AuditCheckpointWrite  AuditKind = "checkpoint_write"
-	AuditDailyRollup      AuditKind = "daily_rollup"
-	AuditMCPRead          AuditKind = "mcp_read"
-	AuditRuntimeHealth    AuditKind = "runtime_health"
+	AuditDraftCreated      AuditKind = "draft_created"
+	AuditDraftStateChange  AuditKind = "draft_state_change"
+	AuditDraftApplied      AuditKind = "draft_applied"
+	AuditCheckpointWrite   AuditKind = "checkpoint_write"
+	AuditDailyRollup       AuditKind = "daily_rollup"
+	AuditMCPRead           AuditKind = "mcp_read"
+	AuditLowRiskVaultWrite AuditKind = "low_risk_vault_write"
+	AuditRuntimeHealth     AuditKind = "runtime_health"
 )
 
 type AuditRecord struct {

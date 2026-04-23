@@ -48,6 +48,7 @@ func (r toolRuntime) DescribeTools(_ operatoragent.Context) []operatoragent.Tool
 		{Name: "vault_backlinks", Description: "Find backlink mentions of one vault note.", Arguments: `{"path":"relative/path.md","limit":5}`},
 		{Name: "doc_classify", Description: "Return the inferred document class for one vault path.", Arguments: `{"path":"relative/path.md"}`},
 		{Name: "context_pack", Description: "Assemble a read-only Lore context pack for a task or target note.", Arguments: `{"target_path":"optional/path.md","task":"what you need","limit":6}`},
+		{Name: "vault_write_low", Description: "Write a low-governance markdown note inside the vault. Runtime rejects managed core docs, plans, process-sink docs, hidden dirs, and non-markdown files.", Arguments: `{"path":"notes/diary.md","content":"...","overwrite":false}`},
 		{Name: "workspace_list", Description: "List files under the local workdir outside Lore vault/state.", Arguments: `{"path":"."}`},
 		{Name: "workspace_read", Description: "Read a local workspace file outside Lore vault/state.", Arguments: `{"path":"relative/path"}`},
 		{Name: "workspace_write", Description: "Write or overwrite a local workspace file outside Lore vault/state.", Arguments: `{"path":"relative/path","content":"..."}`},
@@ -211,6 +212,25 @@ func (r toolRuntime) CallTool(name string, arguments map[string]any) (operatorag
 			return operatoragent.ToolResult{}, err
 		}
 		return jsonToolResult(pack)
+	case "vault_write_low":
+		path, err := requiredStringArg(arguments, "path")
+		if err != nil {
+			return operatoragent.ToolResult{}, err
+		}
+		content, ok := rawStringArg(arguments, "content")
+		if !ok {
+			return operatoragent.ToolResult{}, fmt.Errorf("missing required argument content")
+		}
+		doc, err := r.runtime.WriteLowRiskNote(path, content, boolArg(arguments, "overwrite"))
+		if err != nil {
+			return operatoragent.ToolResult{}, err
+		}
+		return jsonToolResult(map[string]any{
+			"status":       "written",
+			"path":         doc.Path,
+			"doc_class":    doc.DocClass,
+			"base_version": doc.BaseVersion,
+		})
 	case "workspace_list":
 		return r.workspaceList(arguments)
 	case "workspace_read":

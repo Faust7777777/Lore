@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,75 @@ import (
 	"obsidian-harness/internal/store/memory"
 	"obsidian-harness/internal/vault"
 )
+
+func TestWriteLowRiskNoteWritesNoteAndAudits(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	doc, err := h.WriteLowRiskNote("03-notes/diary.md", []byte("# Diary\n\nToday I shipped Lore."), false, time.Date(2026, 4, 22, 21, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("WriteLowRiskNote() error = %v", err)
+	}
+	if doc.Path != "03-notes/diary.md" || doc.DocClass != model.DocClassNote || doc.BaseVersion == "" {
+		t.Fatalf("doc = %+v, want note with hash", doc)
+	}
+
+	data, err := os.ReadFile(filepath.Join(cfg.Paths.VaultRoot, "03-notes", "diary.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(note) error = %v", err)
+	}
+	if string(data) != "# Diary\n\nToday I shipped Lore." {
+		t.Fatalf("note content = %q", string(data))
+	}
+
+	records, err := st.Audit().ListAudit(10)
+	if err != nil {
+		t.Fatalf("ListAuditRecords() error = %v", err)
+	}
+	found := false
+	for _, record := range records {
+		if record.Kind == model.AuditLowRiskVaultWrite && record.Target == "03-notes/diary.md" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected low-risk write audit record, got %+v", records)
+	}
+}
+
+func TestWriteLowRiskNoteRejectsGovernedPaths(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	cases := []string{
+		cfg.Vault.ManagedCore.SystemDoc,
+		cfg.Vault.ManagedCore.ProgressIndex,
+		cfg.Vault.ManagedCore.Persona,
+		filepath.Join("0-\u6392\u671f", "04-\u6267\u884c", "week.md"),
+		filepath.ToSlash(filepath.Join("09-\u8fc7\u7a0b\u6c89\u6dc0", "codex", "2026-04-22.md")),
+		".obsidian/private.md",
+		"../escape.md",
+		"notes/raw.txt",
+	}
+	for _, path := range cases {
+		if _, err := h.WriteLowRiskNote(path, []byte("blocked"), true, time.Now()); !errors.Is(err, ErrDirectWriteDenied) {
+			t.Fatalf("WriteLowRiskNote(%q) error = %v, want ErrDirectWriteDenied", path, err)
+		}
+	}
+}
 
 func TestBootstrapAndDraftLifecycle(t *testing.T) {
 	workDir := t.TempDir()

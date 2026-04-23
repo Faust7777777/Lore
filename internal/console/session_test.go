@@ -15,6 +15,7 @@ type fakeRuntime struct {
 	drafts      []model.Draft
 	review      app.DraftReview
 	processSink app.ProcessSinkDayView
+	writtenNote *model.VaultDocument
 }
 
 func (f *fakeRuntime) ManagedStatus() (model.ManagedStatusView, error) {
@@ -82,6 +83,12 @@ func (f *fakeRuntime) ContextPack(targetPath string, task string, limit int) (mo
 		TargetPath: targetPath,
 		Managed:    f.managed,
 	}, nil
+}
+
+func (f *fakeRuntime) WriteLowRiskNote(relPath string, content string, overwrite bool) (model.VaultDocument, error) {
+	doc := model.VaultDocument{Path: relPath, DocClass: model.DocClassNote, Content: content, BaseVersion: "hash"}
+	f.writtenNote = &doc
+	return doc, nil
 }
 
 func (f *fakeRuntime) WorkDirPath() string {

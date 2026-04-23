@@ -27,6 +27,7 @@ type Runtime interface {
 	VaultBacklinks(relPath string, limit int) ([]model.SearchHit, error)
 	DocClassify(relPath string) model.DocClassificationView
 	ContextPack(targetPath string, task string, limit int) (model.ContextPack, error)
+	WriteLowRiskNote(relPath string, content string, overwrite bool) (model.VaultDocument, error)
 	WorkDirPath() string
 	VaultRootPath() string
 	StateDirPath() string

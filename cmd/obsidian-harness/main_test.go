@@ -74,6 +74,10 @@ func newOperatorAgentTestServer(t *testing.T) *httptest.Server {
 				content = `{"title":"codex checkpoint 09:00-09:30","content":"## Summary\n- checkpoint summary from test provider"}`
 			case strings.Contains(systemPrompt, "day of external coding-agent checkpoints"):
 				content = `{"title":"codex daily report","content":"## Summary\n- daily summary from test provider"}`
+			case strings.Contains(userPrompt, "Tool result for vault_write_low"):
+				content = `{"type":"final","message":"Diary written to 03-notes/diary.md"}`
+			case strings.Contains(userPrompt, "write a diary"):
+				content = `{"type":"tool_call","tool":"vault_write_low","arguments":{"path":"03-notes/diary.md","content":"# Diary\n\nToday I reviewed Lore progress.","overwrite":false}}`
 			case strings.Contains(userPrompt, "approve current draft"):
 				content = `{"action":"approve_draft","use_focused_draft":true}`
 			case strings.Contains(userPrompt, "review draft"):
@@ -108,6 +112,10 @@ func newOperatorAgentTestServer(t *testing.T) *httptest.Server {
 				content = `{"title":"codex checkpoint 09:00-09:30","content":"## Summary\n- checkpoint summary from test provider"}`
 			case strings.Contains(systemPrompt, "day of external coding-agent checkpoints"):
 				content = `{"title":"codex daily report","content":"## Summary\n- daily summary from test provider"}`
+			case strings.Contains(userPrompt, "Tool result for vault_write_low"):
+				content = `{"type":"final","message":"Diary written to 03-notes/diary.md"}`
+			case strings.Contains(userPrompt, "write a diary"):
+				content = `{"type":"tool_call","tool":"vault_write_low","arguments":{"path":"03-notes/diary.md","content":"# Diary\n\nToday I reviewed Lore progress.","overwrite":false}}`
 			case strings.Contains(userPrompt, "approve current draft"):
 				content = `{"action":"approve_draft","use_focused_draft":true}`
 			case strings.Contains(userPrompt, "review draft"):
@@ -255,6 +263,29 @@ func TestRunConsoleOnceStatus(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Managed Status") {
 		t.Fatalf("expected managed status output, got %q", stdout.String())
+	}
+}
+
+func TestRunConsoleOnceWritesLowRiskDiary(t *testing.T) {
+	workDir := t.TempDir()
+	configureLLMTestEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"console", "--workdir", workDir, "--once", "write a diary from today's report"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Diary written") {
+		t.Fatalf("expected diary final output, got %q", stdout.String())
+	}
+	data, err := os.ReadFile(filepath.Join(workDir, "vault", "03-notes", "diary.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(diary) error = %v", err)
+	}
+	if !strings.Contains(string(data), "Today I reviewed Lore progress.") {
+		t.Fatalf("diary content = %q", string(data))
 	}
 }
 

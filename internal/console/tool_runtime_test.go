@@ -39,6 +39,32 @@ func TestToolRuntimeWorkspaceWritePreservesWhitespace(t *testing.T) {
 	}
 }
 
+func TestToolRuntimeVaultWriteLowCallsRuntime(t *testing.T) {
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+	}
+	tools := newToolRuntime(NewSessionWithAgent("test", &fakeAgent{}), runtime)
+
+	result, err := tools.CallTool("vault_write_low", map[string]any{
+		"path":      "03-notes/diary.md",
+		"content":   "# Diary\n\nToday",
+		"overwrite": false,
+	})
+	if err != nil {
+		t.Fatalf("vault_write_low error = %v", err)
+	}
+	if runtime.writtenNote == nil || runtime.writtenNote.Path != "03-notes/diary.md" {
+		t.Fatalf("writtenNote = %+v, want diary path", runtime.writtenNote)
+	}
+	if !strings.Contains(result.Content, `"status": "written"`) || !strings.Contains(result.Content, "03-notes/diary.md") {
+		t.Fatalf("vault_write_low result = %q", result.Content)
+	}
+}
+
 func TestToolRuntimeWorkspaceWriteBlocksVaultAndState(t *testing.T) {
 	workDir := t.TempDir()
 	runtime := &fakeRuntime{
