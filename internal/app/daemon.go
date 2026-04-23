@@ -160,9 +160,9 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 		writeDaemonLine(opts.Stdout, "Vault watcher active\n")
 	}
 
-	var codexWatcher *singleFileWatcher
+	var codexWatcher fileEventWatcher
 	if opts.CodexJSONL != nil && strings.TrimSpace(opts.CodexJSONL.InputPath) != "" {
-		codexWatcher, err = newSingleFileWatcher(opts.CodexJSONL.InputPath)
+		codexWatcher, err = newSingleFileWatcherFunc(opts.CodexJSONL.InputPath)
 		if err != nil {
 			writeDaemonLine(opts.Stdout, "Codex watcher unavailable\n- error: %s\n- mode: polling fallback\n", err)
 		} else {

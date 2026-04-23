@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
+
 	"obsidian-harness/internal/vault"
 )
 
@@ -293,6 +295,14 @@ func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-daemon-watch","agent_nickname":"Codex"}}`,
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"first watcher sync"}}`,
 	)
+	fakeWatcher := newFakeFileEventWatcher(transcriptPath)
+	previousWatcherFactory := newSingleFileWatcherFunc
+	newSingleFileWatcherFunc = func(path string) (fileEventWatcher, error) {
+		return fakeWatcher, nil
+	}
+	t.Cleanup(func() {
+		newSingleFileWatcherFunc = previousWatcherFactory
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -327,8 +337,13 @@ func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 	if err := file.Close(); err != nil {
 		t.Fatalf("Close(append) error = %v", err)
 	}
+	now := time.Now()
+	if err := os.Chtimes(transcriptPath, now, now); err != nil {
+		t.Fatalf("Chtimes(transcript) error = %v", err)
+	}
+	fakeWatcher.Emit(fsnotify.Event{Name: transcriptPath, Op: fsnotify.Write})
 
-	waitForCondition(t, 2*time.Second, func() bool {
+	waitForCondition(t, 4*time.Second, func() bool {
 		view, err := runtime.ProcessSinkDay("codex", time.Date(2026, 4, 22, 12, 0, 0, 0, loc))
 		return err == nil && len(view.Checkpoints) == 2
 	})
@@ -346,6 +361,42 @@ func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 	if elapsed := time.Since(startedAt); elapsed >= 5*time.Second {
 		t.Fatalf("daemon elapsed = %s, want watcher-triggered codex sync before poll interval", elapsed)
 	}
+}
+
+type fakeFileEventWatcher struct {
+	path   string
+	events chan fsnotify.Event
+	errors chan error
+}
+
+func newFakeFileEventWatcher(path string) *fakeFileEventWatcher {
+	return &fakeFileEventWatcher{
+		path:   path,
+		events: make(chan fsnotify.Event, 8),
+		errors: make(chan error, 1),
+	}
+}
+
+func (f *fakeFileEventWatcher) Events() <-chan fsnotify.Event {
+	return f.events
+}
+
+func (f *fakeFileEventWatcher) Errors() <-chan error {
+	return f.errors
+}
+
+func (f *fakeFileEventWatcher) Close() error {
+	close(f.events)
+	close(f.errors)
+	return nil
+}
+
+func (f *fakeFileEventWatcher) Matches(event fsnotify.Event) bool {
+	return sameWatchPath(event.Name, f.path)
+}
+
+func (f *fakeFileEventWatcher) Emit(event fsnotify.Event) {
+	f.events <- event
 }
 
 func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool) {

@@ -12,6 +12,17 @@ type singleFileWatcher struct {
 	watcher *fsnotify.Watcher
 }
 
+type fileEventWatcher interface {
+	Events() <-chan fsnotify.Event
+	Errors() <-chan error
+	Close() error
+	Matches(event fsnotify.Event) bool
+}
+
+var newSingleFileWatcherFunc = func(path string) (fileEventWatcher, error) {
+	return newSingleFileWatcher(path)
+}
+
 func newSingleFileWatcher(path string) (*singleFileWatcher, error) {
 	absolutePath, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
