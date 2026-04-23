@@ -13,7 +13,7 @@ Key product constraints already baked into the scaffold:
 - External agents do not write vault content directly
 - P0 exposes a read-only MCP subset for context access
 - P0 now includes a manual `import-codex-jsonl` path for Codex session files
-- P0 now includes `sync-codex-jsonl` and `attach-codex-jsonl` for local JSONL-based incremental attach mode
+- P0 now includes `sync-codex-jsonl` and `attach-codex-jsonl` for local JSONL-based incremental attach mode with watcher-first wakeups
 - `process-sink` writes are internal Harness writes with audit
 - Model availability is a hard dependency for the main chain
 - Cost control is observe-first, not a hard gate in P0/P1

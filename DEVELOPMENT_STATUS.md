@@ -37,7 +37,7 @@ Updated: 2026-04-23
   - 30 minute windowing with empty-slot placeholder generation
   - manual import path from CLI into checkpoint and daily report writes
   - cursor-backed tail sync with replay-offset resume and boundary-anchor validation
-  - local attach mode via polling wrapper around incremental sync
+  - local attach mode with file-watch wakeups and polling fallback around incremental sync
 - LLM/operator path:
   - OpenAI-compatible provider client
   - model discovery and operator-model selection

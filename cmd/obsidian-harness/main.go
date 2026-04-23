@@ -623,38 +623,22 @@ func runAttachCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	fmt.Fprintf(stdout, "Attaching Codex JSONL\n- input: %s\n- poll: %s\n", params.InputPath, pollEvery)
-	for {
+	if once {
 		result, err := runtime.SyncCodexJSONL(params, time.Now())
 		if err != nil {
 			fmt.Fprintf(stderr, "attach-codex-jsonl: %v\n", err)
 			return 1
 		}
-		if result.Changed {
-			fmt.Fprintf(
-				stdout,
-				"Synced\n- agent: %s\n- session: %s\n- checkpoints: %d\n- daily reports: %d\n",
-				result.Import.AgentID,
-				result.Import.SessionID,
-				len(result.Import.Checkpoints),
-				len(result.Import.Reports),
-			)
-		} else {
-			fmt.Fprintln(stdout, "No changes")
-		}
-		if once {
-			return 0
-		}
-
-		timer := time.NewTimer(pollEvery)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			fmt.Fprintln(stdout, "Attach stopped")
-			return 0
-		case <-timer.C:
-		}
+		fmt.Fprintf(stdout, "Attaching Codex JSONL\n- input: %s\n- poll: %s\n", params.InputPath, pollEvery)
+		writeCodexAttachSummary(stdout, result)
+		return 0
 	}
+
+	if err := runCodexAttachLoop(ctx, runtime, params, pollEvery, stdout, stderr); err != nil {
+		fmt.Fprintf(stderr, "attach-codex-jsonl: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func parseCodexJSONLFlags(name string, args []string, stderr io.Writer, includePoll bool, includeOnce bool) (app.ImportCodexJSONLParams, string, time.Duration, bool, error) {
