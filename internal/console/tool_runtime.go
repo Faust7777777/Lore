@@ -49,17 +49,21 @@ func (r toolRuntime) DescribeTools(_ operatoragent.Context) []operatoragent.Tool
 		{Name: "doc_classify", Description: "Return the inferred document class for one vault path.", Arguments: `{"path":"relative/path.md"}`},
 		{Name: "context_pack", Description: "Assemble a read-only Lore context pack for a task or target note.", Arguments: `{"target_path":"optional/path.md","task":"what you need","limit":6}`},
 		{Name: "vault_write_low", Description: "Write a low-governance markdown note inside the vault. Runtime rejects managed core docs, plans, process-sink docs, hidden dirs, and non-markdown files.", Arguments: `{"path":"notes/diary.md","content":"...","overwrite":false}`},
-		{Name: "workspace_list", Description: "List files under the local workdir outside Lore vault/state.", Arguments: `{"path":"."}`},
-		{Name: "workspace_read", Description: "Read a local workspace file outside Lore vault/state.", Arguments: `{"path":"relative/path"}`},
-		{Name: "workspace_write", Description: "Write or overwrite a local workspace file outside Lore vault/state.", Arguments: `{"path":"relative/path","content":"..."}`},
-		{Name: "workspace_edit", Description: "Replace exact text inside a local workspace file outside Lore vault/state.", Arguments: `{"path":"relative/path","old":"exact old text","new":"replacement","replace_all":false}`},
 	}
-	if shellToolsEnabled() {
-		tools = append(tools, operatoragent.ToolDefinition{
-			Name:        "shell_exec",
-			Description: "Run one local shell command in the workdir. Unsafe profile only; use only for explicit local execution requests.",
-			Arguments:   `{"command":"dir","timeout_seconds":30}`,
-		})
+	if r.localWorkToolsEnabled() {
+		tools = append(tools,
+			operatoragent.ToolDefinition{Name: "workspace_list", Description: "List files under the local workdir outside Lore vault/state.", Arguments: `{"path":"."}`},
+			operatoragent.ToolDefinition{Name: "workspace_read", Description: "Read a local workspace file outside Lore vault/state.", Arguments: `{"path":"relative/path"}`},
+			operatoragent.ToolDefinition{Name: "workspace_write", Description: "Write or overwrite a local workspace file outside Lore vault/state.", Arguments: `{"path":"relative/path","content":"..."}`},
+			operatoragent.ToolDefinition{Name: "workspace_edit", Description: "Replace exact text inside a local workspace file outside Lore vault/state.", Arguments: `{"path":"relative/path","old":"exact old text","new":"replacement","replace_all":false}`},
+		)
+		if shellToolsEnabled() {
+			tools = append(tools, operatoragent.ToolDefinition{
+				Name:        "shell_exec",
+				Description: "Run one local shell command in the workdir. Unsafe profile only; use only for explicit local execution requests.",
+				Arguments:   `{"command":"dir","timeout_seconds":30}`,
+			})
+		}
 	}
 	return tools
 }
@@ -270,6 +274,12 @@ func (r toolRuntime) dayArg(arguments map[string]any) (time.Time, error) {
 }
 
 func (r toolRuntime) workspaceList(arguments map[string]any) (operatoragent.ToolResult, error) {
+	if err := r.requireLocalWorkTools("workspace_list"); err != nil {
+		return operatoragent.ToolResult{}, err
+	}
+	if err := r.requireExplicitLocalIntent("workspace_list"); err != nil {
+		return operatoragent.ToolResult{}, err
+	}
 	absPath, relPath, err := r.resolveWorkspacePath(stringArg(arguments, "path", "."))
 	if err != nil {
 		return operatoragent.ToolResult{}, err
@@ -298,6 +308,12 @@ func (r toolRuntime) workspaceList(arguments map[string]any) (operatoragent.Tool
 }
 
 func (r toolRuntime) workspaceRead(arguments map[string]any) (operatoragent.ToolResult, error) {
+	if err := r.requireLocalWorkTools("workspace_read"); err != nil {
+		return operatoragent.ToolResult{}, err
+	}
+	if err := r.requireExplicitLocalIntent("workspace_read"); err != nil {
+		return operatoragent.ToolResult{}, err
+	}
 	path, err := requiredStringArg(arguments, "path")
 	if err != nil {
 		return operatoragent.ToolResult{}, err
@@ -316,6 +332,12 @@ func (r toolRuntime) workspaceRead(arguments map[string]any) (operatoragent.Tool
 }
 
 func (r toolRuntime) workspaceWrite(arguments map[string]any) (operatoragent.ToolResult, error) {
+	if err := r.requireLocalWorkTools("workspace_write"); err != nil {
+		return operatoragent.ToolResult{}, err
+	}
+	if err := r.requireExplicitLocalIntent("workspace_write"); err != nil {
+		return operatoragent.ToolResult{}, err
+	}
 	path, err := requiredStringArg(arguments, "path")
 	if err != nil {
 		return operatoragent.ToolResult{}, err
@@ -338,6 +360,12 @@ func (r toolRuntime) workspaceWrite(arguments map[string]any) (operatoragent.Too
 }
 
 func (r toolRuntime) workspaceEdit(arguments map[string]any) (operatoragent.ToolResult, error) {
+	if err := r.requireLocalWorkTools("workspace_edit"); err != nil {
+		return operatoragent.ToolResult{}, err
+	}
+	if err := r.requireExplicitLocalIntent("workspace_edit"); err != nil {
+		return operatoragent.ToolResult{}, err
+	}
 	path, err := requiredStringArg(arguments, "path")
 	if err != nil {
 		return operatoragent.ToolResult{}, err
@@ -382,8 +410,14 @@ func (r toolRuntime) workspaceEdit(arguments map[string]any) (operatoragent.Tool
 }
 
 func (r toolRuntime) shellExec(arguments map[string]any) (operatoragent.ToolResult, error) {
+	if err := r.requireLocalWorkTools("shell_exec"); err != nil {
+		return operatoragent.ToolResult{}, err
+	}
 	if !shellToolsEnabled() {
 		return operatoragent.ToolResult{}, fmt.Errorf("shell_exec is disabled; set LORE_AGENT_ENABLE_SHELL=1 to enable the unsafe local shell profile")
+	}
+	if err := r.requireExplicitLocalIntent("shell_exec"); err != nil {
+		return operatoragent.ToolResult{}, err
 	}
 	command, err := requiredStringArg(arguments, "command")
 	if err != nil {
@@ -465,6 +499,24 @@ func (r toolRuntime) resolveWorkspacePath(rawPath string) (string, string, error
 		return "", "", err
 	}
 	return realPath, filepath.ToSlash(relPath), nil
+}
+
+func (r toolRuntime) requireExplicitLocalIntent(toolName string) error {
+	if hasExplicitLocalWorkIntent(r.session.LastInput) {
+		return nil
+	}
+	return fmt.Errorf("%s requires explicit local file/code/run intent in the current request", toolName)
+}
+
+func (r toolRuntime) requireLocalWorkTools(toolName string) error {
+	if r.localWorkToolsEnabled() {
+		return nil
+	}
+	return fmt.Errorf("%s is unavailable in the default Lore chat profile; restart Lore with --local-exec to expose local workspace tools", toolName)
+}
+
+func (r toolRuntime) localWorkToolsEnabled() bool {
+	return r.session != nil && r.session.EnableLocalWorkTools
 }
 
 func blockedPath(absPath string, blockedRoot string) bool {
@@ -600,4 +652,131 @@ func filterDraftsByStateLocal(drafts []model.Draft, state model.DraftState) []mo
 func shellToolsEnabled() bool {
 	value := strings.TrimSpace(os.Getenv("LORE_AGENT_ENABLE_SHELL"))
 	return value == "1" || strings.EqualFold(value, "true") || strings.EqualFold(value, "yes")
+}
+
+func hasExplicitLocalWorkIntent(input string) bool {
+	value := normalizeIntentInput(input)
+	if value == "" {
+		return false
+	}
+
+	for _, phrase := range []string{
+		"workspace",
+		"workdir",
+		"local file",
+		"local files",
+		"local repo",
+		"local repository",
+		"repository",
+		"repo",
+		"codebase",
+		"source file",
+		"project file",
+		"project directory",
+		"write code",
+		"edit code",
+		"modify code",
+		"change code",
+		"source code",
+		"implement",
+		"patch",
+		"refactor",
+		"debug",
+		"fix bug",
+		"fix the bug",
+		"run test",
+		"run tests",
+		"execute command",
+		"run command",
+		"shell command",
+		"terminal command",
+		"open file",
+		"read file",
+		"list files",
+		"create file",
+		"write file",
+		"edit file",
+		"update file",
+		"modify file",
+		"terminal",
+		"shell",
+		"powershell",
+		"bash",
+		"git",
+		"compile",
+		"build",
+		"代码",
+		"本地文件",
+		"本地代码",
+		"工作区",
+		"本地仓库",
+		"仓库",
+		"代码库",
+		"项目目录",
+		"工程目录",
+		"打开文件",
+		"读取文件",
+		"查看文件",
+		"列出文件",
+		"创建文件",
+		"写文件",
+		"改文件",
+		"编辑文件",
+		"修改文件",
+		"写代码",
+		"改代码",
+		"编辑代码",
+		"修改代码",
+		"修bug",
+		"修复bug",
+		"调试",
+		"跑测试",
+		"运行测试",
+		"执行命令",
+		"运行命令",
+		"终端",
+		"命令行",
+		"编译",
+		"构建",
+	} {
+		if strings.Contains(value, phrase) {
+			return true
+		}
+	}
+
+	for _, hint := range []string{
+		".go",
+		".py",
+		".ts",
+		".tsx",
+		".js",
+		".jsx",
+		".json",
+		".yaml",
+		".yml",
+		".toml",
+		".sh",
+		".ps1",
+		".sql",
+	} {
+		if strings.Contains(value, hint) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func normalizeIntentInput(value string) string {
+	replacer := strings.NewReplacer(
+		"\r\n", " ",
+		"\n", " ",
+		"\t", " ",
+		"，", ",",
+		"。", ".",
+		"：", ":",
+		"（", "(",
+		"）", ")",
+	)
+	return strings.ToLower(strings.TrimSpace(replacer.Replace(value)))
 }

@@ -34,12 +34,14 @@ type Runtime interface {
 }
 
 type Session struct {
-	Version        string
-	CurrentDraftID string
-	DefaultAgentID string
-	History        []operatoragent.ConversationTurn
-	Now            func() time.Time
-	Agent          operatoragent.Agent
+	Version              string
+	CurrentDraftID       string
+	DefaultAgentID       string
+	EnableLocalWorkTools bool
+	LastInput            string
+	History              []operatoragent.ConversationTurn
+	Now                  func() time.Time
+	Agent                operatoragent.Agent
 }
 
 func NewSession(version string) *Session {
@@ -59,6 +61,7 @@ func NewSessionWithAgent(version string, agent operatoragent.Agent) *Session {
 }
 
 func (s *Session) Handle(input string, runtime Runtime) (string, error) {
+	s.LastInput = strings.TrimSpace(input)
 	if loopAgent, ok := s.Agent.(operatoragent.LoopAgent); ok {
 		response, err := loopAgent.Respond(input, s.agentContext(), newToolRuntime(s, runtime))
 		if err != nil {
@@ -267,7 +270,8 @@ Examples:
 Notes:
   - Lore runs a bounded natural-language agent loop with internal tools
   - timed jobs still belong to runtime/scheduler, not this console
-  - shell/workspace tools are only for explicit local file/code/run requests
+  - local workspace tools only appear in local-exec mode
+  - shell still requires both local-exec mode and LORE_AGENT_ENABLE_SHELL=1
   - this console requires a configured model-backed operator agent
 `) + "\n"
 }

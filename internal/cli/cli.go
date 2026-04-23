@@ -174,6 +174,10 @@ Commands:
   attach-codex-jsonl   Poll a Codex session JSONL and keep syncing it
   version              Print the CLI version
   help                 Show this help text
+
+Notes:
+  - add --local-exec to console/tui to expose local workspace tools
+  - shell_exec additionally requires LORE_AGENT_ENABLE_SHELL=1
 `
 }
 
@@ -215,7 +219,7 @@ func runImportCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int 
 }
 
 func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, version string) int {
-	workDir, utterance, err := parseConsoleFlags(args, stderr)
+	workDir, utterance, localExec, err := parseConsoleFlags(args, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -227,6 +231,7 @@ func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 		return 1
 	}
 	session := console.NewSession(version)
+	session.EnableLocalWorkTools = localExec
 
 	if strings.TrimSpace(utterance) != "" {
 		output, err := session.Handle(utterance, runtime)
@@ -272,7 +277,7 @@ func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 }
 
 func runTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, version string) int {
-	workDir, utterance, agentID, day, err := parseTUIFlags(args, stderr)
+	workDir, utterance, localExec, agentID, day, err := parseTUIFlags(args, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -286,6 +291,7 @@ func runTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 
 	session := console.NewSession(version)
 	session.DefaultAgentID = agentID
+	session.EnableLocalWorkTools = localExec
 
 	render := func(lastOutput string) error {
 		managed, err := runtime.ManagedStatus()
@@ -681,50 +687,52 @@ func parseAttachCodexJSONLFlags(args []string, stderr io.Writer) (app.ImportCode
 	return parseCodexJSONLFlags("attach-codex-jsonl", args, stderr, true, true)
 }
 
-func parseConsoleFlags(args []string, stderr io.Writer) (string, string, error) {
+func parseConsoleFlags(args []string, stderr io.Writer) (string, string, bool, error) {
 	flags := flag.NewFlagSet("console", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
 	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
 	once := flags.String("once", "", "single utterance to execute")
+	localExec := flags.Bool("local-exec", false, "expose local workspace tools in the main agent loop")
 	if err := flags.Parse(args); err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 	if strings.TrimSpace(*workDir) == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
-			return "", "", err
+			return "", "", false, err
 		}
 		*workDir = cwd
 	}
-	return filepath.Clean(*workDir), strings.TrimSpace(*once), nil
+	return filepath.Clean(*workDir), strings.TrimSpace(*once), *localExec, nil
 }
 
-func parseTUIFlags(args []string, stderr io.Writer) (string, string, string, time.Time, error) {
+func parseTUIFlags(args []string, stderr io.Writer) (string, string, bool, string, time.Time, error) {
 	flags := flag.NewFlagSet("tui", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
 	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
 	once := flags.String("once", "", "single utterance to execute")
+	localExec := flags.Bool("local-exec", false, "expose local workspace tools in the main agent loop")
 	agentID := flags.String("agent", "codex", "default agent for process-sink panel")
 	dayRaw := flags.String("day", "", "day for process-sink panel (YYYY-MM-DD)")
 	if err := flags.Parse(args); err != nil {
-		return "", "", "", time.Time{}, err
+		return "", "", false, "", time.Time{}, err
 	}
 	if strings.TrimSpace(*workDir) == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
-			return "", "", "", time.Time{}, err
+			return "", "", false, "", time.Time{}, err
 		}
 		*workDir = cwd
 	}
 
 	day, err := resolveWorkbenchDay(*dayRaw, time.Now())
 	if err != nil {
-		return "", "", "", time.Time{}, fmt.Errorf("tui: invalid --day: %w", err)
+		return "", "", false, "", time.Time{}, fmt.Errorf("tui: invalid --day: %w", err)
 	}
 
-	return filepath.Clean(*workDir), strings.TrimSpace(*once), strings.TrimSpace(*agentID), day, nil
+	return filepath.Clean(*workDir), strings.TrimSpace(*once), *localExec, strings.TrimSpace(*agentID), day, nil
 }
 
 func parseDaemonFlags(args []string, stderr io.Writer) (string, time.Duration, time.Duration, bool, *app.ImportCodexJSONLParams, error) {

@@ -20,7 +20,10 @@ func TestToolRuntimeWorkspaceWritePreservesWhitespace(t *testing.T) {
 			VaultRoot: filepath.Join(workDir, "vault"),
 		},
 	}
-	tools := newToolRuntime(NewSessionWithAgent("test", &fakeAgent{}), runtime)
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.EnableLocalWorkTools = true
+	session.LastInput = "edit code in the local repository and write a file"
+	tools := newToolRuntime(session, runtime)
 
 	content := "  leading\ntrailing  \n"
 	_, err := tools.CallTool("workspace_write", map[string]any{
@@ -73,7 +76,10 @@ func TestToolRuntimeWorkspaceWriteBlocksVaultAndState(t *testing.T) {
 			VaultRoot: filepath.Join(workDir, "vault"),
 		},
 	}
-	tools := newToolRuntime(NewSessionWithAgent("test", &fakeAgent{}), runtime)
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.EnableLocalWorkTools = true
+	session.LastInput = "modify code in the local repo"
+	tools := newToolRuntime(session, runtime)
 
 	for _, path := range []string{"vault/note.md", "state/store.json"} {
 		_, err := tools.CallTool("workspace_write", map[string]any{
@@ -97,7 +103,10 @@ func TestToolRuntimeWorkspaceWriteAllowsNewNestedPath(t *testing.T) {
 			VaultRoot: filepath.Join(workDir, "vault"),
 		},
 	}
-	tools := newToolRuntime(NewSessionWithAgent("test", &fakeAgent{}), runtime)
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.EnableLocalWorkTools = true
+	session.LastInput = "create file in the workspace for the project"
+	tools := newToolRuntime(session, runtime)
 
 	_, err := tools.CallTool("workspace_write", map[string]any{
 		"path":    "src/new/file.txt",
@@ -131,7 +140,10 @@ func TestToolRuntimeWorkspaceWriteBlocksSymlinkToVault(t *testing.T) {
 			VaultRoot: vaultRoot,
 		},
 	}
-	tools := newToolRuntime(NewSessionWithAgent("test", &fakeAgent{}), runtime)
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.EnableLocalWorkTools = true
+	session.LastInput = "edit code in the workspace"
+	tools := newToolRuntime(session, runtime)
 
 	_, err := tools.CallTool("workspace_write", map[string]any{
 		"path":    "vault-link/note.md",
@@ -155,6 +167,8 @@ func TestToolRuntimeShellExecReturnsOutputOnFailure(t *testing.T) {
 		},
 	}
 	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.EnableLocalWorkTools = true
+	session.LastInput = "run tests in the local repo and show the output"
 	session.Now = func() time.Time { return time.Date(2026, 4, 22, 9, 0, 0, 0, time.Local) }
 	tools := newToolRuntime(session, runtime)
 
@@ -183,7 +197,9 @@ func TestToolRuntimeShellExecDisabledByDefault(t *testing.T) {
 			VaultRoot: filepath.Join(workDir, "vault"),
 		},
 	}
-	tools := newToolRuntime(NewSessionWithAgent("test", &fakeAgent{}), runtime)
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.EnableLocalWorkTools = true
+	tools := newToolRuntime(session, runtime)
 
 	definitions := tools.DescribeTools(operatoragent.Context{})
 	for _, definition := range definitions {
@@ -200,5 +216,94 @@ func TestToolRuntimeShellExecDisabledByDefault(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "disabled") {
 		t.Fatalf("shell_exec error = %q, want disabled", err)
+	}
+}
+
+func TestToolRuntimeWorkspaceWriteRequiresExplicitIntent(t *testing.T) {
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+	}
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.EnableLocalWorkTools = true
+	tools := newToolRuntime(session, runtime)
+
+	_, err := tools.CallTool("workspace_write", map[string]any{
+		"path":    "notes.txt",
+		"content": "hello",
+	})
+	if err == nil {
+		t.Fatal("workspace_write error = nil, want explicit intent failure")
+	}
+	if !strings.Contains(err.Error(), "explicit local file/code/run intent") {
+		t.Fatalf("workspace_write error = %q, want explicit intent failure", err)
+	}
+}
+
+func TestToolRuntimeShellExecRequiresExplicitIntent(t *testing.T) {
+	t.Setenv("LORE_AGENT_ENABLE_SHELL", "1")
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+	}
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.EnableLocalWorkTools = true
+	tools := newToolRuntime(session, runtime)
+
+	_, err := tools.CallTool("shell_exec", map[string]any{
+		"command": "echo lore",
+	})
+	if err == nil {
+		t.Fatal("shell_exec error = nil, want explicit intent failure")
+	}
+	if !strings.Contains(err.Error(), "explicit local file/code/run intent") {
+		t.Fatalf("shell_exec error = %q, want explicit intent failure", err)
+	}
+}
+
+func TestToolRuntimeDescribeToolsHidesLocalExecByDefault(t *testing.T) {
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+	}
+	tools := newToolRuntime(NewSessionWithAgent("test", &fakeAgent{}), runtime)
+
+	definitions := tools.DescribeTools(operatoragent.Context{})
+	for _, definition := range definitions {
+		switch definition.Name {
+		case "workspace_list", "workspace_read", "workspace_write", "workspace_edit", "shell_exec":
+			t.Fatalf("tool %q was exposed without local-exec mode", definition.Name)
+		}
+	}
+}
+
+func TestToolRuntimeWorkspaceWriteRequiresLocalExecMode(t *testing.T) {
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+	}
+	tools := newToolRuntime(NewSessionWithAgent("test", &fakeAgent{}), runtime)
+
+	_, err := tools.CallTool("workspace_write", map[string]any{
+		"path":    "notes.txt",
+		"content": "hello",
+	})
+	if err == nil {
+		t.Fatal("workspace_write error = nil, want local-exec failure")
+	}
+	if !strings.Contains(err.Error(), "--local-exec") {
+		t.Fatalf("workspace_write error = %q, want local-exec guidance", err)
 	}
 }
