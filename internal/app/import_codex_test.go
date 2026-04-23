@@ -474,6 +474,118 @@ func TestRuntimeSyncCodexJSONLDefersIncompleteTailUntilRecordCompletes(t *testin
 	}
 }
 
+func TestRuntimeSyncCodexJSONLFallsBackWhenReplayBoundaryChanges(t *testing.T) {
+	loc := useFixedLocalZone(t)
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "boundary-rewrite.jsonl")
+
+	metaLine := `{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-boundary","agent_nickname":"Codex"}}`
+	makeUserLine := func(timestamp string, message string) string {
+		return fmt.Sprintf(
+			`{"timestamp":"%s","type":"event_msg","payload":{"type":"user_message","message":"%s"}}`,
+			timestamp,
+			message,
+		)
+	}
+	makeAgentLine := func(timestamp string, message string) string {
+		return fmt.Sprintf(
+			`{"timestamp":"%s","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"%s"}}`,
+			timestamp,
+			message,
+		)
+	}
+
+	filler := make([]string, 0, 9)
+	for i := 0; i < 8; i++ {
+		filler = append(filler, makeUserLine(
+			fmt.Sprintf("2026-04-22T09:%02d:00+08:00", i+1),
+			fmt.Sprintf("filler-%d %s", i, strings.Repeat("x", 700)),
+		))
+	}
+	boundaryOriginal := "boundary-old " + strings.Repeat("b", 700)
+	boundaryRewritten := "boundary-rewritten " + strings.Repeat("c", 700)
+
+	initialLines := []string{metaLine}
+	initialLines = append(initialLines, filler...)
+	initialLines = append(initialLines,
+		makeUserLine("2026-04-22T09:29:00+08:00", boundaryOriginal),
+		makeAgentLine("2026-04-22T09:35:00+08:00", "later window"),
+	)
+	writeCodexJSONL(t, transcriptPath, initialLines...)
+
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	first, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-boundary",
+	}, time.Date(2026, 4, 22, 9, 40, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("first SyncCodexJSONL() error = %v", err)
+	}
+	if len(first.Import.Checkpoints) != 2 {
+		t.Fatalf("len(first.Import.Checkpoints) = %d, want 2", len(first.Import.Checkpoints))
+	}
+
+	absolutePath, err := filepath.Abs(transcriptPath)
+	if err != nil {
+		t.Fatalf("Abs(transcriptPath) error = %v", err)
+	}
+	cursorRaw, err := runtime.Store.Cursors().GetCursor(codexJSONLCursorKey(absolutePath))
+	if err != nil {
+		t.Fatalf("GetCursor() error = %v", err)
+	}
+	cursor, err := codexjsonl.DecodeCursor(cursorRaw)
+	if err != nil {
+		t.Fatalf("DecodeCursor() error = %v", err)
+	}
+	if cursor.ReplayOffset <= 4096 {
+		t.Fatalf("cursor.ReplayOffset = %d, want > 4096 so boundary rewrite escapes head hash checks", cursor.ReplayOffset)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	rewrittenLines := []string{metaLine}
+	rewrittenLines = append(rewrittenLines, filler...)
+	rewrittenLines = append(rewrittenLines,
+		makeUserLine("2026-04-22T09:29:00+08:00", boundaryRewritten),
+		makeAgentLine("2026-04-22T09:35:00+08:00", "later window"),
+		makeAgentLine("2026-04-22T09:40:00+08:00", "appended after rewrite"),
+	)
+	writeCodexJSONL(t, transcriptPath, rewrittenLines...)
+
+	second, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-boundary",
+	}, time.Date(2026, 4, 22, 9, 45, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("second SyncCodexJSONL() error = %v", err)
+	}
+	if len(second.Import.Checkpoints) != 2 {
+		t.Fatalf("len(second.Import.Checkpoints) = %d, want 2 after full fallback replay", len(second.Import.Checkpoints))
+	}
+
+	firstWindowKey := model.SessionWindow{
+		AgentID:     "codex",
+		SessionID:   "session-boundary",
+		WindowStart: time.Date(2026, 4, 22, 9, 0, 0, 0, loc),
+		WindowEnd:   time.Date(2026, 4, 22, 9, 30, 0, 0, loc),
+	}.Key()
+	firstWindow, err := runtime.Store.ProcessSink().GetCheckpointByWindowKey(firstWindowKey)
+	if err != nil {
+		t.Fatalf("GetCheckpointByWindowKey() error = %v", err)
+	}
+	if !strings.Contains(firstWindow.RawTranscript, boundaryRewritten) {
+		t.Fatalf("firstWindow.RawTranscript = %q, want rewritten boundary content", firstWindow.RawTranscript)
+	}
+	if strings.Contains(firstWindow.RawTranscript, boundaryOriginal) {
+		t.Fatalf("firstWindow.RawTranscript = %q, want old boundary content removed", firstWindow.RawTranscript)
+	}
+}
+
 func TestRuntimeSyncCodexJSONLGeneratesPlaceholderForClosedIdleWindow(t *testing.T) {
 	loc := useFixedLocalZone(t)
 	workDir := t.TempDir()

@@ -11,19 +11,23 @@ import (
 )
 
 const sourceHeadLimit int64 = 4096
+const replayAnchorLimit int64 = 4096
 
 type Cursor struct {
-	Version         int       `json:"v,omitempty"`
-	Fingerprint     string    `json:"fingerprint,omitempty"`
-	Offset          int64     `json:"offset,omitempty"`
-	ReplayOffset    int64     `json:"replay_offset,omitempty"`
-	LastWindowStart time.Time `json:"last_window_start,omitempty"`
-	LastEventAt     time.Time `json:"last_event_at,omitempty"`
-	FileSize        int64     `json:"file_size,omitempty"`
-	FileModTimeNS   int64     `json:"file_mtime_ns,omitempty"`
-	FileHeadSHA256  string    `json:"file_head_sha256,omitempty"`
-	AgentID         string    `json:"agent_id,omitempty"`
-	SessionID       string    `json:"session_id,omitempty"`
+	Version            int       `json:"v,omitempty"`
+	Fingerprint        string    `json:"fingerprint,omitempty"`
+	Offset             int64     `json:"offset,omitempty"`
+	ReplayOffset       int64     `json:"replay_offset,omitempty"`
+	ReplayAnchorStart  int64     `json:"replay_anchor_start,omitempty"`
+	ReplayAnchorEnd    int64     `json:"replay_anchor_end,omitempty"`
+	ReplayAnchorSHA256 string    `json:"replay_anchor_sha256,omitempty"`
+	LastWindowStart    time.Time `json:"last_window_start,omitempty"`
+	LastEventAt        time.Time `json:"last_event_at,omitempty"`
+	FileSize           int64     `json:"file_size,omitempty"`
+	FileModTimeNS      int64     `json:"file_mtime_ns,omitempty"`
+	FileHeadSHA256     string    `json:"file_head_sha256,omitempty"`
+	AgentID            string    `json:"agent_id,omitempty"`
+	SessionID          string    `json:"session_id,omitempty"`
 }
 
 type SourceState struct {
@@ -109,6 +113,41 @@ func (c Cursor) MatchesSource(source SourceState) bool {
 	return true
 }
 
+func (c Cursor) MatchesReplayAnchor(source SourceState) bool {
+	if c.ReplayOffset <= 0 {
+		return true
+	}
+	if c.ReplayAnchorSHA256 == "" || c.ReplayAnchorEnd != c.ReplayOffset {
+		return false
+	}
+	if c.ReplayAnchorStart < 0 || c.ReplayAnchorStart > c.ReplayAnchorEnd {
+		return false
+	}
+	if c.ReplayAnchorEnd > source.Size {
+		return false
+	}
+	sha, err := spanSHA256(source.Path, c.ReplayAnchorStart, c.ReplayAnchorEnd)
+	if err != nil {
+		return false
+	}
+	return sha == c.ReplayAnchorSHA256
+}
+
+func BuildReplayAnchor(path string, replayOffset int64) (int64, int64, string, error) {
+	if replayOffset <= 0 {
+		return 0, 0, "", nil
+	}
+	start := replayOffset - replayAnchorLimit
+	if start < 0 {
+		start = 0
+	}
+	sha, err := spanSHA256(path, start, replayOffset)
+	if err != nil {
+		return 0, 0, "", err
+	}
+	return start, replayOffset, sha, nil
+}
+
 func headSHA256(path string, limit int64) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -127,6 +166,38 @@ func headSHA256(path string, limit int64) (string, error) {
 	}
 	if err != nil {
 		return "", err
+	}
+	return stringHex(hasher.Sum(nil)), nil
+}
+
+func spanSHA256(path string, start int64, end int64) (string, error) {
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return "", err
+	}
+
+	hasher := sha256.New()
+	length := end - start
+	if length > 0 {
+		_, err = io.CopyN(hasher, file, length)
+		if err == io.EOF {
+			err = nil
+		}
+		if err != nil {
+			return "", err
+		}
 	}
 	return stringHex(hasher.Sum(nil)), nil
 }

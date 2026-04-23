@@ -36,8 +36,8 @@ Updated: 2026-04-23
   - session JSONL parsing from local Codex transcript files
   - 30 minute windowing with empty-slot placeholder generation
   - manual import path from CLI into checkpoint and daily report writes
-  - cursor-backed file fingerprint sync to skip unchanged transcripts
-  - local attach mode via polling wrapper around sync
+  - cursor-backed tail sync with replay-offset resume and boundary-anchor validation
+  - local attach mode via polling wrapper around incremental sync
 - LLM/operator path:
   - OpenAI-compatible provider client
   - model discovery and operator-model selection
@@ -74,7 +74,7 @@ Commands verified locally with the repo-managed Go toolchain:
 
 ## Current Gaps
 
-- No live app-server / offset-tail Codex adapter yet; current P0-B supports manual import plus file-fingerprint sync/attach over local JSONL files
+ - No live app-server Codex adapter yet; current P0-B supports manual import plus cursor-backed JSONL tail sync/attach over local files
 - No full-screen TUI framework yet; `tui` is a text workbench, not a Bubble Tea-style interface
 - No SQLite state store yet; JSON store is the minimal persisted recovery layer
 - Attachment refs are surfaced in read APIs, but binary/media extraction is not implemented yet

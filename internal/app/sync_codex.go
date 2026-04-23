@@ -105,7 +105,10 @@ func (r *Runtime) SyncCodexJSONL(params ImportCodexJSONLParams, now time.Time) (
 		return SyncCodexJSONLResult{}, err
 	}
 
-	updatedCursor := codexJSONLBuildCursor(baseCursor, transcript, source, windows, nextOffset)
+	updatedCursor, err := codexJSONLBuildCursor(baseCursor, transcript, source, windows, nextOffset)
+	if err != nil {
+		return SyncCodexJSONLResult{}, err
+	}
 	encodedCursor, err := codexjsonl.EncodeCursor(updatedCursor)
 	if err != nil {
 		return SyncCodexJSONLResult{}, err
@@ -154,9 +157,15 @@ func (r *Runtime) syncCodexJSONLPlaceholders(
 		return SyncCodexJSONLResult{}, err
 	}
 
-	updatedCursor := codexJSONLBuildCursor(cursor, transcript, source, windows, cursor.Offset)
+	updatedCursor, err := codexJSONLBuildCursor(cursor, transcript, source, windows, cursor.Offset)
+	if err != nil {
+		return SyncCodexJSONLResult{}, err
+	}
 	updatedCursor.Offset = cursor.Offset
 	updatedCursor.ReplayOffset = cursor.ReplayOffset
+	updatedCursor.ReplayAnchorStart = cursor.ReplayAnchorStart
+	updatedCursor.ReplayAnchorEnd = cursor.ReplayAnchorEnd
+	updatedCursor.ReplayAnchorSHA256 = cursor.ReplayAnchorSHA256
 	if updatedCursor.LastEventAt.IsZero() {
 		updatedCursor.LastEventAt = cursor.LastEventAt
 	}
@@ -207,6 +216,9 @@ func codexJSONLCanResume(cursor codexjsonl.Cursor, source codexjsonl.SourceState
 		return false
 	}
 	if !cursor.MatchesSource(source) {
+		return false
+	}
+	if !cursor.MatchesReplayAnchor(source) {
 		return false
 	}
 	if source.Size <= cursor.FileSize {
@@ -285,7 +297,7 @@ func codexJSONLBuildCursor(
 	source codexjsonl.SourceState,
 	windows []codexjsonl.WindowSummary,
 	nextOffset int64,
-) codexjsonl.Cursor {
+) (codexjsonl.Cursor, error) {
 	cursor := base
 	cursor.Version = 1
 	cursor.Fingerprint = source.Fingerprint
@@ -301,10 +313,17 @@ func codexJSONLBuildCursor(
 	} else {
 		cursor.ReplayOffset = clampCodexJSONLOffset(cursor.ReplayOffset, nextOffset)
 	}
+	anchorStart, anchorEnd, anchorSHA, err := codexjsonl.BuildReplayAnchor(source.Path, cursor.ReplayOffset)
+	if err != nil {
+		return codexjsonl.Cursor{}, err
+	}
+	cursor.ReplayAnchorStart = anchorStart
+	cursor.ReplayAnchorEnd = anchorEnd
+	cursor.ReplayAnchorSHA256 = anchorSHA
 	if len(transcript.Events) > 0 {
 		cursor.LastEventAt = transcript.Events[len(transcript.Events)-1].Timestamp
 	}
-	return cursor
+	return cursor, nil
 }
 
 func clampCodexJSONLOffset(offset int64, limit int64) int64 {
