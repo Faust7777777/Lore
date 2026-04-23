@@ -239,7 +239,7 @@ func runConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 	}
 
 	fmt.Fprintln(stdout, "Obsidian Harness Console")
-	fmt.Fprintln(stdout, "The operator agent picks one explicit action per prompt. Type `help` for examples. Type `exit` to quit.")
+	fmt.Fprintln(stdout, "The operator agent picks one explicit action per prompt. Type `help` for examples. Type `exit` to quit. A configured model-backed operator agent is required.")
 	scanner := bufio.NewScanner(stdin)
 	for {
 		fmt.Fprint(stdout, "> ")
@@ -607,7 +607,7 @@ func parseDraftFlags(name string, args []string, stderr io.Writer, requireID boo
 
 func isConsoleExit(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "exit", "quit", "q", "退出":
+	case "exit", "quit", "q":
 		return true
 	default:
 		return false

@@ -20,19 +20,28 @@ func (f *fakeCompletionClient) ChatCompletion(_ context.Context, req openai.Chat
 	return f.response, f.err
 }
 
+func clearOperatorEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"OBSIDIAN_HARNESS_LLM_BASE_URL",
+		"OBSIDIAN_HARNESS_LLM_API_KEY",
+		"OBSIDIAN_HARNESS_LLM_MODEL",
+		"OBSIDIAN_HARNESS_OPERATOR_BASE_URL",
+		"OBSIDIAN_HARNESS_OPERATOR_API_KEY",
+		"OBSIDIAN_HARNESS_OPERATOR_MODEL",
+		"LORE_LLM_BASE_URL",
+		"LORE_LLM_API_KEY",
+		"LORE_LLM_MODEL",
+		"LORE_OPERATOR_BASE_URL",
+		"LORE_OPERATOR_API_KEY",
+		"LORE_OPERATOR_MODEL",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
 func TestLoadEnvConfigDisabledWhenUnset(t *testing.T) {
-	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", "")
-	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "")
-	t.Setenv("OBSIDIAN_HARNESS_LLM_MODEL", "")
-	t.Setenv("OBSIDIAN_HARNESS_OPERATOR_BASE_URL", "")
-	t.Setenv("OBSIDIAN_HARNESS_OPERATOR_API_KEY", "")
-	t.Setenv("OBSIDIAN_HARNESS_OPERATOR_MODEL", "")
-	t.Setenv("LORE_LLM_BASE_URL", "")
-	t.Setenv("LORE_LLM_API_KEY", "")
-	t.Setenv("LORE_LLM_MODEL", "")
-	t.Setenv("LORE_OPERATOR_BASE_URL", "")
-	t.Setenv("LORE_OPERATOR_API_KEY", "")
-	t.Setenv("LORE_OPERATOR_MODEL", "")
+	clearOperatorEnv(t)
 
 	cfg, enabled, err := LoadEnvConfig()
 	if err != nil {
@@ -44,6 +53,7 @@ func TestLoadEnvConfigDisabledWhenUnset(t *testing.T) {
 }
 
 func TestLoadEnvConfigAllowsDiscoveryWithoutModel(t *testing.T) {
+	clearOperatorEnv(t)
 	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", "https://example.test/v1")
 	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "secret")
 	t.Setenv("OBSIDIAN_HARNESS_LLM_MODEL", "")
@@ -61,6 +71,7 @@ func TestLoadEnvConfigAllowsDiscoveryWithoutModel(t *testing.T) {
 }
 
 func TestLoadEnvConfigRequiresBaseAndKeyTogether(t *testing.T) {
+	clearOperatorEnv(t)
 	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", "https://example.test/v1")
 	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "")
 	t.Setenv("OBSIDIAN_HARNESS_LLM_MODEL", "")
@@ -71,6 +82,18 @@ func TestLoadEnvConfigRequiresBaseAndKeyTogether(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "must be set together") {
 		t.Fatalf("error = %q, want must be set together", err)
+	}
+}
+
+func TestNewDefaultReturnsUnavailableAgentWhenConfigMissing(t *testing.T) {
+	clearOperatorEnv(t)
+
+	_, err := NewDefault().Decide("show status", Context{})
+	if err == nil {
+		t.Fatal("Decide() error = nil, want unavailable agent error")
+	}
+	if !strings.Contains(err.Error(), "model-backed operator agent is required") {
+		t.Fatalf("error = %q, want unavailable agent guidance", err)
 	}
 }
 
@@ -108,7 +131,7 @@ func TestModelAgentDecideRejectsBackgroundTaskRequests(t *testing.T) {
 	client := &fakeCompletionClient{}
 	agent := NewModelAgent(client)
 
-	_, err := agent.Decide("每30分钟同步一次", Context{})
+	_, err := agent.Decide("sync codex session every 30 minutes", Context{})
 	if err == nil {
 		t.Fatal("Decide() error = nil, want background task rejection")
 	}

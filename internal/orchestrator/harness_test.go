@@ -66,8 +66,58 @@ func TestBootstrapAndDraftLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(progress) error = %v", err)
 	}
-	if !strings.Contains(string(progressContent), "Auto Progress Sync") {
-		t.Fatalf("progress index missing auto sync block: %s", string(progressContent))
+	if !strings.Contains(string(progressContent), "| 0-排期/04-执行/week.md | 周执行 | 已同步 | 2026-04-22 10:00 |") {
+		t.Fatalf("progress index missing structured progress row: %s", string(progressContent))
+	}
+}
+
+func TestApplyDraftUpsertsProgressRowInsteadOfAppendingDuplicateBlock(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+
+	relPath := filepath.Join("0-排期", "04-执行", "week.md")
+	firstDraft, err := h.ObserveDocumentChange(relPath, []byte("first pass"), time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ObserveDocumentChange(first) error = %v", err)
+	}
+	if _, err := h.ApproveDraft(firstDraft.ID, time.Date(2026, 4, 22, 10, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("ApproveDraft(first) error = %v", err)
+	}
+	if _, err := h.ApplyDraft(firstDraft.ID, time.Date(2026, 4, 22, 10, 6, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("ApplyDraft(first) error = %v", err)
+	}
+
+	secondDraft, err := h.ObserveDocumentChange(relPath, []byte("second pass"), time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ObserveDocumentChange(second) error = %v", err)
+	}
+	if _, err := h.ApproveDraft(secondDraft.ID, time.Date(2026, 4, 22, 12, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("ApproveDraft(second) error = %v", err)
+	}
+	if _, err := h.ApplyDraft(secondDraft.ID, time.Date(2026, 4, 22, 12, 6, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("ApplyDraft(second) error = %v", err)
+	}
+
+	progressAbs := filepath.Join(cfg.Paths.VaultRoot, cfg.Vault.ManagedCore.ProgressIndex)
+	progressContent, err := os.ReadFile(progressAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(progress) error = %v", err)
+	}
+	got := string(progressContent)
+	if strings.Count(got, "0-排期/04-执行/week.md") != 1 {
+		t.Fatalf("expected one upserted progress row, got %s", got)
+	}
+	if !strings.Contains(got, "| 0-排期/04-执行/week.md | 周执行 | 已同步 | 2026-04-22 12:00 |") {
+		t.Fatalf("progress row not updated to latest timestamp: %s", got)
 	}
 }
 

@@ -22,6 +22,8 @@ import (
 var (
 	ErrUnsupportedDocument = errors.New("orchestrator: unsupported document class")
 	ErrDraftNotReady       = errors.New("orchestrator: draft is not ready for requested operation")
+	ErrUnsupportedDraft    = errors.New("orchestrator: unsupported draft kind for apply")
+	ErrInvalidDraftPatch   = errors.New("orchestrator: invalid draft patch payload")
 )
 
 type Harness struct {
@@ -99,7 +101,8 @@ func (h *Harness) StatusSnapshot() model.HealthSnapshot {
 }
 
 func (h *Harness) ObserveDocumentChange(relPath string, content []byte, at time.Time) (model.Draft, error) {
-	classification := h.classifier.Classify(relPath)
+	normalizedPath := cleanRelPath(relPath)
+	classification := h.classifier.Classify(normalizedPath)
 	if !classification.IsPlan() {
 		return model.Draft{}, ErrUnsupportedDocument
 	}
@@ -120,10 +123,10 @@ func (h *Harness) ObserveDocumentChange(relPath string, content []byte, at time.
 			Class:       model.DocClassProgressIndex,
 			BaseVersion: baseVersion,
 		},
-		Title:           fmt.Sprintf("Progress sync for %s", filepath.Base(relPath)),
-		Summary:         fmt.Sprintf("Backfill progress after managed document change in %s", relPath),
-		ProposedContent: renderProgressPatch(relPath, content, at),
-		EvidenceRefs:    []string{relPath},
+		Title:           fmt.Sprintf("Progress sync for %s", filepath.Base(normalizedPath)),
+		Summary:         fmt.Sprintf("Update progress index row for %s (%s)", normalizedPath, summarizeContent(content)),
+		ProposedContent: renderProgressPatch(normalizedPath, classification.Class, at),
+		EvidenceRefs:    []string{normalizedPath},
 		CreatedAt:       at,
 		UpdatedAt:       at,
 	}
@@ -148,7 +151,7 @@ func (h *Harness) ObserveDocumentChange(relPath string, content []byte, at time.
 		OccurredAt: at,
 		Metadata: map[string]string{
 			"draft_id": draft.ID,
-			"source":   relPath,
+			"source":   normalizedPath,
 		},
 	})
 	return draft, nil
@@ -226,7 +229,10 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 		return model.Draft{}, store.ErrConflict
 	}
 
-	next := appendPatch(current, draft.ProposedContent)
+	next, err := applyDraftPatch(current, draft)
+	if err != nil {
+		return model.Draft{}, err
+	}
 	if _, err := vault.WriteFileAtomic(targetAbs, next, h.cfg.Vault.TempSuffix); err != nil {
 		return model.Draft{}, err
 	}
@@ -343,27 +349,170 @@ func (w fileWriter) Write(path string, content []byte) error {
 	return err
 }
 
-func appendPatch(current []byte, patch string) []byte {
-	if len(current) == 0 {
-		return []byte(strings.TrimSpace(patch) + "\n")
+func applyDraftPatch(current []byte, draft model.Draft) ([]byte, error) {
+	switch draft.Kind {
+	case model.DraftKindProgressSync:
+		return upsertProgressIndexRow(current, draft.ProposedContent)
+	default:
+		return nil, ErrUnsupportedDraft
 	}
-
-	trimmed := strings.TrimRight(string(current), "\n")
-	return []byte(trimmed + "\n\n" + strings.TrimSpace(patch) + "\n")
 }
 
-func renderProgressPatch(relPath string, content []byte, at time.Time) string {
-	preview := strings.TrimSpace(string(content))
-	if len(preview) > 120 {
-		preview = preview[:120] + "..."
-	}
+func renderProgressPatch(relPath string, docClass model.DocClass, at time.Time) string {
 	return fmt.Sprintf(
-		"## Auto Progress Sync %s\n\n- Source: `%s`\n- Observed At: `%s`\n- Preview: %s\n",
-		at.Format(time.RFC3339),
+		"| %s | %s | %s | %s |",
 		relPath,
+		progressDocTypeLabel(docClass),
+		"已同步",
 		at.Format("2006-01-02 15:04"),
-		preview,
 	)
+}
+
+func summarizeContent(content []byte) string {
+	preview := strings.TrimSpace(string(content))
+	if preview == "" {
+		return "no preview"
+	}
+	if len(preview) > 80 {
+		return preview[:80] + "..."
+	}
+	return preview
+}
+
+func progressDocTypeLabel(docClass model.DocClass) string {
+	switch docClass {
+	case model.DocClassPlanWeek:
+		return "周执行"
+	case model.DocClassPlanMaster:
+		return "计划总表"
+	case model.DocClassSystemDoc:
+		return "系统文档"
+	case model.DocClassPersona:
+		return "人物画像"
+	default:
+		return string(docClass)
+	}
+}
+
+func upsertProgressIndexRow(current []byte, row string) ([]byte, error) {
+	row = strings.TrimSpace(row)
+	cells, ok := parseMarkdownRow(row)
+	if !ok || len(cells) < 4 {
+		return nil, ErrInvalidDraftPatch
+	}
+
+	if len(current) == 0 {
+		return []byte(progressIndexTableBlock(row) + "\n"), nil
+	}
+
+	text := strings.ReplaceAll(string(current), "\r\n", "\n")
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	headerIndex, separatorIndex, endIndex := findProgressTable(lines)
+	if headerIndex < 0 {
+		trimmed := strings.TrimSpace(text)
+		if trimmed == "" {
+			return []byte(progressIndexTableBlock(row) + "\n"), nil
+		}
+		return []byte(strings.TrimRight(text, "\n") + "\n\n## 自动同步记录\n\n" + progressIndexTableBlock(row) + "\n"), nil
+	}
+
+	replaced := false
+	for i := separatorIndex + 1; i < endIndex; i++ {
+		existingCells, ok := parseMarkdownRow(lines[i])
+		if !ok || len(existingCells) == 0 {
+			continue
+		}
+		if existingCells[0] == cells[0] {
+			lines[i] = row
+			replaced = true
+			break
+		}
+	}
+
+	if !replaced {
+		lines = insertLine(lines, endIndex, row)
+	}
+	return []byte(strings.Join(lines, "\n") + "\n"), nil
+}
+
+func progressIndexTableBlock(row string) string {
+	return strings.Join([]string{
+		"| 文档 | 类型 | 状态 | 最近更新 |",
+		"| --- | --- | --- | --- |",
+		row,
+	}, "\n")
+}
+
+func findProgressTable(lines []string) (int, int, int) {
+	for i := 0; i < len(lines)-1; i++ {
+		if !isProgressHeaderLine(lines[i]) || !isMarkdownSeparatorLine(lines[i+1]) {
+			continue
+		}
+
+		end := i + 2
+		for end < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[end]), "|") {
+			end++
+		}
+		return i, i + 1, end
+	}
+	return -1, -1, -1
+}
+
+func isProgressHeaderLine(line string) bool {
+	cells, ok := parseMarkdownRow(line)
+	if !ok || len(cells) < 4 {
+		return false
+	}
+	expected := []string{"文档", "类型", "状态", "最近更新"}
+	for i, want := range expected {
+		if cells[i] != want {
+			return false
+		}
+	}
+	return true
+}
+
+func isMarkdownSeparatorLine(line string) bool {
+	cells, ok := parseMarkdownRow(line)
+	if !ok {
+		return false
+	}
+	for _, cell := range cells {
+		if strings.Trim(cell, "-: ") != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func parseMarkdownRow(line string) ([]string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "|") {
+		return nil, false
+	}
+	trimmed = strings.TrimPrefix(trimmed, "|")
+	trimmed = strings.TrimSuffix(trimmed, "|")
+
+	parts := strings.Split(trimmed, "|")
+	cells := make([]string, 0, len(parts))
+	for _, part := range parts {
+		cells = append(cells, strings.TrimSpace(part))
+	}
+	return cells, true
+}
+
+func insertLine(lines []string, index int, line string) []string {
+	if index < 0 {
+		index = 0
+	}
+	if index > len(lines) {
+		index = len(lines)
+	}
+
+	lines = append(lines, "")
+	copy(lines[index+1:], lines[index:])
+	lines[index] = line
+	return lines
 }
 
 func auditID(prefix string, at time.Time) string {

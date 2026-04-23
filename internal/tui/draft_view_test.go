@@ -44,7 +44,7 @@ func TestRenderDraftReviewIncludesPatchAndActions(t *testing.T) {
 				BaseVersion: "base-1",
 			},
 			Summary:         "Sync latest managed progress.",
-			ProposedContent: "## Auto Progress Sync",
+			ProposedContent: "| 0-排期/04-执行/week.md | 周执行 | 已同步 | 2026-04-22 10:00 |",
 			EvidenceRefs:    []string{"0-排期/04-执行/week.md"},
 			CreatedAt:       time.Now(),
 			UpdatedAt:       time.Now(),
@@ -62,7 +62,7 @@ func TestRenderDraftReviewIncludesPatchAndActions(t *testing.T) {
 	for _, expected := range []string{
 		"Draft Review",
 		"Base Match",
-		"## Auto Progress Sync",
+		"| 0-排期/04-执行/week.md | 周执行 | 已同步 | 2026-04-22 10:00 |",
 		"Current Target Excerpt",
 		"obsidian-harness draft apply draft-2",
 	} {

@@ -15,6 +15,79 @@ import (
 	"obsidian-harness/internal/model"
 )
 
+func clearOperatorEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"OBSIDIAN_HARNESS_LLM_BASE_URL",
+		"OBSIDIAN_HARNESS_LLM_API_KEY",
+		"OBSIDIAN_HARNESS_LLM_MODEL",
+		"OBSIDIAN_HARNESS_OPERATOR_BASE_URL",
+		"OBSIDIAN_HARNESS_OPERATOR_API_KEY",
+		"OBSIDIAN_HARNESS_OPERATOR_MODEL",
+		"LORE_LLM_BASE_URL",
+		"LORE_LLM_API_KEY",
+		"LORE_LLM_MODEL",
+		"LORE_OPERATOR_BASE_URL",
+		"LORE_OPERATOR_API_KEY",
+		"LORE_OPERATOR_MODEL",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
+func newOperatorAgentTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	type chatRequest struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat/completions":
+			var req chatRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode chat request: %v", err)
+			}
+			if len(req.Messages) == 0 {
+				t.Fatal("chat request missing messages")
+			}
+
+			userPrompt := req.Messages[len(req.Messages)-1].Content
+			action := `{"action":"help"}`
+			switch {
+			case strings.Contains(userPrompt, "show current status"):
+				action = `{"action":"show_status"}`
+			case strings.Contains(userPrompt, "review draft"):
+				action = `{"action":"review_draft"}`
+			case strings.Contains(userPrompt, "approve current draft"):
+				action = `{"action":"approve_draft","use_focused_draft":true}`
+			}
+
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{"message": map[string]any{"content": action}},
+				},
+				"usage": map[string]any{
+					"prompt_tokens":     10,
+					"completion_tokens": 5,
+				},
+			})
+		case "/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{
+					{"id": "gpt-5.4"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
 func TestRunDefaultsToStatus(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -105,6 +178,13 @@ func TestRunDemoP0B(t *testing.T) {
 
 func TestRunConsoleOnceStatus(t *testing.T) {
 	workDir := t.TempDir()
+	clearOperatorEnv(t)
+	server := newOperatorAgentTestServer(t)
+	defer server.Close()
+	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", server.URL)
+	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "secret")
+	t.Setenv("OBSIDIAN_HARNESS_LLM_MODEL", "gpt-5.4")
+
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -118,6 +198,7 @@ func TestRunConsoleOnceStatus(t *testing.T) {
 }
 
 func TestRunModelsList(t *testing.T) {
+	clearOperatorEnv(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/models" {
 			t.Fatalf("path = %q, want /models", r.URL.Path)
@@ -341,6 +422,12 @@ func TestRunProcessSinkDay(t *testing.T) {
 func TestRunConsoleREPLDraftFlow(t *testing.T) {
 	workDir := t.TempDir()
 	seedDraftForCLI(t, workDir, "console flow")
+	clearOperatorEnv(t)
+	server := newOperatorAgentTestServer(t)
+	defer server.Close()
+	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", server.URL)
+	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "secret")
+	t.Setenv("OBSIDIAN_HARNESS_LLM_MODEL", "gpt-5.4")
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

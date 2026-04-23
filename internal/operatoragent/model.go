@@ -3,6 +3,7 @@ package operatoragent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -46,15 +47,24 @@ type ModelCatalog struct {
 	Recommended string
 }
 
+var ErrUnavailable = errors.New("operator agent: model-backed operator agent is required")
+
 func NewDefault() Agent {
 	agent, err := NewFromEnv()
 	if err != nil {
 		return ErrorAgent{err: err}
 	}
 	if agent == nil {
-		return NewFallback()
+		return NewUnavailable(nil)
 	}
 	return agent
+}
+
+func NewUnavailable(err error) Agent {
+	if err == nil {
+		err = fmt.Errorf("%w; configure OBSIDIAN_HARNESS_LLM_BASE_URL and OBSIDIAN_HARNESS_LLM_API_KEY", ErrUnavailable)
+	}
+	return ErrorAgent{err: err}
 }
 
 func NewFromEnv() (Agent, error) {

@@ -36,7 +36,7 @@ func NewSession(version string) *Session {
 
 func NewSessionWithAgent(version string, agent operatoragent.Agent) *Session {
 	if agent == nil {
-		agent = operatoragent.NewFallback()
+		agent = operatoragent.NewUnavailable(nil)
 	}
 	return &Session{
 		Version:        strings.TrimSpace(version),
@@ -209,7 +209,7 @@ Examples:
 Notes:
   - the operator agent chooses one explicit action at a time
   - timed jobs still belong to runtime/scheduler, not this console
-  - the built-in fallback understands basic English and Chinese prompts
+  - this console requires a configured model-backed operator agent
 `) + "\n"
 }
 
