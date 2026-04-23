@@ -118,6 +118,8 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 		return runDraftCommand(args[1:], stdout, stderr)
 	case "process-sink":
 		return runProcessSinkCommand(args[1:], stdout, stderr)
+	case "smoke":
+		return runSmokeCommand(args[1:], stdout, stderr)
 	case "models":
 		return runModelsCommand(args[1:], stdout, stderr)
 	case "mcp":
@@ -174,6 +176,7 @@ Commands:
   daemon               Run the vault watcher daemon / one-shot scan
   draft                Review and act on pending drafts
   process-sink         Inspect checkpoint and daily report status
+  smoke                Run verification smoke checks (for example: smoke p0)
   models               List models from the configured LLM endpoint
   mcp [workdir]        Run the read-only MCP server over stdio
   import-codex-jsonl   Import a Codex session JSONL into checkpoints and daily reports

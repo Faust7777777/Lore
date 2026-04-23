@@ -250,6 +250,31 @@ func TestRunDemoP0B(t *testing.T) {
 	}
 }
 
+func TestRunSmokeP0(t *testing.T) {
+	workDir := t.TempDir()
+	configureLLMTestEnv(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"smoke", "p0", "--workdir", workDir}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "P0 smoke passed") {
+		t.Fatalf("expected smoke success output, got %q", stdout.String())
+	}
+	for _, expected := range []string{
+		"managed_core_ready",
+		"p0a_draft_applied",
+		"p0b_checkpoint_materialized",
+		"audit_chain_present",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("expected smoke output to contain %q, got %q", expected, stdout.String())
+		}
+	}
+}
+
 func TestRunConsoleOnceStatus(t *testing.T) {
 	workDir := t.TempDir()
 	configureLLMTestEnv(t)
