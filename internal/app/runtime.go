@@ -10,7 +10,7 @@ import (
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/orchestrator"
 	"obsidian-harness/internal/store"
-	"obsidian-harness/internal/store/jsonstore"
+	"obsidian-harness/internal/store/sqlitestore"
 	"obsidian-harness/internal/vault"
 )
 
@@ -29,13 +29,17 @@ type DemoP0BResult struct {
 
 func OpenRuntime(workDir string) (*Runtime, error) {
 	cfg := config.Default(workDir)
-	statePath := filepath.Join(cfg.Paths.StateDir, "store.json")
-	st, err := jsonstore.New(statePath, cfg.Vault.TempSuffix)
+	statePath := filepath.Join(cfg.Paths.StateDir, "store.db")
+	legacyStatePath := filepath.Join(cfg.Paths.StateDir, "store.json")
+	st, err := sqlitestore.OpenWithJSONMigration(statePath, legacyStatePath)
 	if err != nil {
 		return nil, err
 	}
 	h, err := orchestrator.New(cfg, st)
 	if err != nil {
+		if closer, ok := any(st).(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
 		return nil, err
 	}
 	processSinkSummarizer, processSinkErr := defaultProcessSinkSummarizer()
@@ -46,6 +50,16 @@ func OpenRuntime(workDir string) (*Runtime, error) {
 		ProcessSinkSummarizer:    processSinkSummarizer,
 		processSinkSummarizerErr: processSinkErr,
 	}, nil
+}
+
+func (r *Runtime) Close() error {
+	if r == nil || r.Store == nil {
+		return nil
+	}
+	if closer, ok := any(r.Store).(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
 func (r *Runtime) Bootstrap(now time.Time) ([]model.DocumentRef, error) {

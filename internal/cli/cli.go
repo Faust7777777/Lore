@@ -40,6 +40,7 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 			fmt.Fprintf(stderr, "open runtime: %v\n", err)
 			return 1
 		}
+		defer closeRuntime(stderr, runtime, "status")
 		managed, err := runtime.ManagedStatus()
 		if err != nil {
 			fmt.Fprintf(stderr, "status: %v\n", err)
@@ -58,6 +59,7 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 			fmt.Fprintf(stderr, "open runtime: %v\n", err)
 			return 1
 		}
+		defer closeRuntime(stderr, runtime, "bootstrap")
 		created, err := runtime.Bootstrap(time.Now())
 		if err != nil {
 			fmt.Fprintf(stderr, "bootstrap: %v\n", err)
@@ -79,6 +81,7 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 			fmt.Fprintf(stderr, "open runtime: %v\n", err)
 			return 1
 		}
+		defer closeRuntime(stderr, runtime, "demo-p0a")
 		draft, err := runtime.DemoP0A(time.Now())
 		if err != nil {
 			fmt.Fprintf(stderr, "demo-p0a: %v\n", err)
@@ -97,6 +100,7 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 			fmt.Fprintf(stderr, "open runtime: %v\n", err)
 			return 1
 		}
+		defer closeRuntime(stderr, runtime, "demo-p0b")
 		result, err := runtime.DemoP0B(time.Now())
 		if err != nil {
 			fmt.Fprintf(stderr, "demo-p0b: %v\n", err)
@@ -127,6 +131,7 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 			fmt.Fprintf(stderr, "open runtime: %v\n", err)
 			return 1
 		}
+		defer closeRuntime(stderr, runtime, "mcp")
 		server := mcp.NewServer(runtime.Harness, version)
 		if err := server.Serve(context.Background(), os.Stdin, stdout); err != nil {
 			fmt.Fprintf(stderr, "mcp: %v\n", err)
@@ -203,6 +208,7 @@ func runImportCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "open runtime: %v\n", err)
 		return 1
 	}
+	defer closeRuntime(stderr, runtime, "import-codex-jsonl")
 
 	result, err := runtime.ImportCodexJSONL(params, time.Now())
 	if err != nil {
@@ -233,6 +239,7 @@ func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 		fmt.Fprintf(stderr, "open runtime: %v\n", err)
 		return 1
 	}
+	defer closeRuntime(stderr, runtime, "console")
 	session := console.NewSession(version)
 	session.EnableLocalWorkTools = localExec
 
@@ -291,6 +298,7 @@ func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 		fmt.Fprintf(stderr, "open runtime: %v\n", err)
 		return 1
 	}
+	defer closeRuntime(stderr, runtime, "tui")
 
 	session := console.NewSession(version)
 	session.DefaultAgentID = agentID
@@ -469,6 +477,7 @@ func runDraftCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "open runtime: %v\n", err)
 			return 1
 		}
+		defer closeRuntime(stderr, runtime, "draft list")
 		drafts, err := runtime.ListDrafts()
 		if err != nil {
 			fmt.Fprintf(stderr, "draft list: %v\n", err)
@@ -487,6 +496,7 @@ func runDraftCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "open runtime: %v\n", err)
 			return 1
 		}
+		defer closeRuntime(stderr, runtime, "draft review")
 		review, err := runtime.ReviewDraft(draftID)
 		if err != nil {
 			fmt.Fprintf(stderr, "draft review: %v\n", err)
@@ -505,6 +515,7 @@ func runDraftCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "open runtime: %v\n", err)
 			return 1
 		}
+		defer closeRuntime(stderr, runtime, "draft "+args[0])
 
 		var updated model.Draft
 		switch args[0] {
@@ -549,6 +560,7 @@ func runDaemonCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "open runtime: %v\n", err)
 			return 1
 		}
+		defer closeRuntime(stderr, runtime, "daemon run")
 		runtime.Config.Vault.DebounceWindow = debounce
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -588,6 +600,7 @@ func runProcessSinkCommand(args []string, stdout io.Writer, stderr io.Writer) in
 			fmt.Fprintf(stderr, "open runtime: %v\n", err)
 			return 1
 		}
+		defer closeRuntime(stderr, runtime, "process-sink day")
 		view, err := runtime.ProcessSinkDay(agentID, day)
 		if err != nil {
 			fmt.Fprintf(stderr, "process-sink day: %v\n", err)
@@ -659,6 +672,7 @@ func runSyncCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "open runtime: %v\n", err)
 		return 1
 	}
+	defer closeRuntime(stderr, runtime, "sync-codex-jsonl")
 
 	result, err := runtime.SyncCodexJSONL(params, time.Now())
 	if err != nil {
@@ -693,6 +707,7 @@ func runAttachCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "open runtime: %v\n", err)
 		return 1
 	}
+	defer closeRuntime(stderr, runtime, "attach-codex-jsonl")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -929,4 +944,13 @@ func shellProfileEnabled(localExec bool) bool {
 	}
 	value := strings.TrimSpace(os.Getenv("LORE_AGENT_ENABLE_SHELL"))
 	return value == "1" || strings.EqualFold(value, "true") || strings.EqualFold(value, "yes")
+}
+
+func closeRuntime(stderr io.Writer, runtime *app.Runtime, scope string) {
+	if runtime == nil {
+		return
+	}
+	if err := runtime.Close(); err != nil {
+		fmt.Fprintf(stderr, "%s: close runtime: %v\n", scope, err)
+	}
 }

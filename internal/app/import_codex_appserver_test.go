@@ -31,7 +31,7 @@ func TestRuntimeImportCodexAppServerThreadWritesCheckpointsAndRollup(t *testing.
 	loc := useFixedLocalZone(t)
 	workDir := t.TempDir()
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -104,7 +104,7 @@ func TestRuntimeImportCodexAppServerThreadRespectsCustomSourcePath(t *testing.T)
 	loc := useFixedLocalZone(t)
 	workDir := t.TempDir()
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -145,7 +145,7 @@ func TestRuntimeImportCodexAppServerSourceReadsThreadViaClient(t *testing.T) {
 	loc := useFixedLocalZone(t)
 	workDir := t.TempDir()
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -190,7 +190,7 @@ func TestRuntimeImportCodexAppServerSourceReadsThreadViaClient(t *testing.T) {
 }
 
 func TestRuntimeImportCodexAppServerSourceRequiresThreadID(t *testing.T) {
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t.TempDir())
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -202,7 +202,7 @@ func TestRuntimeImportCodexAppServerSourceRequiresThreadID(t *testing.T) {
 }
 
 func TestRuntimeImportCodexAppServerSourcePropagatesReaderError(t *testing.T) {
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t.TempDir())
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}

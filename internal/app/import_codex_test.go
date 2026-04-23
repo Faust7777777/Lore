@@ -22,7 +22,7 @@ func TestRuntimeImportCodexJSONLWritesPlaceholderCheckpointAndSingleDayRollup(t 
 		`{"timestamp":"2026-04-22T10:05:00+08:00","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"drafted the next checkpoint"}}`,
 	)
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -96,7 +96,7 @@ func TestRuntimeImportCodexJSONLRollsUpAcrossTouchedDays(t *testing.T) {
 		`{"timestamp":"2026-04-23T00:10:00+08:00","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"started the next day handoff"}}`,
 	)
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -153,7 +153,7 @@ func TestRuntimeSyncCodexJSONLStoresStructuredCursorAndSkipsUnchangedTail(t *tes
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"review the weekly drift"}}`,
 	)
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -216,7 +216,7 @@ func TestRuntimeSyncCodexJSONLReimportsWhenFileChanges(t *testing.T) {
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"first event"}}`,
 	)
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -268,7 +268,7 @@ func TestRuntimeSyncCodexJSONLRejectsConcurrentSourceLock(t *testing.T) {
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"lock me"}}`,
 	)
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -305,7 +305,7 @@ func TestRuntimeSyncCodexJSONLRejectsLiveOwnerLockPayload(t *testing.T) {
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"live lock"}}`,
 	)
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -360,7 +360,7 @@ func TestRuntimeSyncCodexJSONLReclaimsStaleSourceLock(t *testing.T) {
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"recover stale lock"}}`,
 	)
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -409,7 +409,7 @@ func TestRuntimeSyncCodexJSONLReclaimsDeadOwnerLockImmediately(t *testing.T) {
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"recover dead owner lock"}}`,
 	)
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -522,7 +522,7 @@ func TestRuntimeSyncCodexJSONLReplaysLastWindowWithoutDuplicatingCheckpoint(t *t
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"first event"}}`,
 	)
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -588,7 +588,7 @@ func TestRuntimeSyncCodexJSONLDefersIncompleteTailUntilRecordCompletes(t *testin
 	partialLine := `{"timestamp":"2026-04-22T09:20:00+08:00","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"completed later"}}`
 	writeCodexJSONL(t, transcriptPath, metaLine, firstLine)
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -681,7 +681,7 @@ func TestRuntimeSyncCodexJSONLFallsBackWhenReplayBoundaryChanges(t *testing.T) {
 	)
 	writeCodexJSONL(t, transcriptPath, initialLines...)
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -763,7 +763,7 @@ func TestRuntimeSyncCodexJSONLGeneratesPlaceholderForClosedIdleWindow(t *testing
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"only one active slot"}}`,
 	)
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -827,7 +827,7 @@ func TestRuntimeSyncCodexJSONLInitialSyncDoesNotBackfillHistoricalIdleWindows(t 
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"historical event"}}`,
 	)
 
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -888,11 +888,17 @@ func readFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-func openRuntimeWithFakeProcessSinkSummarizer(workDir string) (*Runtime, error) {
+func openRuntimeWithFakeProcessSinkSummarizer(t *testing.T, workDir string) (*Runtime, error) {
+	t.Helper()
 	runtime, err := OpenRuntime(workDir)
 	if err != nil {
 		return nil, err
 	}
+	t.Cleanup(func() {
+		if err := runtime.Close(); err != nil {
+			t.Fatalf("runtime.Close() error = %v", err)
+		}
+	})
 	runtime.ProcessSinkSummarizer = fakeProcessSinkSummarizer{}
 	runtime.processSinkSummarizerErr = nil
 	return runtime, nil

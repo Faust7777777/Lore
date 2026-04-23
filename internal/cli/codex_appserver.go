@@ -42,6 +42,7 @@ func runImportCodexAppServer(args []string, stdout io.Writer, stderr io.Writer, 
 		fmt.Fprintf(stderr, "open runtime: %v\n", err)
 		return 1
 	}
+	defer closeRuntime(stderr, runtime, "import-codex-appserver")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()

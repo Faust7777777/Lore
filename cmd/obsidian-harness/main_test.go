@@ -585,7 +585,7 @@ func TestRunDaemonOnceTriggersDraftAfterStablePlanChange(t *testing.T) {
 	workDir := t.TempDir()
 	clearOperatorEnv(t)
 
-	runtime, err := app.OpenRuntime(workDir)
+	runtime, err := openRuntimeForCLITest(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -691,7 +691,7 @@ func TestRunUnknownCommandReturnsUsageError(t *testing.T) {
 func seedDraftForCLI(t *testing.T, workDir string, content string) string {
 	t.Helper()
 
-	runtime, err := app.OpenRuntime(workDir)
+	runtime, err := openRuntimeForCLITest(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -719,7 +719,7 @@ func writeMainTestPlan(t *testing.T, runtime *app.Runtime, absPath string, conte
 func seedProcessSinkForCLI(t *testing.T, workDir string) {
 	t.Helper()
 
-	runtime, err := app.OpenRuntime(workDir)
+	runtime, err := openRuntimeForCLITest(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -736,4 +736,19 @@ func seedProcessSinkForCLI(t *testing.T, workDir string) {
 	if _, err := runtime.Harness.RollupDaily("codex", windowStart, windowStart.Add(12*time.Hour)); err != nil {
 		t.Fatalf("RollupDaily() error = %v", err)
 	}
+}
+
+func openRuntimeForCLITest(t *testing.T, workDir string) (*app.Runtime, error) {
+	t.Helper()
+
+	runtime, err := app.OpenRuntime(workDir)
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() {
+		if err := runtime.Close(); err != nil {
+			t.Fatalf("runtime.Close() error = %v", err)
+		}
+	})
+	return runtime, nil
 }

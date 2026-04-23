@@ -18,7 +18,7 @@ import (
 
 func TestRuntimeScanVaultChangesPrimesThenCreatesDraft(t *testing.T) {
 	workDir := t.TempDir()
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := openRuntimeForTest(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -68,7 +68,7 @@ func TestRuntimeScanVaultChangesPrimesThenCreatesDraft(t *testing.T) {
 
 func TestRuntimeScanVaultChangesWaitsForDebounceBeforeCreatingDraft(t *testing.T) {
 	workDir := t.TempDir()
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := openRuntimeForTest(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -147,7 +147,7 @@ func TestVaultDaemonScanSummaryIncludesDraftIDs(t *testing.T) {
 
 func TestRunVaultDaemonContinuesAfterCodexSyncFailure(t *testing.T) {
 	workDir := t.TempDir()
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := openRuntimeForTest(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -179,7 +179,7 @@ func TestRunVaultDaemonContinuesAfterCodexSyncFailure(t *testing.T) {
 
 func TestRunVaultDaemonKeepsRunningAfterCodexSyncFailureUntilCancel(t *testing.T) {
 	workDir := t.TempDir()
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := openRuntimeForTest(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -226,7 +226,7 @@ func TestRunVaultDaemonKeepsRunningAfterCodexSyncFailureUntilCancel(t *testing.T
 
 func TestRunVaultDaemonWatcherCreatesDraftAfterFileChange(t *testing.T) {
 	workDir := t.TempDir()
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := openRuntimeForTest(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -280,7 +280,7 @@ func TestRunVaultDaemonWatcherCreatesDraftAfterFileChange(t *testing.T) {
 
 func TestRunVaultDaemonWatcherIgnoresObsidianDirectory(t *testing.T) {
 	workDir := t.TempDir()
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := openRuntimeForTest(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -333,7 +333,7 @@ func TestRunVaultDaemonWatcherIgnoresObsidianDirectory(t *testing.T) {
 func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 	loc := useFixedLocalZone(t)
 	workDir := t.TempDir()
-	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -493,3 +493,18 @@ func (b *lockedBuffer) String() string {
 }
 
 var _ io.Writer = (*lockedBuffer)(nil)
+
+func openRuntimeForTest(t *testing.T, workDir string) (*Runtime, error) {
+	t.Helper()
+
+	runtime, err := OpenRuntime(workDir)
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() {
+		if err := runtime.Close(); err != nil {
+			t.Fatalf("runtime.Close() error = %v", err)
+		}
+	})
+	return runtime, nil
+}
