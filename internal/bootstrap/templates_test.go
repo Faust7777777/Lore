@@ -24,6 +24,8 @@ func TestDefaultManagedTemplatesIncludeRuntimeAgentDocs(t *testing.T) {
 		"## Tool Strategy",
 		"## Writing Boundaries",
 		"draft -> review -> apply",
+		"shell commands always require confirmation before execution",
+		"runtime still enforces path, doc-class, and governance boundaries",
 	} {
 		if !strings.Contains(agent.Content, want) {
 			t.Fatalf("agent template missing %q:\n%s", want, agent.Content)
