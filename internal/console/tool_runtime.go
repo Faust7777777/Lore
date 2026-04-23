@@ -471,11 +471,26 @@ func resolveTargetPath(path string) (string, error) {
 	if !os.IsNotExist(err) {
 		return "", err
 	}
-	parent, parentErr := resolveExistingPath(filepath.Dir(cleaned))
-	if parentErr != nil {
-		return "", parentErr
+
+	missing := []string{filepath.Base(cleaned)}
+	parent := filepath.Dir(cleaned)
+	for {
+		resolvedParent, parentErr := filepath.EvalSymlinks(parent)
+		if parentErr == nil {
+			parts := append([]string{resolvedParent}, missing...)
+			return filepath.Clean(filepath.Join(parts...)), nil
+		}
+		if !os.IsNotExist(parentErr) {
+			return "", parentErr
+		}
+
+		nextParent := filepath.Dir(parent)
+		if nextParent == parent {
+			return "", parentErr
+		}
+		missing = append([]string{filepath.Base(parent)}, missing...)
+		parent = nextParent
 	}
-	return filepath.Clean(filepath.Join(parent, filepath.Base(cleaned))), nil
 }
 
 func isWithinPath(root string, candidate string) bool {

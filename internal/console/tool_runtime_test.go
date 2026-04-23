@@ -63,6 +63,62 @@ func TestToolRuntimeWorkspaceWriteBlocksVaultAndState(t *testing.T) {
 	}
 }
 
+func TestToolRuntimeWorkspaceWriteAllowsNewNestedPath(t *testing.T) {
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+	}
+	tools := newToolRuntime(NewSessionWithAgent("test", &fakeAgent{}), runtime)
+
+	_, err := tools.CallTool("workspace_write", map[string]any{
+		"path":    "src/new/file.txt",
+		"content": "nested",
+	})
+	if err != nil {
+		t.Fatalf("workspace_write nested error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(workDir, "src", "new", "file.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile(nested) error = %v", err)
+	}
+	if string(data) != "nested" {
+		t.Fatalf("nested content = %q, want nested", string(data))
+	}
+}
+
+func TestToolRuntimeWorkspaceWriteBlocksSymlinkToVault(t *testing.T) {
+	workDir := t.TempDir()
+	vaultRoot := filepath.Join(workDir, "vault")
+	if err := os.MkdirAll(vaultRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(vault) error = %v", err)
+	}
+	linkPath := filepath.Join(workDir, "vault-link")
+	if err := os.Symlink(vaultRoot, linkPath); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: vaultRoot,
+		},
+	}
+	tools := newToolRuntime(NewSessionWithAgent("test", &fakeAgent{}), runtime)
+
+	_, err := tools.CallTool("workspace_write", map[string]any{
+		"path":    "vault-link/note.md",
+		"content": "bypass",
+	})
+	if err == nil {
+		t.Fatal("workspace_write through vault symlink error = nil, want blocked")
+	}
+	if !strings.Contains(err.Error(), "Lore-managed vault/state") {
+		t.Fatalf("workspace_write symlink error = %q, want vault/state block", err)
+	}
+}
+
 func TestToolRuntimeShellExecReturnsOutputOnFailure(t *testing.T) {
 	t.Setenv("LORE_AGENT_ENABLE_SHELL", "1")
 	workDir := t.TempDir()
