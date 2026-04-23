@@ -291,7 +291,8 @@ func TestModelAgentRespondPromptIncludesGovernanceSummaryAndModes(t *testing.T) 
 	systemPrompt := client.requests[0].Messages[0].Content
 	for _, want := range []string{
 		"Lore governance summary",
-		"vault_write_low is only for explicit note/diary/journal write requests",
+		"low-governance vault notes may use vault_write_low",
+		"shell_exec returns a confirmation prompt first; do not assume the command already ran",
 		"local_exec_mode: enabled",
 		"shell_exec_mode: enabled",
 	} {
@@ -326,7 +327,8 @@ func TestModelAgentRespondPromptListsGitToolsWhenShellModeIsDisabled(t *testing.
 	}
 	systemPrompt := client.requests[0].Messages[0].Content
 	for _, want := range []string{
-		"workspace_* and shell_exec are only for explicit local file/code/run requests",
+		"use workspace_* for local workspace files outside Lore-managed vault/state",
+		"prefer git_* over shell_exec for repository inspection",
 		"local_exec_mode: enabled",
 		"shell_exec_mode: disabled",
 		"- git_status: show git status for the local repo",
@@ -393,6 +395,42 @@ func TestModelAgentRespondPromptIncludesRuntimeAgentDocs(t *testing.T) {
 	}
 	if len(runtime.calls) != 2 || runtime.calls[0] != "system_doc_get" || runtime.calls[1] != "system_doc_get" {
 		t.Fatalf("runtime calls = %+v, want two system_doc_get preloads", runtime.calls)
+	}
+}
+
+func TestModelAgentRespondReturnsShellConfirmationImmediately(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{
+			Content: `{"type":"tool_call","tool":"shell_exec","arguments":{"command":"go test ./...","timeout_seconds":30}}`,
+		},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{
+			{Name: "shell_exec", Description: "request one shell command with confirmation"},
+		},
+		results: map[string]ToolResult{
+			"shell_exec": {
+				Content: "Shell command pending confirmation.\ncommand: go test ./...\ntimeout_seconds: 30\nreply with yes/confirm to run it, or no/cancel to skip it.",
+			},
+		},
+	}
+
+	response, err := agent.Respond("run go test", Context{DefaultAgentID: "codex"}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if !strings.Contains(response.Final, "Shell command pending confirmation.") {
+		t.Fatalf("response.Final = %q, want shell confirmation prompt", response.Final)
+	}
+	if len(response.Trace) != 1 || response.Trace[0].Name != "shell_exec" || response.Trace[0].Status != "pending" {
+		t.Fatalf("response.Trace = %+v, want one pending shell_exec trace", response.Trace)
+	}
+	if len(runtime.calls) != 1 || runtime.calls[0] != "shell_exec" {
+		t.Fatalf("runtime.calls = %+v, want one shell_exec call", runtime.calls)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("requests = %d, want 1 because shell confirmation should end the loop immediately", len(client.requests))
 	}
 }
 

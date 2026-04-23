@@ -38,11 +38,17 @@ type Session struct {
 	CurrentDraftID       string
 	DefaultAgentID       string
 	EnableLocalWorkTools bool
+	PendingShellCommand  *pendingShellCommand
 	LastInput            string
 	LastToolTrace        []operatoragent.ToolCallTrace
 	History              []operatoragent.ConversationTurn
 	Now                  func() time.Time
 	Agent                operatoragent.Agent
+}
+
+type pendingShellCommand struct {
+	Command        string
+	TimeoutSeconds int
 }
 
 func NewSession(version string) *Session {
@@ -64,6 +70,9 @@ func NewSessionWithAgent(version string, agent operatoragent.Agent) *Session {
 func (s *Session) Handle(input string, runtime Runtime) (string, error) {
 	s.LastInput = strings.TrimSpace(input)
 	s.LastToolTrace = nil
+	if output, handled, err := s.handlePendingShellConfirmation(runtime); handled {
+		return output, err
+	}
 	if loopAgent, ok := s.Agent.(operatoragent.LoopAgent); ok {
 		response, err := loopAgent.Respond(input, s.agentContext(), newToolRuntime(s, runtime))
 		if err != nil {
@@ -99,6 +108,59 @@ func (s *Session) Handle(input string, runtime Runtime) (string, error) {
 	}
 	s.rememberTurn(input, output)
 	return output, nil
+}
+
+func (s *Session) handlePendingShellConfirmation(runtime Runtime) (string, bool, error) {
+	if s.PendingShellCommand == nil {
+		return "", false, nil
+	}
+
+	switch parseShellConfirmationDecision(s.LastInput) {
+	case shellConfirmationApproved:
+		pending := *s.PendingShellCommand
+		s.PendingShellCommand = nil
+		result, err := runShellCommand(runtime.WorkDirPath(), pending.Command, pending.TimeoutSeconds)
+		traceStatus := "ok"
+		traceError := ""
+		if err != nil {
+			traceStatus = "error"
+			traceError = strings.TrimSpace(err.Error())
+		}
+		s.LastToolTrace = []operatoragent.ToolCallTrace{{
+			Name: "shell_exec",
+			Arguments: map[string]any{
+				"command":         pending.Command,
+				"timeout_seconds": pending.TimeoutSeconds,
+			},
+			Status: traceStatus,
+			Error:  traceError,
+		}}
+		output := strings.TrimSpace(result.Content)
+		if output == "" {
+			output = "Shell command finished."
+		}
+		s.rememberTurn(s.LastInput, output)
+		if strings.HasSuffix(result.Content, "\n") {
+			return result.Content, true, nil
+		}
+		return output + "\n", true, nil
+	case shellConfirmationRejected:
+		pending := *s.PendingShellCommand
+		s.PendingShellCommand = nil
+		s.LastToolTrace = []operatoragent.ToolCallTrace{{
+			Name: "shell_exec",
+			Arguments: map[string]any{
+				"command":         pending.Command,
+				"timeout_seconds": pending.TimeoutSeconds,
+			},
+			Status: "cancelled",
+		}}
+		output := strings.TrimSpace(fmt.Sprintf("Shell command cancelled.\ncommand: %s\n", pending.Command))
+		s.rememberTurn(s.LastInput, output)
+		return output + "\n", true, nil
+	default:
+		return "", false, nil
+	}
 }
 
 func (s *Session) executeDecision(decision operatoragent.Decision, runtime Runtime) (string, error) {
@@ -275,6 +337,7 @@ Notes:
   - timed jobs still belong to runtime/scheduler, not this console
   - local workspace tools only appear in local-exec mode
   - shell still requires both local-exec mode and LORE_AGENT_ENABLE_SHELL=1
+  - shell commands always ask for confirmation before execution
   - this console requires a configured model-backed operator agent
 `) + "\n"
 }
@@ -284,4 +347,24 @@ func defaultAgentID(value string) string {
 		return "codex"
 	}
 	return value
+}
+
+type shellConfirmationDecision int
+
+const (
+	shellConfirmationUnknown shellConfirmationDecision = iota
+	shellConfirmationApproved
+	shellConfirmationRejected
+)
+
+func parseShellConfirmationDecision(input string) shellConfirmationDecision {
+	value := strings.ToLower(strings.TrimSpace(input))
+	switch value {
+	case "y", "yes", "ok", "okay", "confirm", "confirmed", "run", "run it", "execute", "execute it", "go ahead", "continue", "sure", "\u786e\u8ba4", "\u6267\u884c", "\u8fd0\u884c", "\u7ee7\u7eed", "\u597d", "\u53ef\u4ee5":
+		return shellConfirmationApproved
+	case "n", "no", "cancel", "stop", "skip", "abort", "\u53d6\u6d88", "\u4e0d\u7528", "\u4e0d\u8981", "\u7b97\u4e86", "\u522b\u6267\u884c", "\u505c\u6b62":
+		return shellConfirmationRejected
+	default:
+		return shellConfirmationUnknown
+	}
 }

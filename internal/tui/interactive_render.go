@@ -96,6 +96,10 @@ func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput stri
 				statusStyle = styleOK
 			case "error", "fail", "failed":
 				statusStyle = styleErr
+			case "pending", "waiting":
+				statusStyle = styleWarn
+			case "cancelled", "canceled":
+				statusStyle = styleMutedText
 			case "running":
 				statusStyle = styleRunning
 			}

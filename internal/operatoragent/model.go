@@ -275,13 +275,16 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 			}
 
 			toolResult, toolErr := runtime.CallTool(toolName, envelope.Arguments)
+			toolContent := strings.TrimSpace(toolResult.Content)
 			trace = append(trace, ToolCallTrace{
 				Name:      toolName,
 				Arguments: cloneToolArguments(envelope.Arguments),
-				Status:    toolTraceStatus(toolErr),
+				Status:    toolTraceStatus(toolName, toolContent, toolErr),
 				Error:     toolTraceError(toolErr),
 			})
-			toolContent := strings.TrimSpace(toolResult.Content)
+			if isShellConfirmationResult(toolName, toolContent, toolErr) {
+				return Response{Final: toolContent, Trace: append([]ToolCallTrace(nil), trace...)}, nil
+			}
 			if toolErr != nil && toolContent != "" {
 				toolErr = fmt.Errorf("%w\n%s", toolErr, toolContent)
 			}
@@ -469,8 +472,8 @@ Rules:
 - call at most one tool per response
 - prefer Lore governance/read tools over workspace and shell tools
 - prefer git_* over shell_exec for repository inspection
-- workspace_* and shell_exec are only for explicit local file/code/run requests
-- vault_write_low is only for explicit note/diary/journal write requests
+- use workspace_* for local workspace files outside Lore-managed vault/state
+- shell_exec is the last resort for local commands and always requires confirmation before execution
 - never use workspace_* or shell_exec on Lore-managed vault docs or runtime state files
 - never schedule, poll, sync, import, attach, or run background jobs from this chat loop
 - if a tool already returns a user-ready render, you may return it verbatim in final.message
@@ -479,8 +482,9 @@ Rules:
 `))
 	builder.WriteString("\n\nLore governance summary:\n")
 	builder.WriteString("- managed core docs and plan/execution docs must stay in draft -> review -> apply\n")
-	builder.WriteString("- low-governance vault notes may use vault_write_low only when the user explicitly wants a note, diary, or journal written\n")
+	builder.WriteString("- low-governance vault notes may use vault_write_low; runtime still blocks managed core, plans, process-sink docs, hidden dirs, and non-markdown files\n")
 	builder.WriteString("- process-sink docs are runtime-owned outputs, not direct chat writes\n")
+	builder.WriteString("- shell_exec returns a confirmation prompt first; do not assume the command already ran\n")
 	builder.WriteString("- local_exec_mode: ")
 	builder.WriteString(localExecMode)
 	builder.WriteString("\n- git_mode: ")
@@ -633,9 +637,12 @@ func buildToolResultPrompt(toolName string, content string, toolErr error) strin
 	return fmt.Sprintf("Tool result for %s:\n%s", toolName, content)
 }
 
-func toolTraceStatus(err error) string {
+func toolTraceStatus(toolName string, content string, err error) string {
 	if err != nil {
 		return "error"
+	}
+	if isShellConfirmationResult(toolName, content, nil) {
+		return "pending"
 	}
 	return "ok"
 }
@@ -656,6 +663,13 @@ func cloneToolArguments(arguments map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func isShellConfirmationResult(toolName string, content string, err error) bool {
+	if err != nil || strings.TrimSpace(toolName) != "shell_exec" {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(content), "Shell command pending confirmation.")
 }
 
 func toolCallSignature(toolName string, arguments map[string]any) string {

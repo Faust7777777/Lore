@@ -1,6 +1,8 @@
 package console
 
 import (
+	"path/filepath"
+	osruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -316,5 +318,70 @@ func TestSessionHandleUsesLoopAgentResponseAndStoresHistory(t *testing.T) {
 	}
 	if len(session.LastToolTrace) != 1 || session.LastToolTrace[0].Name != "managed_status" {
 		t.Fatalf("last tool trace = %+v, want managed_status", session.LastToolTrace)
+	}
+}
+
+func TestSessionHandlePendingShellConfirmationRunsCommand(t *testing.T) {
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+	}
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	command := "printf lore-shell-confirmed"
+	if osruntime.GOOS == "windows" {
+		command = "Write-Output lore-shell-confirmed"
+	}
+	session.PendingShellCommand = &pendingShellCommand{
+		Command:        command,
+		TimeoutSeconds: 5,
+	}
+
+	output, err := session.Handle("yes", runtime)
+	if err != nil {
+		t.Fatalf("Handle(confirm) error = %v", err)
+	}
+	if session.PendingShellCommand != nil {
+		t.Fatal("pending shell command not cleared after confirmation")
+	}
+	if !strings.Contains(output, "lore-shell-confirmed") || !strings.Contains(output, "exit_code: 0") {
+		t.Fatalf("output = %q, want shell output and exit code", output)
+	}
+	if len(session.LastToolTrace) != 1 || session.LastToolTrace[0].Name != "shell_exec" || session.LastToolTrace[0].Status != "ok" {
+		t.Fatalf("last tool trace = %+v, want one ok shell_exec trace", session.LastToolTrace)
+	}
+	if len(session.History) != 2 || session.History[0].Role != "user" || session.History[1].Role != "assistant" {
+		t.Fatalf("history = %+v, want one confirmed shell turn", session.History)
+	}
+}
+
+func TestSessionHandlePendingShellConfirmationCancelsCommand(t *testing.T) {
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.PendingShellCommand = &pendingShellCommand{
+		Command:        "echo lore",
+		TimeoutSeconds: 5,
+	}
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+	}
+
+	output, err := session.Handle("cancel", runtime)
+	if err != nil {
+		t.Fatalf("Handle(cancel) error = %v", err)
+	}
+	if session.PendingShellCommand != nil {
+		t.Fatal("pending shell command not cleared after cancellation")
+	}
+	if !strings.Contains(output, "Shell command cancelled.") {
+		t.Fatalf("output = %q, want cancellation text", output)
+	}
+	if len(session.LastToolTrace) != 1 || session.LastToolTrace[0].Status != "cancelled" {
+		t.Fatalf("last tool trace = %+v, want cancelled trace", session.LastToolTrace)
 	}
 }

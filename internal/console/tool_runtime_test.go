@@ -2,11 +2,10 @@ package console
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
-	osruntime "runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/operatoragent"
@@ -22,7 +21,6 @@ func TestToolRuntimeWorkspaceWritePreservesWhitespace(t *testing.T) {
 	}
 	session := NewSessionWithAgent("test", &fakeAgent{})
 	session.EnableLocalWorkTools = true
-	session.LastInput = "edit code in the local repository and write a file"
 	tools := newToolRuntime(session, runtime)
 
 	content := "  leading\ntrailing  \n"
@@ -42,7 +40,7 @@ func TestToolRuntimeWorkspaceWritePreservesWhitespace(t *testing.T) {
 	}
 }
 
-func TestToolRuntimeVaultWriteLowCallsRuntime(t *testing.T) {
+func TestToolRuntimeVaultWriteLowCallsRuntimeWithoutKeywordGate(t *testing.T) {
 	workDir := t.TempDir()
 	runtime := &fakeRuntime{
 		managed: model.ManagedStatusView{
@@ -51,7 +49,6 @@ func TestToolRuntimeVaultWriteLowCallsRuntime(t *testing.T) {
 		},
 	}
 	session := NewSessionWithAgent("test", &fakeAgent{})
-	session.LastInput = "write a diary note for today"
 	tools := newToolRuntime(session, runtime)
 
 	result, err := tools.CallTool("vault_write_low", map[string]any{
@@ -70,29 +67,6 @@ func TestToolRuntimeVaultWriteLowCallsRuntime(t *testing.T) {
 	}
 }
 
-func TestToolRuntimeVaultWriteLowRequiresExplicitIntent(t *testing.T) {
-	workDir := t.TempDir()
-	runtime := &fakeRuntime{
-		managed: model.ManagedStatusView{
-			WorkDir:   workDir,
-			VaultRoot: filepath.Join(workDir, "vault"),
-		},
-	}
-	tools := newToolRuntime(NewSessionWithAgent("test", &fakeAgent{}), runtime)
-
-	_, err := tools.CallTool("vault_write_low", map[string]any{
-		"path":      "03-notes/diary.md",
-		"content":   "# Diary\n\nToday",
-		"overwrite": false,
-	})
-	if err == nil {
-		t.Fatal("vault_write_low error = nil, want explicit intent failure")
-	}
-	if !strings.Contains(err.Error(), "explicit note/diary/journal write intent") {
-		t.Fatalf("vault_write_low error = %q, want explicit intent failure", err)
-	}
-}
-
 func TestToolRuntimeWorkspaceWriteBlocksVaultAndState(t *testing.T) {
 	workDir := t.TempDir()
 	runtime := &fakeRuntime{
@@ -103,7 +77,6 @@ func TestToolRuntimeWorkspaceWriteBlocksVaultAndState(t *testing.T) {
 	}
 	session := NewSessionWithAgent("test", &fakeAgent{})
 	session.EnableLocalWorkTools = true
-	session.LastInput = "modify code in the local repo"
 	tools := newToolRuntime(session, runtime)
 
 	for _, path := range []string{"vault/note.md", "state/store.json"} {
@@ -130,7 +103,6 @@ func TestToolRuntimeWorkspaceWriteAllowsNewNestedPath(t *testing.T) {
 	}
 	session := NewSessionWithAgent("test", &fakeAgent{})
 	session.EnableLocalWorkTools = true
-	session.LastInput = "create file in the workspace for the project"
 	tools := newToolRuntime(session, runtime)
 
 	_, err := tools.CallTool("workspace_write", map[string]any{
@@ -167,7 +139,6 @@ func TestToolRuntimeWorkspaceWriteBlocksSymlinkToVault(t *testing.T) {
 	}
 	session := NewSessionWithAgent("test", &fakeAgent{})
 	session.EnableLocalWorkTools = true
-	session.LastInput = "edit code in the workspace"
 	tools := newToolRuntime(session, runtime)
 
 	_, err := tools.CallTool("workspace_write", map[string]any{
@@ -182,7 +153,7 @@ func TestToolRuntimeWorkspaceWriteBlocksSymlinkToVault(t *testing.T) {
 	}
 }
 
-func TestToolRuntimeShellExecReturnsOutputOnFailure(t *testing.T) {
+func TestToolRuntimeShellExecQueuesConfirmation(t *testing.T) {
 	t.Setenv("LORE_AGENT_ENABLE_SHELL", "1")
 	workDir := t.TempDir()
 	runtime := &fakeRuntime{
@@ -193,23 +164,23 @@ func TestToolRuntimeShellExecReturnsOutputOnFailure(t *testing.T) {
 	}
 	session := NewSessionWithAgent("test", &fakeAgent{})
 	session.EnableLocalWorkTools = true
-	session.LastInput = "run tests in the local repo and show the output"
-	session.Now = func() time.Time { return time.Date(2026, 4, 22, 9, 0, 0, 0, time.Local) }
 	tools := newToolRuntime(session, runtime)
 
-	command := "printf lore-shell-failure; exit 7"
-	if osruntime.GOOS == "windows" {
-		command = "Write-Output lore-shell-failure; exit 7"
-	}
 	result, err := tools.CallTool("shell_exec", map[string]any{
-		"command":         command,
+		"command":         "echo lore",
 		"timeout_seconds": 5,
 	})
-	if err == nil {
-		t.Fatal("shell_exec error = nil, want non-zero exit error")
+	if err != nil {
+		t.Fatalf("shell_exec error = %v", err)
 	}
-	if !strings.Contains(result.Content, "lore-shell-failure") || !strings.Contains(result.Content, "exit_code: 7") {
-		t.Fatalf("shell_exec content = %q, want failure output and exit code", result.Content)
+	if session.PendingShellCommand == nil {
+		t.Fatal("pending shell command = nil, want queued confirmation")
+	}
+	if session.PendingShellCommand.Command != "echo lore" || session.PendingShellCommand.TimeoutSeconds != 5 {
+		t.Fatalf("pending shell command = %+v, want queued command and timeout", session.PendingShellCommand)
+	}
+	if !strings.Contains(result.Content, "Shell command pending confirmation.") {
+		t.Fatalf("shell_exec content = %q, want confirmation prompt", result.Content)
 	}
 }
 
@@ -244,54 +215,6 @@ func TestToolRuntimeShellExecDisabledByDefault(t *testing.T) {
 	}
 }
 
-func TestToolRuntimeWorkspaceWriteRequiresExplicitIntent(t *testing.T) {
-	workDir := t.TempDir()
-	runtime := &fakeRuntime{
-		managed: model.ManagedStatusView{
-			WorkDir:   workDir,
-			VaultRoot: filepath.Join(workDir, "vault"),
-		},
-	}
-	session := NewSessionWithAgent("test", &fakeAgent{})
-	session.EnableLocalWorkTools = true
-	tools := newToolRuntime(session, runtime)
-
-	_, err := tools.CallTool("workspace_write", map[string]any{
-		"path":    "notes.txt",
-		"content": "hello",
-	})
-	if err == nil {
-		t.Fatal("workspace_write error = nil, want explicit intent failure")
-	}
-	if !strings.Contains(err.Error(), "explicit local file/code/run intent") {
-		t.Fatalf("workspace_write error = %q, want explicit intent failure", err)
-	}
-}
-
-func TestToolRuntimeShellExecRequiresExplicitIntent(t *testing.T) {
-	t.Setenv("LORE_AGENT_ENABLE_SHELL", "1")
-	workDir := t.TempDir()
-	runtime := &fakeRuntime{
-		managed: model.ManagedStatusView{
-			WorkDir:   workDir,
-			VaultRoot: filepath.Join(workDir, "vault"),
-		},
-	}
-	session := NewSessionWithAgent("test", &fakeAgent{})
-	session.EnableLocalWorkTools = true
-	tools := newToolRuntime(session, runtime)
-
-	_, err := tools.CallTool("shell_exec", map[string]any{
-		"command": "echo lore",
-	})
-	if err == nil {
-		t.Fatal("shell_exec error = nil, want explicit intent failure")
-	}
-	if !strings.Contains(err.Error(), "explicit local file/code/run intent") {
-		t.Fatalf("shell_exec error = %q, want explicit intent failure", err)
-	}
-}
-
 func TestToolRuntimeDescribeToolsExposesGitToolsWithoutShellExec(t *testing.T) {
 	t.Setenv("LORE_AGENT_ENABLE_SHELL", "")
 	workDir := t.TempDir()
@@ -312,9 +235,13 @@ func TestToolRuntimeDescribeToolsExposesGitToolsWithoutShellExec(t *testing.T) {
 	}
 }
 
-func TestToolRuntimeGitToolsRequireExplicitIntent(t *testing.T) {
-	t.Setenv("LORE_AGENT_ENABLE_SHELL", "")
+func TestToolRuntimeGitToolsRunWithoutKeywordGating(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+
 	workDir := t.TempDir()
+	initGitRepo(t, workDir)
 	runtime := &fakeRuntime{
 		managed: model.ManagedStatusView{
 			WorkDir:   workDir,
@@ -326,14 +253,21 @@ func TestToolRuntimeGitToolsRequireExplicitIntent(t *testing.T) {
 	tools := newToolRuntime(session, runtime)
 
 	requireGitToolsAvailable(t, tools.DescribeTools(operatoragent.Context{}))
-	for _, name := range gitToolNames() {
-		_, err := tools.CallTool(name, map[string]any{})
-		if err == nil {
-			t.Fatalf("%s error = nil, want explicit intent failure", name)
-		}
-		if !isExplicitLocalOrGitIntentError(err) {
-			t.Fatalf("%s error = %q, want explicit local/git/repo intent failure", name, err)
-		}
+
+	statusResult, err := tools.CallTool("git_status", map[string]any{})
+	if err != nil {
+		t.Fatalf("git_status error = %v", err)
+	}
+	if !strings.Contains(statusResult.Content, "tool: git_status") {
+		t.Fatalf("git_status content = %q, want git_status header", statusResult.Content)
+	}
+
+	diffResult, err := tools.CallTool("git_diff_summary", map[string]any{})
+	if err != nil {
+		t.Fatalf("git_diff_summary error = %v", err)
+	}
+	if !strings.Contains(diffResult.Content, "tool: git_diff_summary") {
+		t.Fatalf("git_diff_summary content = %q, want git_diff_summary header", diffResult.Content)
 	}
 }
 
@@ -429,13 +363,11 @@ func toolDefinitionsContain(definitions []operatoragent.ToolDefinition, want str
 	return false
 }
 
-func isExplicitLocalOrGitIntentError(err error) bool {
-	if err == nil {
-		return false
+func initGitRepo(t *testing.T, workDir string) {
+	t.Helper()
+	cmd := exec.Command("git", "-C", workDir, "init")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git init error = %v\n%s", err, string(output))
 	}
-	text := strings.ToLower(err.Error())
-	if !strings.Contains(text, "explicit") {
-		return false
-	}
-	return strings.Contains(text, "local") || strings.Contains(text, "git") || strings.Contains(text, "repo")
 }

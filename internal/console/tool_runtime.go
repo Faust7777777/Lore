@@ -62,7 +62,7 @@ func (r toolRuntime) DescribeTools(_ operatoragent.Context) []operatoragent.Tool
 		if shellToolsEnabled() {
 			tools = append(tools, operatoragent.ToolDefinition{
 				Name:        "shell_exec",
-				Description: "Run one local shell command in the workdir. Unsafe profile only; use only for explicit local execution requests.",
+				Description: "Request one local shell command in the workdir. Lore will ask for confirmation before execution.",
 				Arguments:   `{"command":"dir","timeout_seconds":30}`,
 			})
 		}
@@ -219,9 +219,6 @@ func (r toolRuntime) CallTool(name string, arguments map[string]any) (operatorag
 		}
 		return jsonToolResult(pack)
 	case "vault_write_low":
-		if err := r.requireExplicitVaultWriteIntent(); err != nil {
-			return operatoragent.ToolResult{}, err
-		}
 		path, err := requiredStringArg(arguments, "path")
 		if err != nil {
 			return operatoragent.ToolResult{}, err
@@ -286,9 +283,6 @@ func (r toolRuntime) workspaceList(arguments map[string]any) (operatoragent.Tool
 	if err := r.requireLocalWorkTools("workspace_list"); err != nil {
 		return operatoragent.ToolResult{}, err
 	}
-	if err := r.requireExplicitLocalIntent("workspace_list"); err != nil {
-		return operatoragent.ToolResult{}, err
-	}
 	absPath, relPath, err := r.resolveWorkspacePath(stringArg(arguments, "path", "."))
 	if err != nil {
 		return operatoragent.ToolResult{}, err
@@ -320,9 +314,6 @@ func (r toolRuntime) gitStatus(arguments map[string]any) (operatoragent.ToolResu
 	if err := r.requireLocalWorkTools("git_status"); err != nil {
 		return operatoragent.ToolResult{}, err
 	}
-	if err := r.requireExplicitLocalIntent("git_status"); err != nil {
-		return operatoragent.ToolResult{}, err
-	}
 
 	scope, err := r.gitScopeArg(arguments)
 	if err != nil {
@@ -338,9 +329,6 @@ func (r toolRuntime) gitStatus(arguments map[string]any) (operatoragent.ToolResu
 
 func (r toolRuntime) gitDiffSummary(arguments map[string]any) (operatoragent.ToolResult, error) {
 	if err := r.requireLocalWorkTools("git_diff_summary"); err != nil {
-		return operatoragent.ToolResult{}, err
-	}
-	if err := r.requireExplicitLocalIntent("git_diff_summary"); err != nil {
 		return operatoragent.ToolResult{}, err
 	}
 
@@ -375,9 +363,6 @@ func (r toolRuntime) workspaceRead(arguments map[string]any) (operatoragent.Tool
 	if err := r.requireLocalWorkTools("workspace_read"); err != nil {
 		return operatoragent.ToolResult{}, err
 	}
-	if err := r.requireExplicitLocalIntent("workspace_read"); err != nil {
-		return operatoragent.ToolResult{}, err
-	}
 	path, err := requiredStringArg(arguments, "path")
 	if err != nil {
 		return operatoragent.ToolResult{}, err
@@ -397,9 +382,6 @@ func (r toolRuntime) workspaceRead(arguments map[string]any) (operatoragent.Tool
 
 func (r toolRuntime) workspaceWrite(arguments map[string]any) (operatoragent.ToolResult, error) {
 	if err := r.requireLocalWorkTools("workspace_write"); err != nil {
-		return operatoragent.ToolResult{}, err
-	}
-	if err := r.requireExplicitLocalIntent("workspace_write"); err != nil {
 		return operatoragent.ToolResult{}, err
 	}
 	path, err := requiredStringArg(arguments, "path")
@@ -425,9 +407,6 @@ func (r toolRuntime) workspaceWrite(arguments map[string]any) (operatoragent.Too
 
 func (r toolRuntime) workspaceEdit(arguments map[string]any) (operatoragent.ToolResult, error) {
 	if err := r.requireLocalWorkTools("workspace_edit"); err != nil {
-		return operatoragent.ToolResult{}, err
-	}
-	if err := r.requireExplicitLocalIntent("workspace_edit"); err != nil {
 		return operatoragent.ToolResult{}, err
 	}
 	path, err := requiredStringArg(arguments, "path")
@@ -480,9 +459,6 @@ func (r toolRuntime) shellExec(arguments map[string]any) (operatoragent.ToolResu
 	if !shellToolsEnabled() {
 		return operatoragent.ToolResult{}, fmt.Errorf("shell_exec is disabled; set LORE_AGENT_ENABLE_SHELL=1 to enable the unsafe local shell profile")
 	}
-	if err := r.requireExplicitLocalIntent("shell_exec"); err != nil {
-		return operatoragent.ToolResult{}, err
-	}
 	command, err := requiredStringArg(arguments, "command")
 	if err != nil {
 		return operatoragent.ToolResult{}, err
@@ -491,30 +467,17 @@ func (r toolRuntime) shellExec(arguments map[string]any) (operatoragent.ToolResu
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 30
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
-	defer cancel()
-
-	var cmd *exec.Cmd
-	if osruntime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", command)
-	} else {
-		cmd = exec.CommandContext(ctx, "sh", "-lc", command)
+	if r.session == nil {
+		return operatoragent.ToolResult{}, fmt.Errorf("shell_exec requires session state")
 	}
-	cmd.Dir = r.runtime.WorkDirPath()
-	output, err := cmd.CombinedOutput()
 
-	status := "ok"
-	if err != nil {
-		status = "error"
-	}
-	exitCode := 0
-	if cmd.ProcessState != nil {
-		exitCode = cmd.ProcessState.ExitCode()
+	r.session.PendingShellCommand = &pendingShellCommand{
+		Command:        command,
+		TimeoutSeconds: timeoutSeconds,
 	}
 	return operatoragent.ToolResult{
-		Content: fmt.Sprintf("status: %s\nexit_code: %d\nworkdir: %s\n\n%s", status, exitCode, r.runtime.WorkDirPath(), strings.TrimSpace(string(output))),
-	}, err
+		Content: renderShellConfirmationPrompt(command, timeoutSeconds),
+	}, nil
 }
 
 func (r toolRuntime) runGitCommand(toolName string, scope string, gitArgs ...string) (operatoragent.ToolResult, error) {
@@ -603,25 +566,11 @@ func (r toolRuntime) resolveWorkspacePath(rawPath string) (string, string, error
 	return realPath, filepath.ToSlash(relPath), nil
 }
 
-func (r toolRuntime) requireExplicitLocalIntent(toolName string) error {
-	if hasExplicitLocalWorkIntent(r.session.LastInput) {
-		return nil
-	}
-	return fmt.Errorf("%s requires explicit local file/code/run intent in the current request", toolName)
-}
-
 func (r toolRuntime) requireLocalWorkTools(toolName string) error {
 	if r.localWorkToolsEnabled() {
 		return nil
 	}
 	return fmt.Errorf("%s is unavailable in the default Lore chat profile; restart Lore with --local-exec to expose local workspace tools", toolName)
-}
-
-func (r toolRuntime) requireExplicitVaultWriteIntent() error {
-	if hasExplicitVaultWriteIntent(r.session.LastInput) {
-		return nil
-	}
-	return fmt.Errorf("vault_write_low requires explicit note/diary/journal write intent in the current request")
 }
 
 func (r toolRuntime) localWorkToolsEnabled() bool {
@@ -763,6 +712,45 @@ func shellToolsEnabled() bool {
 	return value == "1" || strings.EqualFold(value, "true") || strings.EqualFold(value, "yes")
 }
 
+func renderShellConfirmationPrompt(command string, timeoutSeconds int) string {
+	return strings.TrimSpace(fmt.Sprintf(
+		"Shell command pending confirmation.\ncommand: %s\ntimeout_seconds: %d\nreply with yes/confirm to run it, or no/cancel to skip it.",
+		strings.TrimSpace(command),
+		timeoutSeconds,
+	))
+}
+
+func runShellCommand(workDir string, command string, timeoutSeconds int) (operatoragent.ToolResult, error) {
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 30
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	if osruntime.GOOS == "windows" {
+		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", command)
+	} else {
+		cmd = exec.CommandContext(ctx, "sh", "-lc", command)
+	}
+	cmd.Dir = workDir
+	output, err := cmd.CombinedOutput()
+
+	status := "ok"
+	if err != nil {
+		status = "error"
+	}
+	exitCode := 0
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+	return operatoragent.ToolResult{
+		Content: fmt.Sprintf("status: %s\nexit_code: %d\nworkdir: %s\n\n%s", status, exitCode, workDir, strings.TrimSpace(string(output))),
+	}, err
+}
+
+/*
 func hasExplicitLocalWorkIntent(input string) bool {
 	value := normalizeIntentInput(input)
 	if value == "" {
@@ -942,3 +930,4 @@ func normalizeIntentInput(value string) string {
 	)
 	return strings.ToLower(strings.TrimSpace(replacer.Replace(value)))
 }
+*/
