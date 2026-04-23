@@ -247,6 +247,42 @@ func TestModelAgentRespondRunsToolLoopThenFinal(t *testing.T) {
 	}
 }
 
+func TestModelAgentRespondPromptIncludesGovernanceSummaryAndModes(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{
+			Content: `{"type":"final","message":"ok"}`,
+		},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{
+			{Name: "managed_status", Description: "show status"},
+			{Name: "vault_write_low", Description: "write note"},
+			{Name: "workspace_read", Description: "read workspace file"},
+			{Name: "shell_exec", Description: "run shell command"},
+		},
+	}
+
+	_, err := agent.Respond("write a diary and inspect local code", Context{DefaultAgentID: "codex"}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if len(client.requests) != 1 || len(client.requests[0].Messages) == 0 {
+		t.Fatalf("requests = %+v, want one request with system prompt", client.requests)
+	}
+	systemPrompt := client.requests[0].Messages[0].Content
+	for _, want := range []string{
+		"Lore governance summary",
+		"vault_write_low is only for explicit note/diary/journal write requests",
+		"local_exec_mode: enabled",
+		"shell_exec_mode: enabled",
+	} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
+		}
+	}
+}
+
 func TestModelAgentRespondFallsBackToLegacyDecisionJSON(t *testing.T) {
 	client := &fakeCompletionClient{
 		response: openai.ChatCompletionResponse{

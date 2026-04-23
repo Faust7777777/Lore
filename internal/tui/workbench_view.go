@@ -8,21 +8,36 @@ import (
 	"obsidian-harness/internal/model"
 )
 
-func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, lastOutput string) string {
+func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, localExec bool, shellEnabled bool, lastOutput string) string {
 	var builder strings.Builder
+	pendingDrafts := filterDraftsByState(drafts, model.DraftPendingReview)
+	builder.WriteString("Lore Workbench\n")
+	builder.WriteString("==============\n")
+	builder.WriteString("Live view for managed knowledge ops, draft review, and process-sink monitoring.\n")
 
-	builder.WriteString("Lore\n")
-	builder.WriteString("====\n")
+	builder.WriteString("\nRuntime Snapshot\n")
+	builder.WriteString("----------------\n")
 	writeField(&builder, "Version", version)
+	writeField(&builder, "Ready", yesNo(managed.Ready))
+	writeField(&builder, "Profile", profileLabel(localExec))
+	writeField(&builder, "Shell", enabledDisabled(shellEnabled))
+	writeField(&builder, "Drafts", fmt.Sprintf("%d pending / %d total", len(pendingDrafts), len(drafts)))
+	writeField(&builder, "Checkpoints", fmt.Sprintf("%d", len(processSink.Checkpoints)))
 	writeField(&builder, "WorkDir", managed.WorkDir)
 	writeField(&builder, "Vault", managed.VaultRoot)
 	writeField(&builder, "Health", string(managed.Health.Outcome.Status))
 	writeField(&builder, "Message", managed.Health.Message)
 	writeField(&builder, "Agent", processSink.AgentID)
 	writeField(&builder, "Day", processSink.Day.Format("2006-01-02"))
+	if processSink.Report != nil {
+		writeField(&builder, "Daily Report", processSink.Report.Path)
+	} else {
+		writeField(&builder, "Daily Report", "missing")
+	}
 
 	builder.WriteString("\nManaged Core\n")
 	builder.WriteString("------------\n")
+	fmt.Fprintf(&builder, "%-10s %-8s %s\n", "DOC", "STATE", "PATH")
 	for _, doc := range managed.CoreDocs {
 		state := "missing"
 		if doc.Exists {
@@ -33,7 +48,6 @@ func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []m
 
 	builder.WriteString("\nPending Drafts\n")
 	builder.WriteString("--------------\n")
-	pendingDrafts := filterDraftsByState(drafts, model.DraftPendingReview)
 	if len(pendingDrafts) == 0 {
 		builder.WriteString("No pending drafts.\n")
 	} else {
@@ -53,7 +67,8 @@ func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []m
 	builder.WriteString("\nFocused Draft\n")
 	builder.WriteString("-------------\n")
 	if focusedReview == nil {
-		builder.WriteString("No focused draft. Try: review the pending draft.\n")
+		builder.WriteString("No focused draft.\n")
+		builder.WriteString("Hint: ask Lore to review the pending draft.\n")
 	} else {
 		writeField(&builder, "ID", focusedReview.Draft.ID)
 		writeField(&builder, "State", string(focusedReview.Draft.State))
@@ -72,12 +87,6 @@ func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []m
 
 	builder.WriteString("\nProcess Sink\n")
 	builder.WriteString("------------\n")
-	writeField(&builder, "Checkpoints", fmt.Sprintf("%d", len(processSink.Checkpoints)))
-	if processSink.Report != nil {
-		writeField(&builder, "Daily Report", processSink.Report.Path)
-	} else {
-		writeField(&builder, "Daily Report", "missing")
-	}
 	if len(processSink.Checkpoints) == 0 {
 		builder.WriteString("No checkpoints.\n")
 	} else {
@@ -99,6 +108,7 @@ func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []m
 	if strings.TrimSpace(lastOutput) == "" {
 		builder.WriteString("No action yet.\n")
 	} else {
+		builder.WriteString("Most recent agent-visible output:\n")
 		builder.WriteString(indentBlock(strings.TrimSpace(lastOutput), "  "))
 		builder.WriteString("\n")
 	}
@@ -137,4 +147,18 @@ func indentBlock(value string, prefix string) string {
 		lines[i] = prefix + line
 	}
 	return strings.Join(lines, "\n")
+}
+
+func profileLabel(localExec bool) string {
+	if localExec {
+		return "local-exec"
+	}
+	return "lore"
+}
+
+func enabledDisabled(value bool) string {
+	if value {
+		return "enabled"
+	}
+	return "disabled"
 }

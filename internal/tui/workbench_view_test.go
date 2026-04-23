@@ -59,6 +59,8 @@ func TestRenderWorkbenchIncludesCorePanels(t *testing.T) {
 			},
 			BaseVersionMatches: true,
 		},
+		true,
+		false,
 		"Managed Status\n============\nReady: yes",
 	)
 
@@ -69,6 +71,11 @@ func TestRenderWorkbenchIncludesCorePanels(t *testing.T) {
 		"Focused Draft",
 		"Process Sink",
 		"Last Action",
+		"Runtime Snapshot",
+		"Profile",
+		"local-exec",
+		"Shell",
+		"disabled",
 		"morning checkpoint",
 		"pending draft",
 		"sync the weekly progress table",

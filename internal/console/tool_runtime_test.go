@@ -50,7 +50,9 @@ func TestToolRuntimeVaultWriteLowCallsRuntime(t *testing.T) {
 			VaultRoot: filepath.Join(workDir, "vault"),
 		},
 	}
-	tools := newToolRuntime(NewSessionWithAgent("test", &fakeAgent{}), runtime)
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.LastInput = "write a diary note for today"
+	tools := newToolRuntime(session, runtime)
 
 	result, err := tools.CallTool("vault_write_low", map[string]any{
 		"path":      "03-notes/diary.md",
@@ -65,6 +67,29 @@ func TestToolRuntimeVaultWriteLowCallsRuntime(t *testing.T) {
 	}
 	if !strings.Contains(result.Content, `"status": "written"`) || !strings.Contains(result.Content, "03-notes/diary.md") {
 		t.Fatalf("vault_write_low result = %q", result.Content)
+	}
+}
+
+func TestToolRuntimeVaultWriteLowRequiresExplicitIntent(t *testing.T) {
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+	}
+	tools := newToolRuntime(NewSessionWithAgent("test", &fakeAgent{}), runtime)
+
+	_, err := tools.CallTool("vault_write_low", map[string]any{
+		"path":      "03-notes/diary.md",
+		"content":   "# Diary\n\nToday",
+		"overwrite": false,
+	})
+	if err == nil {
+		t.Fatal("vault_write_low error = nil, want explicit intent failure")
+	}
+	if !strings.Contains(err.Error(), "explicit note/diary/journal write intent") {
+		t.Fatalf("vault_write_low error = %q, want explicit intent failure", err)
 	}
 }
 

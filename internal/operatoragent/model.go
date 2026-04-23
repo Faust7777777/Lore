@@ -431,6 +431,14 @@ Return schema:
 
 func loopSystemPrompt(tools []ToolDefinition, ctx Context) string {
 	var builder strings.Builder
+	localExecMode := "disabled"
+	if toolListContains(tools, "workspace_read") || toolListContains(tools, "workspace_list") {
+		localExecMode = "enabled"
+	}
+	shellMode := "disabled"
+	if toolListContains(tools, "shell_exec") {
+		shellMode = "enabled"
+	}
 	builder.WriteString(strings.TrimSpace(`
 You are the main Lore chat agent.
 Return exactly one JSON object and nothing else.
@@ -443,12 +451,21 @@ Rules:
 - call at most one tool per response
 - prefer Lore governance/read tools over workspace and shell tools
 - workspace_* and shell_exec are only for explicit local file/code/run requests
+- vault_write_low is only for explicit note/diary/journal write requests
 - never use workspace_* or shell_exec on Lore-managed vault docs or runtime state files
 - never schedule, poll, sync, import, attach, or run background jobs from this chat loop
 - if a tool already returns a user-ready render, you may return it verbatim in final.message
 - if a tool fails, either try a different tool or explain the failure in final.message
 - if no tool is needed, answer directly with type=final
 `))
+	builder.WriteString("\n\nLore governance summary:\n")
+	builder.WriteString("- managed core docs and plan/execution docs must stay in draft -> review -> apply\n")
+	builder.WriteString("- low-governance vault notes may use vault_write_low only when the user explicitly wants a note, diary, or journal written\n")
+	builder.WriteString("- process-sink docs are runtime-owned outputs, not direct chat writes\n")
+	builder.WriteString("- local_exec_mode: ")
+	builder.WriteString(localExecMode)
+	builder.WriteString("\n- shell_exec_mode: ")
+	builder.WriteString(shellMode)
 	builder.WriteString("\n\nAvailable tools:\n")
 	for _, tool := range tools {
 		builder.WriteString("- ")
@@ -471,6 +488,16 @@ Rules:
 		builder.WriteString(model.NormalizeDay(ctx.Now).Format("2006-01-02"))
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+func toolListContains(tools []ToolDefinition, name string) bool {
+	target := strings.TrimSpace(name)
+	for _, tool := range tools {
+		if strings.TrimSpace(tool.Name) == target {
+			return true
+		}
+	}
+	return false
 }
 
 func buildUserPrompt(input string, ctx Context) string {

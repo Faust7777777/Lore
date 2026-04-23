@@ -217,6 +217,9 @@ func (r toolRuntime) CallTool(name string, arguments map[string]any) (operatorag
 		}
 		return jsonToolResult(pack)
 	case "vault_write_low":
+		if err := r.requireExplicitVaultWriteIntent(); err != nil {
+			return operatoragent.ToolResult{}, err
+		}
 		path, err := requiredStringArg(arguments, "path")
 		if err != nil {
 			return operatoragent.ToolResult{}, err
@@ -515,6 +518,13 @@ func (r toolRuntime) requireLocalWorkTools(toolName string) error {
 	return fmt.Errorf("%s is unavailable in the default Lore chat profile; restart Lore with --local-exec to expose local workspace tools", toolName)
 }
 
+func (r toolRuntime) requireExplicitVaultWriteIntent() error {
+	if hasExplicitVaultWriteIntent(r.session.LastInput) {
+		return nil
+	}
+	return fmt.Errorf("vault_write_low requires explicit note/diary/journal write intent in the current request")
+}
+
 func (r toolRuntime) localWorkToolsEnabled() bool {
 	return r.session != nil && r.session.EnableLocalWorkTools
 }
@@ -760,6 +770,51 @@ func hasExplicitLocalWorkIntent(input string) bool {
 		".sql",
 	} {
 		if strings.Contains(value, hint) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasExplicitVaultWriteIntent(input string) bool {
+	value := normalizeIntentInput(input)
+	if value == "" {
+		return false
+	}
+
+	for _, phrase := range []string{
+		"write a diary",
+		"write diary",
+		"write a journal",
+		"journal entry",
+		"daily note",
+		"write a note",
+		"create note",
+		"new note",
+		"save note",
+		"save this note",
+		"write journal",
+		"diary",
+		"journal",
+		"note to vault",
+		"知识笔记",
+		"日记",
+		"日志",
+		"笔记",
+		"写日记",
+		"写一篇日记",
+		"写篇日记",
+		"写笔记",
+		"写一篇笔记",
+		"新建笔记",
+		"创建笔记",
+		"保存到笔记",
+		"写入笔记",
+		"记录下来",
+		"记一篇",
+	} {
+		if strings.Contains(value, phrase) {
 			return true
 		}
 	}

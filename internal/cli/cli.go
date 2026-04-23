@@ -313,7 +313,7 @@ func runTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 				focusedReview = &review
 			}
 		}
-		fmt.Fprint(stdout, tui.RenderWorkbench(version, managed, drafts, processSink, focusedReview, lastOutput))
+		fmt.Fprint(stdout, tui.RenderWorkbench(version, managed, drafts, processSink, focusedReview, localExec, shellProfileEnabled(localExec), lastOutput))
 		return nil
 	}
 
@@ -847,4 +847,12 @@ func parseProcessSinkDayFlags(args []string, stderr io.Writer) (string, string, 
 		return "", "", time.Time{}, fmt.Errorf("process-sink day: invalid --day value: %w", err)
 	}
 	return filepath.Clean(*workDir), strings.TrimSpace(*agentID), day, nil
+}
+
+func shellProfileEnabled(localExec bool) bool {
+	if !localExec {
+		return false
+	}
+	value := strings.TrimSpace(os.Getenv("LORE_AGENT_ENABLE_SHELL"))
+	return value == "1" || strings.EqualFold(value, "true") || strings.EqualFold(value, "yes")
 }
