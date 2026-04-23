@@ -293,12 +293,13 @@ func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 	session.DefaultAgentID = agentID
 	session.EnableLocalWorkTools = localExec
 	interactive := strings.TrimSpace(utterance) == ""
+	shellEnabled := shellProfileEnabled(localExec)
 
 	render := func(lastOutput string) error {
 		if interactive {
 			clearInteractiveTUI(stdout)
 		}
-		viewModel, err := loadWorkbenchViewModel(version, runtime, session, agentID, day, localExec, shellProfileEnabled(localExec), lastOutput)
+		viewModel, err := loadWorkbenchViewModel(version, runtime, session, agentID, day, localExec, shellEnabled, lastOutput)
 		if err != nil {
 			return err
 		}
@@ -316,6 +317,24 @@ func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 			fmt.Fprintf(stderr, "tui: %v\n", err)
 			return 1
 		}
+		return 0
+	}
+
+	if interactive && supportsInteractiveWorkbench(stdin, stdout) {
+		driver := interactiveWorkbenchDriver{
+			version:      version,
+			runtime:      runtime,
+			session:      session,
+			agentID:      agentID,
+			day:          day,
+			localExec:    localExec,
+			shellEnabled: shellEnabled,
+		}
+		if err := tui.RunInteractiveWorkbench(stdin, stdout, driver); err != nil {
+			fmt.Fprintf(stderr, "tui: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "Lore stopped")
 		return 0
 	}
 
@@ -406,6 +425,26 @@ func clearInteractiveTUI(stdout io.Writer) {
 		return
 	}
 	fmt.Fprint(stdout, "\x1b[H\x1b[2J")
+}
+
+func supportsInteractiveWorkbench(stdin io.Reader, stdout io.Writer) bool {
+	inputFile, ok := stdin.(*os.File)
+	if !ok {
+		return false
+	}
+	outputFile, ok := stdout.(*os.File)
+	if !ok {
+		return false
+	}
+	inputInfo, err := inputFile.Stat()
+	if err != nil || inputInfo.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	outputInfo, err := outputFile.Stat()
+	if err != nil || outputInfo.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	return true
 }
 
 func runDraftCommand(args []string, stdout io.Writer, stderr io.Writer) int {
