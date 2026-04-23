@@ -198,8 +198,8 @@ func filterDraftsForDecision(drafts []model.Draft, decision operatoragent.Decisi
 
 func renderConsoleHelp() string {
 	return strings.TrimSpace(`
-Natural Language Console
-========================
+Lore Console
+============
 Examples:
   show status
   list drafts

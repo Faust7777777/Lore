@@ -158,9 +158,9 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func usage() string {
-	return `obsidian-harness
+	return `Lore
 
-Usage:
+Command:
   obsidian-harness [command]
 
 Commands:
@@ -168,7 +168,7 @@ Commands:
   bootstrap [workdir]  Scaffold the managed vault skeleton
   demo-p0a [workdir]   Run the managed doc -> draft -> apply demo chain
   demo-p0b [workdir]   Run the checkpoint -> daily report demo chain
-  tui                  Text workbench: dashboard + natural language operator loop
+  tui                  Lore dashboard + natural language operator loop
   console              Operator console: NL -> one explicit reviewed action
   daemon               Run the vault watcher daemon / one-shot scan
   draft                Review and act on pending drafts
@@ -244,7 +244,7 @@ func runConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 		return 0
 	}
 
-	fmt.Fprintln(stdout, "Obsidian Harness Console")
+	fmt.Fprintln(stdout, "Lore Console")
 	fmt.Fprintln(stdout, "The operator agent picks one explicit action per prompt. Type `help` for examples. Type `exit` to quit. A configured model-backed operator agent is required.")
 	scanner := bufio.NewScanner(stdin)
 	for {
@@ -338,13 +338,13 @@ func runTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 	scanner := bufio.NewScanner(stdin)
 	lastOutput := ""
 	for {
-		fmt.Fprint(stdout, "\nworkbench> ")
+		fmt.Fprint(stdout, "\nlore> ")
 		if !scanner.Scan() {
 			if err := scanner.Err(); err != nil {
 				fmt.Fprintf(stderr, "tui: %v\n", err)
 				return 1
 			}
-			fmt.Fprintln(stdout, "\nWorkbench stopped")
+			fmt.Fprintln(stdout, "\nLore stopped")
 			return 0
 		}
 
@@ -353,7 +353,7 @@ func runTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 		case "":
 			continue
 		case "/quit", "/exit":
-			fmt.Fprintln(stdout, "Workbench stopped")
+			fmt.Fprintln(stdout, "Lore stopped")
 			return 0
 		case "/refresh":
 			if err := render(lastOutput); err != nil {

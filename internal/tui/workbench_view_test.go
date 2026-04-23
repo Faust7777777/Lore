@@ -63,7 +63,7 @@ func TestRenderWorkbenchIncludesCorePanels(t *testing.T) {
 	)
 
 	for _, expected := range []string{
-		"Obsidian Harness Workbench",
+		"Lore",
 		"Managed Core",
 		"Pending Drafts",
 		"Focused Draft",

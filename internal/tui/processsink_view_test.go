@@ -24,7 +24,11 @@ func TestRenderProcessSinkDayIncludesWindowsAndReport(t *testing.T) {
 			State: model.CheckpointMaterialized,
 			Title: "morning checkpoint",
 		}},
-		Report: &model.DailyReport{Path: "09-过程沉淀/codex/daily/2026-04-22.md"},
+		Report: &model.DailyReport{
+			Path:    "09-process-sink/codex/daily/2026-04-22.md",
+			Title:   "daily rollup",
+			Content: "- 09:00 -> morning checkpoint",
+		},
 	})
 
 	for _, expected := range []string{
@@ -32,7 +36,9 @@ func TestRenderProcessSinkDayIncludesWindowsAndReport(t *testing.T) {
 		"codex",
 		"09:00-09:30",
 		"morning checkpoint",
-		"09-过程沉淀",
+		"09-process-sink",
+		"daily rollup",
+		"Latest Title",
 	} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("expected view to contain %q, got %q", expected, view)

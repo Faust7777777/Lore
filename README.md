@@ -1,4 +1,4 @@
-# Obsidian Harness
+# Lore
 
 Vertical Obsidian knowledge-operations harness for managed vault workflows.
 

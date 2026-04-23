@@ -3,7 +3,7 @@ package app
 import "strings"
 
 const (
-	defaultName      = "obsidian-harness"
+	defaultName      = "lore"
 	defaultVersion   = "dev"
 	defaultState     = "bootstrap"
 	defaultViewMode  = "text"

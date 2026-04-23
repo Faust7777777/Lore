@@ -100,8 +100,8 @@ func TestSessionHandleUsesInjectedAgentForStatusAndHelp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle(help) error = %v", err)
 	}
-	if !strings.Contains(helpView, "Natural Language Console") {
-		t.Fatalf("help view = %q, want Natural Language Console", helpView)
+	if !strings.Contains(helpView, "Lore Console") {
+		t.Fatalf("help view = %q, want Lore Console", helpView)
 	}
 	if len(agent.inputs) != 2 {
 		t.Fatalf("agent inputs = %d, want 2", len(agent.inputs))

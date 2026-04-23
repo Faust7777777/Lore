@@ -122,7 +122,7 @@ func (s *modelProcessSinkSummarizer) runSummaryPrompt(system string, user string
 
 func checkpointSummarySystemPrompt() string {
 	return strings.TrimSpace(`
-You summarize one external coding-agent checkpoint window for Obsidian Harness.
+You summarize one external coding-agent checkpoint window for Lore.
 Return exactly one JSON object and nothing else.
 
 Schema:
@@ -142,7 +142,7 @@ Rules:
 
 func dailySummarySystemPrompt() string {
 	return strings.TrimSpace(`
-You summarize one day of external coding-agent checkpoints for Obsidian Harness.
+You summarize one day of external coding-agent checkpoints for Lore.
 Return exactly one JSON object and nothing else.
 
 Schema:

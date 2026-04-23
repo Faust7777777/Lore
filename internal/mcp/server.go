@@ -109,7 +109,7 @@ func (s *Server) handle(_ context.Context, method string, rawParams json.RawMess
 				},
 			},
 			"serverInfo": map[string]any{
-				"name":    "obsidian-harness",
+				"name":    "lore",
 				"version": s.version,
 			},
 		}, nil

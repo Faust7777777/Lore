@@ -10,8 +10,8 @@ import (
 func RenderStatus(status app.Status) string {
 	var builder strings.Builder
 
-	builder.WriteString("Obsidian Harness\n")
-	builder.WriteString("================\n")
+	builder.WriteString("Lore\n")
+	builder.WriteString("====\n")
 	builder.WriteString("Minimal CLI/TUI bootstrap is wired.\n\n")
 	writeField(&builder, "Name", status.Name)
 	writeField(&builder, "Version", status.Version)

@@ -9,7 +9,7 @@ import (
 
 func TestRenderStatusIncludesCoreFields(t *testing.T) {
 	view := RenderStatus(app.Status{
-		Name:          "obsidian-harness",
+		Name:          "lore",
 		Version:       "0.1.0",
 		State:         "ready",
 		ViewMode:      "text",
@@ -19,7 +19,7 @@ func TestRenderStatusIncludesCoreFields(t *testing.T) {
 	})
 
 	for _, expected := range []string{
-		"Obsidian Harness",
+		"Lore",
 		"0.1.0",
 		"ready",
 		"text",

@@ -267,7 +267,7 @@ func extractJSONObject(content string) (string, error) {
 
 func systemPrompt() string {
 	return strings.TrimSpace(`
-You are the operator agent for Obsidian Harness.
+You are the operator agent for Lore.
 Return exactly one JSON object and nothing else.
 
 Allowed actions:

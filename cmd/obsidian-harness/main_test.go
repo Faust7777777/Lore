@@ -164,7 +164,7 @@ func TestRunDefaultsToStatus(t *testing.T) {
 	if stderr.Len() != 0 {
 		t.Fatalf("expected no stderr output, got %q", stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "Obsidian Harness") {
+	if !strings.Contains(stdout.String(), "Lore") {
 		t.Fatalf("expected status output, got %q", stdout.String())
 	}
 }
@@ -271,7 +271,7 @@ func TestRunTUIOnceStatus(t *testing.T) {
 	}
 	text := stdout.String()
 	for _, expected := range []string{
-		"Obsidian Harness Workbench",
+		"Lore",
 		"Pending Drafts",
 		"Process Sink",
 		"Last Action",

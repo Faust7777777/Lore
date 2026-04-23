@@ -11,8 +11,8 @@ import (
 func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, lastOutput string) string {
 	var builder strings.Builder
 
-	builder.WriteString("Obsidian Harness Workbench\n")
-	builder.WriteString("==========================\n")
+	builder.WriteString("Lore\n")
+	builder.WriteString("====\n")
 	writeField(&builder, "Version", version)
 	writeField(&builder, "WorkDir", managed.WorkDir)
 	writeField(&builder, "Vault", managed.VaultRoot)

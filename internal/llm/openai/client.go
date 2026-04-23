@@ -201,7 +201,7 @@ func (c *Client) chatCompletionOnce(ctx context.Context, req ChatCompletionReque
 	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
-	httpReq.Header.Set("User-Agent", "obsidian-harness/operator-agent")
+	httpReq.Header.Set("User-Agent", "lore/operator-agent")
 
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -260,7 +260,7 @@ func (c *Client) responsesOnce(ctx context.Context, req ChatCompletionRequest) (
 	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
-	httpReq.Header.Set("User-Agent", "obsidian-harness/operator-agent")
+	httpReq.Header.Set("User-Agent", "lore/operator-agent")
 
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -309,7 +309,7 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 	httpReq.Header.Set("Accept", "application/json")
-	httpReq.Header.Set("User-Agent", "obsidian-harness/operator-agent")
+	httpReq.Header.Set("User-Agent", "lore/operator-agent")
 
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {

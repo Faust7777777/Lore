@@ -6,7 +6,7 @@ func TestNewProvidesDefaults(t *testing.T) {
 	application := New(Config{})
 
 	status := application.Status()
-	if status.Name != "obsidian-harness" {
+	if status.Name != "lore" {
 		t.Fatalf("expected default name, got %q", status.Name)
 	}
 	if status.Version != "dev" {

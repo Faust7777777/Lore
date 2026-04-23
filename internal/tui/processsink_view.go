@@ -17,8 +17,21 @@ func RenderProcessSinkDay(view app.ProcessSinkDayView) string {
 	writeField(&builder, "Checkpoints", fmt.Sprintf("%d", len(view.Checkpoints)))
 	if view.Report != nil {
 		writeField(&builder, "Daily Report", view.Report.Path)
+		writeField(&builder, "Report Title", oneLine(view.Report.Title, 72))
 	} else {
 		writeField(&builder, "Daily Report", "missing")
+	}
+	if len(view.Checkpoints) > 0 {
+		latest := view.Checkpoints[len(view.Checkpoints)-1]
+		writeField(&builder, "Latest Window", latest.Window.WindowStart.Format("15:04")+"-"+latest.Window.WindowEnd.Format("15:04"))
+		writeField(&builder, "Latest Title", oneLine(latest.Title, 72))
+	}
+
+	if view.Report != nil && strings.TrimSpace(view.Report.Content) != "" {
+		builder.WriteString("\nDaily Report Preview\n")
+		builder.WriteString("--------------------\n")
+		builder.WriteString(strings.TrimSpace(excerpt(view.Report.Content, 280)))
+		builder.WriteString("\n")
 	}
 
 	builder.WriteString("\nWindows\n")
