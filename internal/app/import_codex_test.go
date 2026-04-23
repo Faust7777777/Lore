@@ -296,6 +296,61 @@ func TestRuntimeSyncCodexJSONLRejectsConcurrentSourceLock(t *testing.T) {
 	}
 }
 
+func TestRuntimeSyncCodexJSONLRejectsLiveOwnerLockPayload(t *testing.T) {
+	loc := useFixedLocalZone(t)
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "live-lock.jsonl")
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-live-lock","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"live lock"}}`,
+	)
+
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	absolutePath, err := filepath.Abs(transcriptPath)
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+	cursorKey := codexJSONLCursorKey(absolutePath)
+	lockPath := filepath.Join(runtime.Config.Paths.StateDir, "locks", codexJSONLLockName(cursorKey))
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(lock dir) error = %v", err)
+	}
+	lockPID := 424242
+	lockPayload := fmt.Sprintf(
+		"{\"pid\":%d,\"created_at\":%q,\"cursor_key\":%q}\n",
+		lockPID,
+		time.Now().UTC().Format(time.RFC3339Nano),
+		cursorKey,
+	)
+	if err := os.WriteFile(lockPath, []byte(lockPayload), 0o644); err != nil {
+		t.Fatalf("WriteFile(lockPath) error = %v", err)
+	}
+
+	previousProcessAlive := codexJSONLProcessAliveFunc
+	codexJSONLProcessAliveFunc = func(pid int) (bool, error) {
+		if pid != lockPID {
+			t.Fatalf("processAlive pid = %d, want %d", pid, lockPID)
+		}
+		return true, nil
+	}
+	t.Cleanup(func() {
+		codexJSONLProcessAliveFunc = previousProcessAlive
+	})
+
+	_, err = runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-live-lock",
+	}, time.Date(2026, 4, 22, 9, 10, 0, 0, loc))
+	if err == nil || !strings.Contains(err.Error(), "already syncing") {
+		t.Fatalf("SyncCodexJSONL() error = %v, want live-owner source lock rejection", err)
+	}
+}
+
 func TestRuntimeSyncCodexJSONLReclaimsStaleSourceLock(t *testing.T) {
 	loc := useFixedLocalZone(t)
 	workDir := t.TempDir()
@@ -340,6 +395,119 @@ func TestRuntimeSyncCodexJSONLReclaimsStaleSourceLock(t *testing.T) {
 	}
 	if _, err := os.Stat(lockPath); err == nil {
 		t.Fatalf("expected lock file %s to be removed after sync", lockPath)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("Stat(lockPath) error = %v", err)
+	}
+}
+
+func TestRuntimeSyncCodexJSONLReclaimsDeadOwnerLockImmediately(t *testing.T) {
+	loc := useFixedLocalZone(t)
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "dead-owner-lock.jsonl")
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-dead-owner-lock","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"recover dead owner lock"}}`,
+	)
+
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	absolutePath, err := filepath.Abs(transcriptPath)
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+	cursorKey := codexJSONLCursorKey(absolutePath)
+	lockPath := filepath.Join(runtime.Config.Paths.StateDir, "locks", codexJSONLLockName(cursorKey))
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(lock dir) error = %v", err)
+	}
+	lockPID := 434343
+	lockPayload := fmt.Sprintf(
+		"{\"pid\":%d,\"created_at\":%q,\"cursor_key\":%q}\n",
+		lockPID,
+		time.Now().UTC().Format(time.RFC3339Nano),
+		cursorKey,
+	)
+	if err := os.WriteFile(lockPath, []byte(lockPayload), 0o644); err != nil {
+		t.Fatalf("WriteFile(lockPath) error = %v", err)
+	}
+
+	previousProcessAlive := codexJSONLProcessAliveFunc
+	codexJSONLProcessAliveFunc = func(pid int) (bool, error) {
+		if pid != lockPID {
+			t.Fatalf("processAlive pid = %d, want %d", pid, lockPID)
+		}
+		return false, nil
+	}
+	t.Cleanup(func() {
+		codexJSONLProcessAliveFunc = previousProcessAlive
+	})
+
+	result, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-dead-owner-lock",
+	}, time.Date(2026, 4, 22, 9, 10, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("SyncCodexJSONL() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Changed = false, want dead-owner lock recovery import")
+	}
+	if _, err := os.Stat(lockPath); err == nil {
+		t.Fatalf("expected lock file %s to be removed after dead-owner recovery", lockPath)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("Stat(lockPath) error = %v", err)
+	}
+}
+
+func TestAcquireCodexJSONLLockOldReleaseDoesNotDeleteReacquiredLock(t *testing.T) {
+	stateDir := t.TempDir()
+	cursorKey := "codexjsonl:test-cursor"
+
+	releaseOld, err := acquireCodexJSONLLock(stateDir, cursorKey)
+	if err != nil {
+		t.Fatalf("acquireCodexJSONLLock(old) error = %v", err)
+	}
+
+	lockPath := filepath.Join(stateDir, "locks", codexJSONLLockName(cursorKey))
+	firstPayload, parsed := readCodexJSONLLockPayload(lockPath)
+	if !parsed || strings.TrimSpace(firstPayload.Token) == "" {
+		t.Fatalf("first lock payload = %+v, want parsed tokenized payload", firstPayload)
+	}
+
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatalf("Remove(old lock) error = %v", err)
+	}
+
+	releaseNew, err := acquireCodexJSONLLock(stateDir, cursorKey)
+	if err != nil {
+		t.Fatalf("acquireCodexJSONLLock(new) error = %v", err)
+	}
+	secondPayload, parsed := readCodexJSONLLockPayload(lockPath)
+	if !parsed || strings.TrimSpace(secondPayload.Token) == "" {
+		t.Fatalf("second lock payload = %+v, want parsed tokenized payload", secondPayload)
+	}
+	if secondPayload.Token == firstPayload.Token {
+		t.Fatalf("second token = %q, want different token from first", secondPayload.Token)
+	}
+
+	releaseOld()
+
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("Stat(new lock after old release) error = %v, want new lock to survive", err)
+	}
+	payloadAfterOldRelease, parsed := readCodexJSONLLockPayload(lockPath)
+	if !parsed || payloadAfterOldRelease.Token != secondPayload.Token {
+		t.Fatalf("payload after old release = %+v, want new token %q", payloadAfterOldRelease, secondPayload.Token)
+	}
+
+	releaseNew()
+
+	if _, err := os.Stat(lockPath); err == nil {
+		t.Fatalf("expected lock file %s to be removed by current owner release", lockPath)
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("Stat(lockPath) error = %v", err)
 	}

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +18,8 @@ import (
 
 const codexJSONLLockStaleAfter = 30 * time.Second
 
+var codexJSONLProcessAliveFunc = processAlive
+
 type SyncCodexJSONLResult struct {
 	Changed     bool
 	CursorKey   string
@@ -28,6 +31,7 @@ type codexJSONLLockPayload struct {
 	PID       int    `json:"pid"`
 	CreatedAt string `json:"created_at"`
 	CursorKey string `json:"cursor_key"`
+	Token     string `json:"token,omitempty"`
 }
 
 func (r *Runtime) SyncCodexJSONL(params ImportCodexJSONLParams, now time.Time) (SyncCodexJSONLResult, error) {
@@ -346,10 +350,15 @@ func acquireCodexJSONLLock(stateDir string, cursorKey string) (func(), error) {
 		return nil, err
 	}
 
+	token, err := newCodexJSONLLockToken()
+	if err != nil {
+		return nil, err
+	}
 	payload := codexJSONLLockPayload{
 		PID:       os.Getpid(),
 		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		CursorKey: cursorKey,
+		Token:     token,
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
@@ -367,7 +376,7 @@ func acquireCodexJSONLLock(stateDir string, cursorKey string) (func(), error) {
 				return nil, closeErr
 			}
 			return func() {
-				_ = os.Remove(lockPath)
+				_ = releaseCodexJSONLLock(lockPath, payload.Token)
 			}, nil
 		}
 		if !os.IsExist(err) {
@@ -396,9 +405,41 @@ func codexJSONLLockName(cursorKey string) string {
 	return hex.EncodeToString(sum[:8]) + ".lock"
 }
 
+func newCodexJSONLLockToken() (string, error) {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf[:]), nil
+}
+
+func releaseCodexJSONLLock(lockPath string, token string) error {
+	if strings.TrimSpace(token) == "" {
+		return nil
+	}
+	payload, parsed := readCodexJSONLLockPayload(lockPath)
+	if !parsed {
+		if _, err := os.Stat(lockPath); err != nil && os.IsNotExist(err) {
+			return nil
+		}
+		return nil
+	}
+	if strings.TrimSpace(payload.Token) != strings.TrimSpace(token) {
+		return nil
+	}
+	if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 func shouldReclaimCodexJSONLLock(lockPath string, now time.Time) (bool, string, error) {
 	payload, parsed := readCodexJSONLLockPayload(lockPath)
 	if parsed {
+		alive, err := codexJSONLProcessAliveFunc(payload.PID)
+		if err == nil && !alive {
+			return true, codexJSONLLockOwner(payload), nil
+		}
 		if createdAt, err := time.Parse(time.RFC3339Nano, payload.CreatedAt); err == nil {
 			if now.Sub(createdAt) > codexJSONLLockStaleAfter {
 				return true, codexJSONLLockOwner(payload), nil

@@ -635,6 +635,26 @@ func TestRunDaemonOnceSyncsCodexJSONLWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestRunDaemonOnceMissingCodexJSONLRemainsNonFatal(t *testing.T) {
+	workDir := t.TempDir()
+	clearOperatorEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"daemon", "run",
+		"--workdir", workDir,
+		"--once",
+		"--codex-jsonl", filepath.Join(workDir, "missing.jsonl"),
+	}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Codex JSONL sync failed") {
+		t.Fatalf("expected non-fatal daemon sync failure output, got %q", stdout.String())
+	}
+}
+
 func TestRunUnknownCommandReturnsUsageError(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

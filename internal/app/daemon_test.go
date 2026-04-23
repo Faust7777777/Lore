@@ -177,6 +177,53 @@ func TestRunVaultDaemonContinuesAfterCodexSyncFailure(t *testing.T) {
 	}
 }
 
+func TestRunVaultDaemonKeepsRunningAfterCodexSyncFailureUntilCancel(t *testing.T) {
+	workDir := t.TempDir()
+	runtime, err := OpenRuntime(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var output lockedBuffer
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runtime.RunVaultDaemon(ctx, VaultDaemonRunOptions{
+			PollEvery: 200 * time.Millisecond,
+			Stdout:    &output,
+			CodexJSONL: &ImportCodexJSONLParams{
+				InputPath: filepath.Join(workDir, "missing.jsonl"),
+				AgentID:   "codex",
+				SessionID: "session-missing-loop",
+			},
+		})
+	}()
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		text := output.String()
+		return strings.Contains(text, "Vault daemon running") && strings.Contains(text, "Codex JSONL sync failed")
+	})
+
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case err := <-errCh:
+		t.Fatalf("RunVaultDaemon() exited early with error = %v, want it to keep running until cancel", err)
+	default:
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("RunVaultDaemon() error after cancel = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunVaultDaemon() did not stop after cancel")
+	}
+}
+
 func TestRunVaultDaemonWatcherCreatesDraftAfterFileChange(t *testing.T) {
 	workDir := t.TempDir()
 	runtime, err := OpenRuntime(workDir)
