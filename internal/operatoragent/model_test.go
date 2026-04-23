@@ -2,6 +2,8 @@ package operatoragent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +34,7 @@ type fakeToolRuntime struct {
 	calls     []string
 	arguments []map[string]any
 	callErr   error
+	callFunc  func(name string, arguments map[string]any) (ToolResult, error)
 }
 
 func (f *fakeToolRuntime) DescribeTools(_ Context) []ToolDefinition {
@@ -41,6 +44,9 @@ func (f *fakeToolRuntime) DescribeTools(_ Context) []ToolDefinition {
 func (f *fakeToolRuntime) CallTool(name string, arguments map[string]any) (ToolResult, error) {
 	f.calls = append(f.calls, name)
 	f.arguments = append(f.arguments, arguments)
+	if f.callFunc != nil {
+		return f.callFunc(name, arguments)
+	}
 	if f.callErr != nil {
 		return ToolResult{}, f.callErr
 	}
@@ -72,6 +78,15 @@ func clearOperatorEnv(t *testing.T) {
 	} {
 		t.Setenv(key, "")
 	}
+}
+
+func mustJSONToolResult(t *testing.T, value any) ToolResult {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	return ToolResult{Content: string(data)}
 }
 
 func TestLoadEnvConfigDisabledWhenUnset(t *testing.T) {
@@ -320,6 +335,64 @@ func TestModelAgentRespondPromptListsGitToolsWhenShellModeIsDisabled(t *testing.
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
 		}
+	}
+}
+
+func TestModelAgentRespondPromptIncludesRuntimeAgentDocs(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{
+			Content: `{"type":"final","message":"ok"}`,
+		},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{
+			{Name: "system_doc_get", Description: "read one managed core doc"},
+		},
+		callFunc: func(name string, arguments map[string]any) (ToolResult, error) {
+			if name != "system_doc_get" {
+				return ToolResult{}, fmt.Errorf("unexpected tool: %s", name)
+			}
+			switch arguments["name"] {
+			case "agent":
+				return mustJSONToolResult(t, map[string]any{
+					"path":      "agent.md",
+					"doc_class": "agent_doc",
+					"content":   "# Lore Agent Instructions\n\n- Stay concise.\n- Respect governance.",
+				}), nil
+			case "identity":
+				return mustJSONToolResult(t, map[string]any{
+					"path":      "identity.md",
+					"doc_class": "identity_doc",
+					"content":   "# Lore Identity\n\n- Practical\n- Audit-aware",
+				}), nil
+			default:
+				return ToolResult{}, fmt.Errorf("unexpected system doc request: %+v", arguments)
+			}
+		},
+	}
+
+	_, err := agent.Respond("who are you in this workspace?", Context{DefaultAgentID: "codex"}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if len(client.requests) != 1 || len(client.requests[0].Messages) == 0 {
+		t.Fatalf("requests = %+v, want one request with system prompt", client.requests)
+	}
+	systemPrompt := client.requests[0].Messages[0].Content
+	for _, want := range []string{
+		"Workspace agent docs (supplemental; runtime hard rules above still win):",
+		"agent.md",
+		"# Lore Agent Instructions",
+		"identity.md",
+		"# Lore Identity",
+	} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
+		}
+	}
+	if len(runtime.calls) != 2 || runtime.calls[0] != "system_doc_get" || runtime.calls[1] != "system_doc_get" {
+		t.Fatalf("runtime calls = %+v, want two system_doc_get preloads", runtime.calls)
 	}
 }
 

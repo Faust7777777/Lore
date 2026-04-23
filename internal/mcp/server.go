@@ -182,7 +182,7 @@ func toolDefinitions() []map[string]any {
 		toolDefinition("system_doc_get", "Read one of the managed core documents.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "enum": []string{"system", "progress", "persona"}},
+				"name": map[string]any{"type": "string", "enum": []string{"system", "progress", "persona", "agent", "identity"}},
 			},
 			"required": []string{"name"},
 		}),

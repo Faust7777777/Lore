@@ -50,6 +50,27 @@ func TestServerToolsListAndCall(t *testing.T) {
 	if responses[1]["result"] == nil {
 		t.Fatalf("tools/list result is nil: %#v", responses[1])
 	}
+	toolsList := responses[1]["result"].(map[string]any)["tools"].([]any)
+	foundSystemDocEnum := false
+	for _, item := range toolsList {
+		tool := item.(map[string]any)
+		if tool["name"] != "system_doc_get" {
+			continue
+		}
+		properties := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
+		enumValues := properties["name"].(map[string]any)["enum"].([]any)
+		joined := make([]string, 0, len(enumValues))
+		for _, value := range enumValues {
+			joined = append(joined, value.(string))
+		}
+		if strings.Contains(strings.Join(joined, ","), "agent") && strings.Contains(strings.Join(joined, ","), "identity") {
+			foundSystemDocEnum = true
+		}
+	}
+	if !foundSystemDocEnum {
+		t.Fatal("tools/list missing agent/identity system_doc_get enum values")
+	}
+
 	result := responses[2]["result"].(map[string]any)
 	structured := result["structuredContent"].(map[string]any)
 	if structured["ready"] != true {

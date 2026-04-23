@@ -42,6 +42,12 @@ type loopEnvelope struct {
 	Message   string         `json:"message"`
 }
 
+type promptDoc struct {
+	Name    string
+	Path    string
+	Content string
+}
+
 type EnvConfig struct {
 	BaseURL string
 	APIKey  string
@@ -222,8 +228,9 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 	}
 
 	tools := runtime.DescribeTools(ctx)
+	runtimeDocs := loadRuntimePromptDocs(runtime, tools)
 	messages := []openai.Message{
-		{Role: "system", Content: loopSystemPrompt(tools, ctx)},
+		{Role: "system", Content: loopSystemPrompt(tools, runtimeDocs, ctx)},
 		{Role: "user", Content: buildLoopUserPrompt(raw, ctx)},
 	}
 
@@ -436,7 +443,7 @@ Return schema:
 `)
 }
 
-func loopSystemPrompt(tools []ToolDefinition, ctx Context) string {
+func loopSystemPrompt(tools []ToolDefinition, runtimeDocs []promptDoc, ctx Context) string {
 	var builder strings.Builder
 	localExecMode := "disabled"
 	if toolListContains(tools, "workspace_read") || toolListContains(tools, "workspace_list") {
@@ -480,6 +487,16 @@ Rules:
 	builder.WriteString(gitMode)
 	builder.WriteString("\n- shell_exec_mode: ")
 	builder.WriteString(shellMode)
+	if len(runtimeDocs) > 0 {
+		builder.WriteString("\n\nWorkspace agent docs (supplemental; runtime hard rules above still win):\n")
+		for _, doc := range runtimeDocs {
+			builder.WriteString("- ")
+			builder.WriteString(withFallback(strings.TrimSpace(doc.Path), strings.TrimSpace(doc.Name)))
+			builder.WriteString(":\n")
+			builder.WriteString(strings.TrimSpace(doc.Content))
+			builder.WriteString("\n")
+		}
+	}
 	builder.WriteString("\n\nAvailable tools:\n")
 	for _, tool := range tools {
 		builder.WriteString("- ")
@@ -502,6 +519,53 @@ Rules:
 		builder.WriteString(model.NormalizeDay(ctx.Now).Format("2006-01-02"))
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+func loadRuntimePromptDocs(runtime ToolRuntime, tools []ToolDefinition) []promptDoc {
+	if runtime == nil || !toolListContains(tools, "system_doc_get") {
+		return nil
+	}
+
+	docs := make([]promptDoc, 0, 2)
+	for _, name := range []string{"agent", "identity"} {
+		result, err := runtime.CallTool("system_doc_get", map[string]any{"name": name})
+		if err != nil {
+			continue
+		}
+		doc, ok := decodePromptDoc(name, result.Content)
+		if !ok {
+			continue
+		}
+		docs = append(docs, doc)
+	}
+	return docs
+}
+
+func decodePromptDoc(name string, raw string) (promptDoc, bool) {
+	var doc model.VaultDocument
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &doc); err != nil {
+		return promptDoc{}, false
+	}
+	content := promptDocExcerpt(doc.Content, 1600)
+	if content == "" {
+		return promptDoc{}, false
+	}
+	return promptDoc{
+		Name:    strings.TrimSpace(name),
+		Path:    strings.TrimSpace(doc.Path),
+		Content: content,
+	}, true
+}
+
+func promptDocExcerpt(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if limit > 0 && len(value) > limit {
+		return value[:limit] + "\n..."
+	}
+	return value
 }
 
 func toolListContains(tools []ToolDefinition, name string) bool {

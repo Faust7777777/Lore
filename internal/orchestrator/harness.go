@@ -313,7 +313,9 @@ func (h *Harness) allowsLowRiskDirectWrite(relPath string) bool {
 	}
 	if sameRelPath(relPath, h.cfg.Vault.ManagedCore.SystemDoc) ||
 		sameRelPath(relPath, h.cfg.Vault.ManagedCore.ProgressIndex) ||
-		sameRelPath(relPath, h.cfg.Vault.ManagedCore.Persona) {
+		sameRelPath(relPath, h.cfg.Vault.ManagedCore.Persona) ||
+		sameRelPath(relPath, h.cfg.Vault.ManagedCore.AgentDoc) ||
+		sameRelPath(relPath, h.cfg.Vault.ManagedCore.IdentityDoc) {
 		return false
 	}
 	if isUnderRelPath(relPath, processSinkRelDir(h.cfg.Paths.VaultRoot, h.cfg.Paths.ProcessSinkDir)) {

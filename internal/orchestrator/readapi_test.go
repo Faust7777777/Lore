@@ -40,6 +40,25 @@ func TestManagedStatusAndContextPack(t *testing.T) {
 	if !status.Ready {
 		t.Fatal("ManagedStatus().Ready = false, want true")
 	}
+	if len(status.CoreDocs) < 5 {
+		t.Fatalf("len(status.CoreDocs) = %d, want at least 5", len(status.CoreDocs))
+	}
+
+	agentDoc, err := h.SystemDocGet("agent")
+	if err != nil {
+		t.Fatalf("SystemDocGet(agent) error = %v", err)
+	}
+	if !strings.Contains(agentDoc.Content, "Lore Agent Instructions") {
+		t.Fatalf("agent doc content missing expected heading: %s", agentDoc.Content)
+	}
+
+	identityDoc, err := h.SystemDocGet("identity")
+	if err != nil {
+		t.Fatalf("SystemDocGet(identity) error = %v", err)
+	}
+	if !strings.Contains(identityDoc.Content, "Lore Identity") {
+		t.Fatalf("identity doc content missing expected heading: %s", identityDoc.Content)
+	}
 
 	pack, err := h.ContextPack(targetPath, "SQL", 5)
 	if err != nil {

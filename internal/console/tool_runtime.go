@@ -41,7 +41,7 @@ func (r toolRuntime) DescribeTools(_ operatoragent.Context) []operatoragent.Tool
 		{Name: "draft_request_revision", Description: "Request revision on a draft.", Arguments: `{"draft_id":"optional","use_focused_draft":true}`},
 		{Name: "draft_apply", Description: "Apply an approved draft to the vault.", Arguments: `{"draft_id":"optional","use_focused_draft":true}`},
 		{Name: "process_sink_day", Description: "Render checkpoint and daily report status for one agent day.", Arguments: `{"agent_id":"codex","day":"YYYY-MM-DD"}`},
-		{Name: "system_doc_get", Description: "Read a managed core document by name.", Arguments: `{"name":"system|progress|persona"}`},
+		{Name: "system_doc_get", Description: "Read a managed core document by name.", Arguments: `{"name":"system|progress|persona|agent|identity"}`},
 		{Name: "vault_read", Description: "Read one markdown note from the managed vault.", Arguments: `{"path":"relative/path.md"}`},
 		{Name: "vault_list", Description: "List files and folders under one vault directory.", Arguments: `{"dir":"relative/dir"}`},
 		{Name: "vault_search_text", Description: "Search markdown text in the vault.", Arguments: `{"query":"text","dir":"","limit":5}`},

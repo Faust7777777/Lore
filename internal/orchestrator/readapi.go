@@ -18,6 +18,8 @@ func (h *Harness) ManagedStatus() (model.ManagedStatusView, error) {
 		h.coreDocStatus("system", h.cfg.Vault.ManagedCore.SystemDoc),
 		h.coreDocStatus("progress", h.cfg.Vault.ManagedCore.ProgressIndex),
 		h.coreDocStatus("persona", h.cfg.Vault.ManagedCore.Persona),
+		h.coreDocStatus("agent", h.cfg.Vault.ManagedCore.AgentDoc),
+		h.coreDocStatus("identity", h.cfg.Vault.ManagedCore.IdentityDoc),
 	}
 
 	ready := true
@@ -303,6 +305,10 @@ func (h *Harness) resolveSystemDoc(name string) (string, model.DocClass, error) 
 		return h.cfg.Vault.ManagedCore.ProgressIndex, model.DocClassProgressIndex, nil
 	case "persona":
 		return h.cfg.Vault.ManagedCore.Persona, model.DocClassPersona, nil
+	case "agent", "agent_doc":
+		return h.cfg.Vault.ManagedCore.AgentDoc, model.DocClassAgentDoc, nil
+	case "identity", "identity_doc":
+		return h.cfg.Vault.ManagedCore.IdentityDoc, model.DocClassIdentityDoc, nil
 	default:
 		return "", model.DocClassUnknown, fmt.Errorf("unknown system document: %s", name)
 	}

@@ -15,6 +15,8 @@ const (
 	DocClassSystemDoc     DocClass = "system_doc"
 	DocClassProgressIndex DocClass = "progress_index"
 	DocClassPersona       DocClass = "persona"
+	DocClassAgentDoc      DocClass = "agent_doc"
+	DocClassIdentityDoc   DocClass = "identity_doc"
 	DocClassPlanMaster    DocClass = "plan_master"
 	DocClassPlanWeek      DocClass = "plan_week"
 	DocClassCheckpoint    DocClass = "checkpoint"
@@ -33,6 +35,8 @@ type ManagedCorePaths struct {
 	SystemDoc     string `json:"system_doc"`
 	ProgressIndex string `json:"progress_index"`
 	Persona       string `json:"persona"`
+	AgentDoc      string `json:"agent_doc"`
+	IdentityDoc   string `json:"identity_doc"`
 }
 
 type WritePolicy struct {

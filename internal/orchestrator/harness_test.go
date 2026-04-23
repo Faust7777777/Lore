@@ -71,6 +71,8 @@ func TestWriteLowRiskNoteRejectsGovernedPaths(t *testing.T) {
 		cfg.Vault.ManagedCore.SystemDoc,
 		cfg.Vault.ManagedCore.ProgressIndex,
 		cfg.Vault.ManagedCore.Persona,
+		cfg.Vault.ManagedCore.AgentDoc,
+		cfg.Vault.ManagedCore.IdentityDoc,
 		filepath.Join("0-\u6392\u671f", "04-\u6267\u884c", "week.md"),
 		filepath.ToSlash(filepath.Join("09-\u8fc7\u7a0b\u6c89\u6dc0", "codex", "2026-04-22.md")),
 		".obsidian/private.md",
@@ -98,8 +100,19 @@ func TestBootstrapAndDraftLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BootstrapManagedVault() error = %v", err)
 	}
-	if len(created) < 3 {
-		t.Fatalf("created = %d, want at least 3 managed docs", len(created))
+	if len(created) < 5 {
+		t.Fatalf("created = %d, want at least 5 managed docs", len(created))
+	}
+	for _, relPath := range []string{
+		cfg.Vault.ManagedCore.SystemDoc,
+		cfg.Vault.ManagedCore.ProgressIndex,
+		cfg.Vault.ManagedCore.Persona,
+		cfg.Vault.ManagedCore.AgentDoc,
+		cfg.Vault.ManagedCore.IdentityDoc,
+	} {
+		if _, err := os.Stat(filepath.Join(cfg.Paths.VaultRoot, relPath)); err != nil {
+			t.Fatalf("expected managed doc %q to exist: %v", relPath, err)
+		}
 	}
 
 	planPath := filepath.Join(cfg.Paths.VaultRoot, "0-\u6392\u671f", "04-\u6267\u884c", "week.md")

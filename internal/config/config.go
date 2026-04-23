@@ -63,15 +63,17 @@ func Default(workDir string) Config {
 			VaultRoot:      filepath.Join(workDir, "vault"),
 			StateDir:       filepath.Join(workDir, "state"),
 			AuditLogDir:    filepath.Join(workDir, "state", "audit"),
-			ProcessSinkDir: filepath.Join(workDir, "vault", "09-过程沉淀"),
+			ProcessSinkDir: filepath.Join(workDir, "vault", "09-\u8fc7\u7a0b\u6c89\u6dc0"),
 		},
 		Vault: VaultConfig{
 			DebounceWindow: 500 * time.Millisecond,
 			TempSuffix:     ".obsidian-harness-tmp",
 			ManagedCore: model.ManagedCorePaths{
-				SystemDoc:     filepath.Join("00-系统", "系统说明.md"),
-				ProgressIndex: filepath.Join("0-排期", "00-系统", "文档进度总表.md"),
-				Persona:       filepath.Join("03-画像", "人物画像.md"),
+				SystemDoc:     filepath.Join("00-\u7cfb\u7edf", "\u7cfb\u7edf\u8bf4\u660e.md"),
+				ProgressIndex: filepath.Join("0-\u6392\u671f", "00-\u7cfb\u7edf", "\u6587\u6863\u8fdb\u5ea6\u603b\u8868.md"),
+				Persona:       filepath.Join("03-\u753b\u50cf", "\u4eba\u7269\u753b\u50cf.md"),
+				AgentDoc:      "agent.md",
+				IdentityDoc:   "identity.md",
 			},
 		},
 		Runtime: RuntimeConfig{
