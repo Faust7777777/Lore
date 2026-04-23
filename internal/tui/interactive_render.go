@@ -7,8 +7,17 @@ import (
 )
 
 func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
-	leftWidth := maxInt(40, (model.width*2)/3)
-	rightWidth := maxInt(28, model.width-leftWidth-1)
+	w := model.width
+	narrow := w < 80
+
+	var leftWidth, rightWidth int
+	if narrow {
+		leftWidth = maxInt(30, (w*3)/4)
+		rightWidth = maxInt(20, w-leftWidth-1)
+	} else {
+		leftWidth = maxInt(40, (w*2)/3)
+		rightWidth = maxInt(28, w-leftWidth-1)
+	}
 	contentHeight := maxInt(12, model.height-8)
 	rightTopHeight := maxInt(8, (contentHeight*2)/3)
 	rightBottomHeight := maxInt(5, contentHeight-rightTopHeight-1)
@@ -19,12 +28,19 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 	statusPane := paneStyle(model.focus == focusStatus).Width(rightWidth).Height(rightTopHeight).Render(
 		renderPaneTitle("Context & Status", model.focus == focusStatus, false, "", "") + "\n" + model.statusViewport.View(),
 	)
+
+	var approvalTitle string
+	if narrow {
+		approvalTitle = "Approvals"
+	} else {
+		approvalTitle = "Pending Approvals"
+	}
 	approvalPane := paneStyle(false).Width(rightWidth).Height(rightBottomHeight).Render(
-		renderPaneTitle("Pending Approvals", false, false, "", "") + "\n" + renderApprovalPlaceholder(),
+		renderPaneTitle(approvalTitle, false, false, "", "") + "\n" + renderApprovalPlaceholder(),
 	)
 	rightColumn := lipgloss.JoinVertical(lipgloss.Left, statusPane, approvalPane)
 
-	inputPane := inputPaneStyle(model.focus == focusInput).Width(model.width).Render(
+	inputPane := inputPaneStyle(model.focus == focusInput).Width(w).Render(
 		renderInputHeader(model.focus == focusInput, model.running) + "\n" + model.input.View(),
 	)
 
@@ -43,29 +59,59 @@ func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput stri
 	}
 
 	if len(turns) == 0 {
-		builder.WriteString("No conversation yet.\n")
+		builder.WriteString(styleMutedText.Render("Ready. Ask Lore about your vault, drafts, or process sink."))
+		builder.WriteString("\n")
 	} else {
 		for _, turn := range turns {
-			role := strings.ToUpper(strings.TrimSpace(turn.Role))
-			if role == "" {
-				role = "UNKNOWN"
+			role := strings.ToLower(strings.TrimSpace(turn.Role))
+			content := strings.TrimSpace(turn.Content)
+			switch role {
+			case "user":
+				builder.WriteString(styleUserLabel.Render("You") + "\n")
+			case "assistant":
+				builder.WriteString(styleAssistantLabel.Render("Lore") + "\n")
+			default:
+				builder.WriteString(styleMutedText.Render(strings.ToUpper(role)) + "\n")
 			}
-			builder.WriteString(role + "\n")
-			builder.WriteString(indentBlock(strings.TrimSpace(turn.Content), "  "))
+			builder.WriteString(indentBlock(content, "  "))
 			builder.WriteString("\n\n")
 		}
 	}
 
 	if running && strings.TrimSpace(pendingLine) != "" {
-		builder.WriteString("RUNNING\n")
+		builder.WriteString(styleRunning.Render(glyphFocus+" You") + "\n")
 		builder.WriteString(indentBlock(strings.TrimSpace(pendingLine), "  "))
-		builder.WriteString("\n\n")
+		builder.WriteString("\n")
+		builder.WriteString(styleRunning.Render("  "+glyphThinking+" thinking") + "\n\n")
 	}
 
-	builder.WriteString("Latest Output\n")
-	builder.WriteString("-------------\n")
+	if len(viewModel.ToolTrace) > 0 {
+		builder.WriteString(thinRule(40) + "\n")
+		builder.WriteString(styleSectionHead.Render("Tool Calls") + "\n")
+		limit := minInt(5, len(viewModel.ToolTrace))
+		for _, item := range viewModel.ToolTrace[:limit] {
+			statusStyle := styleMutedText
+			switch strings.ToLower(item.Status) {
+			case "ok", "success":
+				statusStyle = styleOK
+			case "error", "fail", "failed":
+				statusStyle = styleErr
+			case "running":
+				statusStyle = styleRunning
+			}
+			builder.WriteString("  " + styleToolName.Render(oneLine(item.Name, 24)) + " " + statusStyle.Render(item.Status))
+			if item.Error != "" {
+				builder.WriteString(" " + styleErr.Render(oneLine(item.Error, 40)))
+			}
+			builder.WriteString("\n")
+		}
+		builder.WriteString("\n")
+	}
+
+	builder.WriteString(thinRule(40) + "\n")
+	builder.WriteString(styleSectionHead.Render("Latest Output") + "\n")
 	if strings.TrimSpace(lastOutput) == "" {
-		builder.WriteString("No active output.\n")
+		builder.WriteString(styleMutedText.Render("  No active output.") + "\n")
 	} else {
 		builder.WriteString(indentBlock(strings.TrimSpace(excerpt(lastOutput, 2200)), "  "))
 		builder.WriteString("\n")
@@ -77,90 +123,90 @@ func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput stri
 func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 	var builder strings.Builder
 
-	writeField(&builder, "Profile", viewModel.Snapshot.Profile)
-	writeField(&builder, "Ready", yesNo(viewModel.Snapshot.Ready))
-	writeField(&builder, "Health", viewModel.Snapshot.HealthStatus)
-	writeField(&builder, "Message", oneLine(viewModel.Snapshot.HealthMessage, 72))
-	writeField(&builder, "Drafts", viewModel.Snapshot.DraftSummary())
-	writeField(&builder, "Agent", viewModel.Snapshot.AgentID)
-	writeField(&builder, "Day", viewModel.Snapshot.Day.Format("2006-01-02"))
+	healthStyle := styleOK
+	switch strings.ToLower(viewModel.Snapshot.HealthStatus) {
+	case "error", "fail", "critical":
+		healthStyle = styleErr
+	case "warn", "warning", "degraded":
+		healthStyle = styleWarn
+	}
 
-	builder.WriteString("\nCore Docs\n")
-	builder.WriteString("---------\n")
+	readyStyle := styleOK
+	readyLabel := "yes"
+	if !viewModel.Snapshot.Ready {
+		readyStyle = styleErr
+		readyLabel = "no"
+	}
+
+	builder.WriteString(styleSectionHead.Render("System") + "\n")
+	builder.WriteString("  Profile  " + viewModel.Snapshot.Profile + "\n")
+	builder.WriteString("  Ready    " + readyStyle.Render(readyLabel) + "\n")
+	builder.WriteString("  Health   " + healthStyle.Render(viewModel.Snapshot.HealthStatus) + "\n")
+	if msg := oneLine(viewModel.Snapshot.HealthMessage, 48); msg != "" {
+		builder.WriteString("  " + styleMutedText.Render(msg) + "\n")
+	}
+	builder.WriteString("  Drafts   " + viewModel.Snapshot.DraftSummary() + "\n")
+	builder.WriteString("  Agent    " + oneLine(viewModel.Snapshot.AgentID, 20) + "\n")
+	builder.WriteString("  Day      " + viewModel.Snapshot.Day.Format("2006-01-02") + "\n")
+
+	builder.WriteString("\n" + styleSectionHead.Render("Core Docs") + "\n")
 	if len(viewModel.ManagedCore) == 0 {
-		builder.WriteString("No managed docs.\n")
+		builder.WriteString("  " + styleMutedText.Render("None.") + "\n")
 	} else {
 		for _, doc := range viewModel.ManagedCore {
-			state := "missing"
 			if doc.Exists {
-				state = "ready"
+				builder.WriteString("  " + styleOK.Render(glyphOK) + " " + doc.Name + "\n")
+			} else {
+				builder.WriteString("  " + styleErr.Render(glyphMissing) + " " + styleMutedText.Render(doc.Name) + "\n")
 			}
-			builder.WriteString("- " + doc.Name + " [" + state + "]\n")
 		}
 	}
 
-	builder.WriteString("\nPending Drafts\n")
-	builder.WriteString("--------------\n")
+	builder.WriteString("\n" + styleSectionHead.Render("Pending Drafts") + "\n")
 	if len(viewModel.PendingDrafts) == 0 {
-		builder.WriteString("No pending drafts.\n")
+		builder.WriteString("  " + styleMutedText.Render("None.") + "\n")
 	} else {
 		limit := minInt(4, len(viewModel.PendingDrafts))
 		for _, draft := range viewModel.PendingDrafts[:limit] {
-			builder.WriteString("- " + oneLine(draft.Title, 48) + "\n")
+			builder.WriteString("  " + styleWarn.Render(glyphItem) + " " + oneLine(draft.Title, 36) + "\n")
 		}
 	}
 
-	builder.WriteString("\nProcess Sink\n")
-	builder.WriteString("------------\n")
+	builder.WriteString("\n" + styleSectionHead.Render("Process Sink") + "\n")
 	if len(viewModel.ProcessSink.Checkpoints) == 0 {
-		builder.WriteString("No checkpoints.\n")
+		builder.WriteString("  " + styleMutedText.Render("No data.") + "\n")
 	} else {
 		latest := viewModel.ProcessSink.Checkpoints[len(viewModel.ProcessSink.Checkpoints)-1]
-		builder.WriteString("Latest: " + latest.Window.WindowStart.Format("15:04") + "-" + latest.Window.WindowEnd.Format("15:04") + "\n")
-		builder.WriteString(oneLine(latest.Title, 60) + "\n")
-	}
-
-	builder.WriteString("\nTool Trace\n")
-	builder.WriteString("----------\n")
-	if len(viewModel.ToolTrace) == 0 {
-		builder.WriteString("No tool calls.\n")
-	} else {
-		limit := minInt(5, len(viewModel.ToolTrace))
-		for idx, item := range viewModel.ToolTrace[:limit] {
-			builder.WriteString(oneLine(strings.ToUpper(item.Status), 8) + " ")
-			builder.WriteString(oneLine(item.Name, 28))
-			if idx < limit-1 {
-				builder.WriteString("\n")
-			}
-		}
-		builder.WriteString("\n")
+		builder.WriteString("  " + latest.Window.WindowStart.Format("15:04") + glyphDash + latest.Window.WindowEnd.Format("15:04") + "\n")
+		builder.WriteString("  " + oneLine(latest.Title, 40) + "\n")
 	}
 
 	return builder.String()
 }
 
 func renderApprovalPlaceholder() string {
-	return "No pending actions.\n\nRuntime-backed approval queue is not wired into the interactive shell yet.\nManaged core writes still go through draft -> review -> apply."
+	return styleMutedText.Render("No pending actions.") + "\n" +
+		styleMutedText.Render("Drafts go through review before apply.")
 }
 
 func renderPaneTitle(title string, focused bool, running bool, pendingLine string, spin string) string {
 	status := ""
 	if running && strings.TrimSpace(pendingLine) != "" {
-		status = "  " + strings.TrimSpace(spin) + " running"
+		status = "  " + styleRunning.Render(strings.TrimSpace(spin)+" running")
 	}
 	if focused {
-		return focusedTitleStyle.Render(title) + titleStatusStyle.Render(status)
+		return focusedTitleStyle.Render(glyphFocus+" "+title) + status
 	}
-	return titleStyle.Render(title) + titleStatusStyle.Render(status)
+	return titleStyle.Render("  "+title) + status
 }
 
 func renderInputHeader(focused bool, running bool) string {
-	label := "Input"
-	if focused {
-		label = "Input (focused)"
-	}
 	if running {
-		return focusedTitleStyle.Render(label) + titleStatusStyle.Render("  agent running...")
+		return focusedTitleStyle.Render(glyphFocus+" Input") + "  " + styleRunning.Render("agent running...")
 	}
-	return focusedTitleStyle.Render(label) + titleStatusStyle.Render("  Enter submit | Tab switch pane | Ctrl+C quit")
+	label := "  Input"
+	if focused {
+		label = glyphFocus + " Input"
+	}
+	return focusedTitleStyle.Render(label) + "  " + styleMutedText.Render("Enter send "+glyphSep+" Tab switch "+glyphSep+" Ctrl+C quit")
 }
