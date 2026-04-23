@@ -112,6 +112,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 0
 	case "console":
 		return runConsoleCommand(args[1:], os.Stdin, stdout, stderr)
+	case "daemon":
+		return runDaemonCommand(args[1:], stdout, stderr)
 	case "draft":
 		return runDraftCommand(args[1:], stdout, stderr)
 	case "process-sink":
@@ -165,6 +167,7 @@ Commands:
   demo-p0a [workdir]   Run the managed doc -> draft -> apply demo chain
   demo-p0b [workdir]   Run the checkpoint -> daily report demo chain
   console              Operator console: NL -> one explicit reviewed action
+  daemon               Run the vault watcher daemon / one-shot scan
   draft                Review and act on pending drafts
   process-sink         Inspect checkpoint and daily report status
   models               List models from the configured LLM endpoint
@@ -346,6 +349,45 @@ func runDraftCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 0
 	default:
 		fmt.Fprintf(stderr, "draft: unknown subcommand %q\n", args[0])
+		return 1
+	}
+}
+
+func runDaemonCommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "daemon: missing subcommand")
+		fmt.Fprintln(stderr, "usage: obsidian-harness daemon run [--workdir <dir>] [--poll 2s] [--debounce 500ms] [--once]")
+		return 1
+	}
+
+	switch args[0] {
+	case "run":
+		workDir, pollEvery, debounce, once, err := parseDaemonFlags(args[1:], stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		runtime.Config.Vault.DebounceWindow = debounce
+
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		if err := runtime.RunVaultDaemon(ctx, app.VaultDaemonRunOptions{
+			PollEvery: pollEvery,
+			Once:      once,
+			Stdout:    stdout,
+		}); err != nil {
+			fmt.Fprintf(stderr, "daemon run: %v\n", err)
+			return 1
+		}
+		return 0
+	default:
+		fmt.Fprintf(stderr, "daemon: unknown subcommand %q\n", args[0])
 		return 1
 	}
 }
@@ -575,6 +617,28 @@ func parseConsoleFlags(args []string, stderr io.Writer) (string, string, error) 
 		*workDir = cwd
 	}
 	return filepath.Clean(*workDir), strings.TrimSpace(*once), nil
+}
+
+func parseDaemonFlags(args []string, stderr io.Writer) (string, time.Duration, time.Duration, bool, error) {
+	flags := flag.NewFlagSet("daemon run", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	pollEvery := flags.Duration("poll", 2*time.Second, "poll interval for vault scans")
+	debounce := flags.Duration("debounce", 500*time.Millisecond, "minimum stable age before processing a file change")
+	once := flags.Bool("once", false, "run one scan and exit")
+
+	if err := flags.Parse(args); err != nil {
+		return "", 0, 0, false, err
+	}
+	if strings.TrimSpace(*workDir) == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", 0, 0, false, err
+		}
+		*workDir = cwd
+	}
+	return filepath.Clean(*workDir), *pollEvery, *debounce, *once, nil
 }
 
 func parseDraftFlags(name string, args []string, stderr io.Writer, requireID bool) (string, string, error) {

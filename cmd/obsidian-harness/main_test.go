@@ -13,6 +13,7 @@ import (
 
 	"obsidian-harness/internal/app"
 	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/vault"
 )
 
 func clearOperatorEnv(t *testing.T) {
@@ -456,6 +457,43 @@ func TestRunConsoleREPLDraftFlow(t *testing.T) {
 	}
 }
 
+func TestRunDaemonOnceTriggersDraftAfterStablePlanChange(t *testing.T) {
+	workDir := t.TempDir()
+	clearOperatorEnv(t)
+
+	runtime, err := app.OpenRuntime(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	if _, err := runtime.Bootstrap(time.Date(2026, 4, 23, 9, 0, 0, 0, time.Local)); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	planPath := filepath.Join(runtime.Config.Paths.VaultRoot, "0-排期", "04-执行", "week.md")
+	writeMainTestPlan(t, runtime, planPath, "# Week\n\n- [ ] initial", time.Now().Add(-2*time.Second))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"daemon", "run", "--workdir", workDir, "--once"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code on prime scan, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Vault daemon scan") {
+		t.Fatalf("expected daemon scan output, got %q", stdout.String())
+	}
+
+	writeMainTestPlan(t, runtime, planPath, "# Week\n\n- [x] changed", time.Now().Add(-2*time.Second))
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = run([]string{"daemon", "run", "--workdir", workDir, "--once"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code on changed scan, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "triggered drafts: 1") {
+		t.Fatalf("expected triggered draft output, got %q", stdout.String())
+	}
+}
+
 func TestRunUnknownCommandReturnsUsageError(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -487,6 +525,17 @@ func seedDraftForCLI(t *testing.T, workDir string, content string) string {
 		t.Fatalf("ObserveDocumentChange() error = %v", err)
 	}
 	return draft.ID
+}
+
+func writeMainTestPlan(t *testing.T, runtime *app.Runtime, absPath string, content string, modTime time.Time) {
+	t.Helper()
+
+	if _, err := vault.WriteFileAtomic(absPath, []byte(content), runtime.Config.Vault.TempSuffix); err != nil {
+		t.Fatalf("WriteFileAtomic(plan) error = %v", err)
+	}
+	if err := os.Chtimes(absPath, modTime, modTime); err != nil {
+		t.Fatalf("Chtimes(plan) error = %v", err)
+	}
 }
 
 func seedProcessSinkForCLI(t *testing.T, workDir string) {
