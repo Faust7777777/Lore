@@ -314,6 +314,22 @@ func TestRunTUIOnceStatus(t *testing.T) {
 	}
 }
 
+func TestRunTUIInteractiveSurfacesActionErrorsInWorkbench(t *testing.T) {
+	workDir := t.TempDir()
+	configureLLMTestEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	input := strings.NewReader("approve current draft\n/quit\n")
+	exitCode := runTUICommand([]string{"--workdir", workDir}, input, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Last Action") || !strings.Contains(stdout.String(), "Error:") {
+		t.Fatalf("expected interactive tui to surface action error in workbench, got %q", stdout.String())
+	}
+}
+
 func TestRunModelsList(t *testing.T) {
 	clearOperatorEnv(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

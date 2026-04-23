@@ -105,7 +105,7 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 		fmt.Fprintf(stdout, "P0-B completed\n- checkpoint: %s\n- report: %s\n", result.Checkpoint.Path, result.Report.Path)
 		return 0
 	case "tui":
-		return runTUICommand(args[1:], stdin, stdout, stderr, version)
+		return RunTUICommand(args[1:], stdin, stdout, stderr, version)
 	case "console":
 		return RunConsoleCommand(args[1:], stdin, stdout, stderr, version)
 	case "daemon":
@@ -276,7 +276,7 @@ func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 	}
 }
 
-func runTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, version string) int {
+func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, version string) int {
 	workDir, utterance, localExec, agentID, day, err := parseTUIFlags(args, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -292,8 +292,12 @@ func runTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 	session := console.NewSession(version)
 	session.DefaultAgentID = agentID
 	session.EnableLocalWorkTools = localExec
+	interactive := strings.TrimSpace(utterance) == ""
 
 	render := func(lastOutput string) error {
+		if interactive {
+			clearInteractiveTUI(stdout)
+		}
 		managed, err := runtime.ManagedStatus()
 		if err != nil {
 			return err
@@ -365,7 +369,11 @@ func runTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 
 		output, err := session.Handle(line, runtime)
 		if err != nil {
-			fmt.Fprintf(stderr, "tui action: %v\n", err)
+			lastOutput = "Error: " + err.Error()
+			if err := render(lastOutput); err != nil {
+				fmt.Fprintf(stderr, "tui: %v\n", err)
+				return 1
+			}
 			continue
 		}
 		lastOutput = output
@@ -374,6 +382,21 @@ func runTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 			return 1
 		}
 	}
+}
+
+func clearInteractiveTUI(stdout io.Writer) {
+	file, ok := stdout.(*os.File)
+	if !ok {
+		return
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return
+	}
+	if info.Mode()&os.ModeCharDevice == 0 {
+		return
+	}
+	fmt.Fprint(stdout, "\x1b[H\x1b[2J")
 }
 
 func runDraftCommand(args []string, stdout io.Writer, stderr io.Writer) int {

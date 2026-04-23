@@ -21,3 +21,6 @@ func runConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 	return cli.RunConsoleCommand(args, stdin, stdout, stderr, version)
 }
 
+func runTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	return cli.RunTUICommand(args, stdin, stdout, stderr, version)
+}
