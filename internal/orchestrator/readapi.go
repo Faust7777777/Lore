@@ -428,7 +428,10 @@ func entryKind(isDir bool) string {
 }
 
 func currentReadActor() string {
-	agentID := strings.TrimSpace(os.Getenv("OBSIDIAN_HARNESS_MCP_AGENT_ID"))
+	agentID := strings.TrimSpace(os.Getenv("LORE_MCP_AGENT_ID"))
+	if agentID == "" {
+		agentID = strings.TrimSpace(os.Getenv("OBSIDIAN_HARNESS_MCP_AGENT_ID"))
+	}
 	if agentID == "" {
 		return "local"
 	}

@@ -32,11 +32,11 @@ func RenderDraftList(drafts []model.Draft) string {
 	}
 	builder.WriteString("\n")
 	builder.WriteString("Next:\n")
-	builder.WriteString("  obsidian-harness draft review <id>\n")
-	builder.WriteString("  obsidian-harness draft approve <id>\n")
-	builder.WriteString("  obsidian-harness draft reject <id>\n")
-	builder.WriteString("  obsidian-harness draft request-revision <id>\n")
-	builder.WriteString("  obsidian-harness draft apply <id>\n")
+	builder.WriteString("  lore draft review <id>\n")
+	builder.WriteString("  lore draft approve <id>\n")
+	builder.WriteString("  lore draft reject <id>\n")
+	builder.WriteString("  lore draft request-revision <id>\n")
+	builder.WriteString("  lore draft apply <id>\n")
 
 	return builder.String()
 }
@@ -78,11 +78,11 @@ func RenderDraftReview(review app.DraftReview) string {
 
 	builder.WriteString("\nActions\n")
 	builder.WriteString("-------\n")
-	builder.WriteString("  obsidian-harness draft approve " + review.Draft.ID + "\n")
-	builder.WriteString("  obsidian-harness draft reject " + review.Draft.ID + "\n")
-	builder.WriteString("  obsidian-harness draft request-revision " + review.Draft.ID + "\n")
+	builder.WriteString("  lore draft approve " + review.Draft.ID + "\n")
+	builder.WriteString("  lore draft reject " + review.Draft.ID + "\n")
+	builder.WriteString("  lore draft request-revision " + review.Draft.ID + "\n")
 	if review.Draft.State == model.DraftApproved {
-		builder.WriteString("  obsidian-harness draft apply " + review.Draft.ID + "\n")
+		builder.WriteString("  lore draft apply " + review.Draft.ID + "\n")
 	}
 
 	return builder.String()
@@ -101,7 +101,7 @@ func RenderDraftActionResult(action string, draft model.Draft) string {
 
 	if draft.State == model.DraftApproved {
 		builder.WriteString("\nNext:\n")
-		builder.WriteString("  obsidian-harness draft apply " + draft.ID + "\n")
+		builder.WriteString("  lore draft apply " + draft.ID + "\n")
 	}
 
 	return builder.String()

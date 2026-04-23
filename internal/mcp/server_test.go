@@ -67,8 +67,8 @@ func TestServerToolsListAndCall(t *testing.T) {
 }
 
 func TestServerAuthFailure(t *testing.T) {
-	t.Setenv("OBSIDIAN_HARNESS_MCP_API_KEY", "expected")
-	t.Setenv("OBSIDIAN_HARNESS_CLIENT_KEY", "wrong")
+	t.Setenv("LORE_MCP_API_KEY", "expected")
+	t.Setenv("LORE_CLIENT_KEY", "wrong")
 
 	server := NewServer(nil, "test")
 	err := server.Serve(context.Background(), strings.NewReader(""), &bytes.Buffer{})

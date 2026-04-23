@@ -24,7 +24,7 @@ func TestRenderDraftListIncludesDraftAndHints(t *testing.T) {
 		"Draft Inbox",
 		"draft-1",
 		"pending_review",
-		"obsidian-harness draft review <id>",
+		"lore draft review <id>",
 	} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("expected view to contain %q, got %q", expected, view)
@@ -64,7 +64,7 @@ func TestRenderDraftReviewIncludesPatchAndActions(t *testing.T) {
 		"Base Match",
 		"| 0-排期/04-执行/week.md | 周执行 | 已同步 | 2026-04-22 10:00 |",
 		"Current Target Excerpt",
-		"obsidian-harness draft apply draft-2",
+		"lore draft apply draft-2",
 	} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("expected view to contain %q, got %q", expected, view)

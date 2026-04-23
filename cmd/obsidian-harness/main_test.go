@@ -148,9 +148,9 @@ func configureLLMTestEnv(t *testing.T) {
 	clearOperatorEnv(t)
 	server := newOperatorAgentTestServer(t)
 	t.Cleanup(server.Close)
-	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", server.URL)
-	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "secret")
-	t.Setenv("OBSIDIAN_HARNESS_LLM_MODEL", "gpt-5.4")
+	t.Setenv("LORE_LLM_BASE_URL", server.URL)
+	t.Setenv("LORE_LLM_API_KEY", "secret")
+	t.Setenv("LORE_LLM_MODEL", "gpt-5.4")
 }
 
 func TestRunDefaultsToStatus(t *testing.T) {
@@ -298,9 +298,9 @@ func TestRunModelsList(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", server.URL)
-	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "secret")
-	t.Setenv("OBSIDIAN_HARNESS_LLM_MODEL", "")
+	t.Setenv("LORE_LLM_BASE_URL", server.URL)
+	t.Setenv("LORE_LLM_API_KEY", "secret")
+	t.Setenv("LORE_LLM_MODEL", "")
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -528,7 +528,7 @@ func TestRunConsoleREPLDraftFlow(t *testing.T) {
 	if !strings.Contains(stdout.String(), "approved") {
 		t.Fatalf("expected approve output, got %q", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "Console stopped") {
+	if !strings.Contains(stdout.String(), "Lore stopped") {
 		t.Fatalf("expected console stop output, got %q", stdout.String())
 	}
 }

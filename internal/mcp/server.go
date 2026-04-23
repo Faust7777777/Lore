@@ -243,15 +243,24 @@ func toolDefinition(name string, description string, schema map[string]any) map[
 }
 
 func validateProcessAuth() error {
-	expected := strings.TrimSpace(os.Getenv("OBSIDIAN_HARNESS_MCP_API_KEY"))
+	expected := firstNonEmptyEnv("LORE_MCP_API_KEY", "OBSIDIAN_HARNESS_MCP_API_KEY")
 	if expected == "" {
 		return nil
 	}
-	provided := strings.TrimSpace(os.Getenv("OBSIDIAN_HARNESS_CLIENT_KEY"))
+	provided := firstNonEmptyEnv("LORE_CLIENT_KEY", "OBSIDIAN_HARNESS_CLIENT_KEY")
 	if provided == expected {
 		return nil
 	}
 	return fmt.Errorf("mcp authentication failed: client key mismatch")
+}
+
+func firstNonEmptyEnv(names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func readMessage(reader *bufio.Reader) ([]byte, error) {

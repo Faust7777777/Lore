@@ -62,7 +62,7 @@ func NewDefault() Agent {
 
 func NewUnavailable(err error) Agent {
 	if err == nil {
-		err = fmt.Errorf("%w; configure OBSIDIAN_HARNESS_LLM_BASE_URL and OBSIDIAN_HARNESS_LLM_API_KEY", ErrUnavailable)
+		err = fmt.Errorf("%w; configure LORE_LLM_BASE_URL and LORE_LLM_API_KEY (legacy OBSIDIAN_HARNESS_LLM_* also supported)", ErrUnavailable)
 	}
 	return ErrorAgent{err: err}
 }
@@ -99,12 +99,12 @@ func NewModelAgent(client completionClient) Agent {
 
 func LoadEnvConfig() (EnvConfig, bool, error) {
 	cfg := EnvConfig{
-		BaseURL: firstNonEmptyEnv("OBSIDIAN_HARNESS_OPERATOR_BASE_URL", "OBSIDIAN_HARNESS_LLM_BASE_URL", "LORE_OPERATOR_BASE_URL", "LORE_LLM_BASE_URL"),
-		APIKey:  firstNonEmptyEnv("OBSIDIAN_HARNESS_OPERATOR_API_KEY", "OBSIDIAN_HARNESS_LLM_API_KEY", "LORE_OPERATOR_API_KEY", "LORE_LLM_API_KEY"),
-		Model:   firstNonEmptyEnv("OBSIDIAN_HARNESS_OPERATOR_MODEL", "OBSIDIAN_HARNESS_LLM_MODEL", "LORE_OPERATOR_MODEL", "LORE_LLM_MODEL"),
+		BaseURL: firstNonEmptyEnv("LORE_OPERATOR_BASE_URL", "LORE_LLM_BASE_URL", "OBSIDIAN_HARNESS_OPERATOR_BASE_URL", "OBSIDIAN_HARNESS_LLM_BASE_URL"),
+		APIKey:  firstNonEmptyEnv("LORE_OPERATOR_API_KEY", "LORE_LLM_API_KEY", "OBSIDIAN_HARNESS_OPERATOR_API_KEY", "OBSIDIAN_HARNESS_LLM_API_KEY"),
+		Model:   firstNonEmptyEnv("LORE_OPERATOR_MODEL", "LORE_LLM_MODEL", "OBSIDIAN_HARNESS_OPERATOR_MODEL", "OBSIDIAN_HARNESS_LLM_MODEL"),
 	}
 
-	timeoutValue := firstNonEmptyEnv("OBSIDIAN_HARNESS_OPERATOR_TIMEOUT", "OBSIDIAN_HARNESS_LLM_TIMEOUT", "LORE_OPERATOR_TIMEOUT", "LORE_LLM_TIMEOUT")
+	timeoutValue := firstNonEmptyEnv("LORE_OPERATOR_TIMEOUT", "LORE_LLM_TIMEOUT", "OBSIDIAN_HARNESS_OPERATOR_TIMEOUT", "OBSIDIAN_HARNESS_LLM_TIMEOUT")
 	if strings.TrimSpace(timeoutValue) == "" {
 		cfg.Timeout = 30 * time.Second
 	} else {
@@ -123,7 +123,7 @@ func LoadEnvConfig() (EnvConfig, bool, error) {
 		return EnvConfig{}, false, nil
 	}
 	if baseURL == "" || apiKey == "" {
-		return EnvConfig{}, false, fmt.Errorf("operator agent: OBSIDIAN_HARNESS_LLM_BASE_URL and OBSIDIAN_HARNESS_LLM_API_KEY must be set together")
+		return EnvConfig{}, false, fmt.Errorf("operator agent: LORE_LLM_BASE_URL and LORE_LLM_API_KEY must be set together (legacy OBSIDIAN_HARNESS_LLM_* also supported)")
 	}
 	return cfg, true, nil
 }

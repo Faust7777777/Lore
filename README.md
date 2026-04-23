@@ -22,7 +22,7 @@ Key product constraints already baked into the scaffold:
 
 ## Layout
 
-- `cmd/obsidian-harness`: CLI entrypoint
+- `cmd/obsidian-harness`: current CLI source entrypoint for the Lore binary surface
 - `internal/config`: runtime and vault configuration
 - `internal/model`: shared domain/runtime types
 - `internal/runtime`: event bus, health, audit services
@@ -32,6 +32,8 @@ Key product constraints already baked into the scaffold:
 - `internal/bootstrap`: default managed-mode scaffold templates
 
 ## Current Commands
+
+The source entrypoint still lives under `./cmd/obsidian-harness`, but the user-facing CLI surface is branded as `lore`.
 
 - `status [workdir]`
 - `bootstrap [workdir]`

@@ -161,7 +161,7 @@ func usage() string {
 	return `Lore
 
 Command:
-  obsidian-harness [command]
+  lore [command]
 
 Commands:
   status [workdir]     Render the current text status view
@@ -261,7 +261,7 @@ func runConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 			continue
 		}
 		if isConsoleExit(line) {
-			fmt.Fprintln(stdout, "Console stopped")
+			fmt.Fprintln(stdout, "Lore stopped")
 			return 0
 		}
 
@@ -379,7 +379,7 @@ func runTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 func runDraftCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "draft: missing subcommand")
-		fmt.Fprintln(stderr, "usage: obsidian-harness draft <list|review|approve|reject|request-revision|apply> [flags] [id]")
+		fmt.Fprintln(stderr, "usage: lore draft <list|review|approve|reject|request-revision|apply> [flags] [id]")
 		return 1
 	}
 
@@ -458,7 +458,7 @@ func runDraftCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 func runDaemonCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "daemon: missing subcommand")
-		fmt.Fprintln(stderr, "usage: obsidian-harness daemon run [--workdir <dir>] [--poll 2s] [--debounce 500ms] [--once] [--codex-jsonl <session.jsonl>]")
+		fmt.Fprintln(stderr, "usage: lore daemon run [--workdir <dir>] [--poll 2s] [--debounce 500ms] [--once] [--codex-jsonl <session.jsonl>]")
 		return 1
 	}
 
@@ -498,7 +498,7 @@ func runDaemonCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 func runProcessSinkCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "process-sink: missing subcommand")
-		fmt.Fprintln(stderr, "usage: obsidian-harness process-sink day [--workdir <dir>] [--agent <id>] [--day YYYY-MM-DD]")
+		fmt.Fprintln(stderr, "usage: lore process-sink day [--workdir <dir>] [--agent <id>] [--day YYYY-MM-DD]")
 		return 1
 	}
 
@@ -530,7 +530,7 @@ func runProcessSinkCommand(args []string, stdout io.Writer, stderr io.Writer) in
 func runModelsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "models: missing subcommand")
-		fmt.Fprintln(stderr, "usage: obsidian-harness models list")
+		fmt.Fprintln(stderr, "usage: lore models list")
 		return 1
 	}
 
@@ -542,7 +542,7 @@ func runModelsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		if !enabled {
-			fmt.Fprintln(stderr, "models list: configure OBSIDIAN_HARNESS_LLM_BASE_URL and OBSIDIAN_HARNESS_LLM_API_KEY first")
+			fmt.Fprintln(stderr, "models list: configure LORE_LLM_BASE_URL and LORE_LLM_API_KEY first (legacy OBSIDIAN_HARNESS_LLM_* is still supported)")
 			return 1
 		}
 

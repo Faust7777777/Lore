@@ -108,6 +108,37 @@ func TestVaultReadToolsRecordAudit(t *testing.T) {
 	}
 }
 
+func TestVaultReadAuditPrefersLoreAgentIdentity(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+	t.Setenv("OBSIDIAN_HARNESS_MCP_AGENT_ID", "legacy-agent")
+	t.Setenv("LORE_MCP_AGENT_ID", "lore-agent")
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+
+	if _, err := h.ManagedStatus(); err != nil {
+		t.Fatalf("ManagedStatus() error = %v", err)
+	}
+
+	records, err := st.Audit().ListAudit(10)
+	if err != nil {
+		t.Fatalf("ListAudit() error = %v", err)
+	}
+	if len(records) == 0 {
+		t.Fatal("expected at least one audit record")
+	}
+	if records[0].Actor != "mcp:lore-agent" {
+		t.Fatalf("audit actor = %q, want mcp:lore-agent", records[0].Actor)
+	}
+}
+
 func TestVaultReadRejectsTraversal(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := config.Default(workDir)

@@ -3,9 +3,11 @@ package app
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -150,7 +152,7 @@ func TestRunVaultDaemonContinuesAfterCodexSyncFailure(t *testing.T) {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
 
-	var output bytes.Buffer
+	var output lockedBuffer
 	err = runtime.RunVaultDaemon(context.Background(), VaultDaemonRunOptions{
 		Once:   true,
 		Stdout: &output,
@@ -198,7 +200,7 @@ func TestRunVaultDaemonWatcherCreatesDraftAfterFileChange(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var output bytes.Buffer
+	var output lockedBuffer
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- runtime.RunVaultDaemon(ctx, VaultDaemonRunOptions{
@@ -307,7 +309,7 @@ func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var output bytes.Buffer
+	var output lockedBuffer
 	errCh := make(chan error, 1)
 	startedAt := time.Now()
 	go func() {
@@ -344,8 +346,7 @@ func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 	fakeWatcher.Emit(fsnotify.Event{Name: transcriptPath, Op: fsnotify.Write})
 
 	waitForCondition(t, 4*time.Second, func() bool {
-		view, err := runtime.ProcessSinkDay("codex", time.Date(2026, 4, 22, 12, 0, 0, 0, loc))
-		return err == nil && len(view.Checkpoints) == 2
+		return strings.Count(output.String(), "Codex JSONL synced") >= 2
 	})
 
 	cancel()
@@ -356,6 +357,21 @@ func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("RunVaultDaemon() did not stop after cancel")
+	}
+
+	view, err := runtime.ProcessSinkDay("codex", time.Date(2026, 4, 22, 12, 0, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("ProcessSinkDay() error = %v", err)
+	}
+	foundWatcherWindow := false
+	for _, checkpoint := range view.Checkpoints {
+		if checkpoint.Window.WindowStart.Equal(time.Date(2026, 4, 22, 9, 30, 0, 0, loc)) {
+			foundWatcherWindow = true
+			break
+		}
+	}
+	if !foundWatcherWindow {
+		t.Fatalf("expected watcher-triggered 09:30 checkpoint, got %+v", view.Checkpoints)
 	}
 
 	if elapsed := time.Since(startedAt); elapsed >= 5*time.Second {
@@ -411,3 +427,22 @@ func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool
 	}
 	t.Fatalf("condition was not met within %s", timeout)
 }
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+var _ io.Writer = (*lockedBuffer)(nil)

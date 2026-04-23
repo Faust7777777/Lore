@@ -124,7 +124,7 @@ func (r *Runtime) requireProcessSinkSummarizer() (ProcessSinkSummarizer, error) 
 	if r.processSinkSummarizerErr != nil {
 		return nil, r.processSinkSummarizerErr
 	}
-	return nil, fmt.Errorf("process sink summarizer: model-backed summarizer is required; configure OBSIDIAN_HARNESS_LLM_BASE_URL and OBSIDIAN_HARNESS_LLM_API_KEY")
+	return nil, fmt.Errorf("process sink summarizer: model-backed summarizer is required; configure LORE_LLM_BASE_URL and LORE_LLM_API_KEY (legacy OBSIDIAN_HARNESS_LLM_* also supported)")
 }
 
 func (r *Runtime) rollupProcessSinkDay(agentID string, day time.Time, at time.Time) (model.DailyReport, error) {

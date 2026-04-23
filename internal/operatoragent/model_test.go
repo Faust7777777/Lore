@@ -29,12 +29,16 @@ func clearOperatorEnv(t *testing.T) {
 		"OBSIDIAN_HARNESS_OPERATOR_BASE_URL",
 		"OBSIDIAN_HARNESS_OPERATOR_API_KEY",
 		"OBSIDIAN_HARNESS_OPERATOR_MODEL",
+		"OBSIDIAN_HARNESS_LLM_TIMEOUT",
+		"OBSIDIAN_HARNESS_OPERATOR_TIMEOUT",
 		"LORE_LLM_BASE_URL",
 		"LORE_LLM_API_KEY",
 		"LORE_LLM_MODEL",
 		"LORE_OPERATOR_BASE_URL",
 		"LORE_OPERATOR_API_KEY",
 		"LORE_OPERATOR_MODEL",
+		"LORE_LLM_TIMEOUT",
+		"LORE_OPERATOR_TIMEOUT",
 	} {
 		t.Setenv(key, "")
 	}
@@ -82,6 +86,26 @@ func TestLoadEnvConfigRequiresBaseAndKeyTogether(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "must be set together") {
 		t.Fatalf("error = %q, want must be set together", err)
+	}
+}
+
+func TestLoadEnvConfigPrefersLoreEnvNames(t *testing.T) {
+	clearOperatorEnv(t)
+	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", "https://legacy.test/v1")
+	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "legacy-secret")
+	t.Setenv("LORE_LLM_BASE_URL", "https://lore.test/v1")
+	t.Setenv("LORE_LLM_API_KEY", "lore-secret")
+	t.Setenv("LORE_LLM_MODEL", "gpt-5.4")
+
+	cfg, enabled, err := LoadEnvConfig()
+	if err != nil {
+		t.Fatalf("LoadEnvConfig() error = %v", err)
+	}
+	if !enabled {
+		t.Fatal("enabled = false, want true")
+	}
+	if cfg.BaseURL != "https://lore.test/v1" || cfg.APIKey != "lore-secret" || cfg.Model != "gpt-5.4" {
+		t.Fatalf("cfg = %+v, want Lore-preferring env config", cfg)
 	}
 }
 

@@ -76,14 +76,14 @@ Commands verified locally with the repo-managed Go toolchain:
 ## Current Gaps
 
  - No live app-server Codex adapter yet; current P0-B supports manual import plus cursor-backed JSONL tail sync/attach over local files
-- No full-screen TUI framework yet; `tui` is a text workbench, not a Bubble Tea-style interface
+- No full-screen TUI framework yet; `tui` is a text dashboard, not a Bubble Tea-style interface
 - No SQLite state store yet; JSON store is the minimal persisted recovery layer
 - Attachment refs are surfaced in read APIs, but binary/media extraction is not implemented yet
 
 ## Suggested Next Steps
 
 1. Upgrade JSONL attach from file-fingerprint sync to a stronger live adapter with source-specific streaming or app-server integration.
-2. Move from the text workbench to a fuller interactive TUI once panel structure stabilizes.
+2. Move from the text dashboard to a fuller interactive TUI once panel structure stabilizes.
 3. Add SQLite-backed state/audit store once the shape stabilizes.
 4. Extend attachment/media extraction beyond markdown ref surfacing.
 
