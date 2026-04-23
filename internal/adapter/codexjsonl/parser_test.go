@@ -23,8 +23,8 @@ func TestLoadFileParsesSessionEventsAndDedupes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFile() error = %v", err)
 	}
-	if transcript.SessionID != "rollout-abc" {
-		t.Fatalf("SessionID = %q, want rollout-abc", transcript.SessionID)
+	if transcript.SessionID != "session-1" {
+		t.Fatalf("SessionID = %q, want session-1", transcript.SessionID)
 	}
 	if transcript.AgentID != "parfit" {
 		t.Fatalf("AgentID = %q, want parfit", transcript.AgentID)

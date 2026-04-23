@@ -31,6 +31,8 @@ type Transcript struct {
 	SessionID  string
 	SourcePath string
 	Events     []Event
+	sessionMetaBound bool
+	agentMetaBound   bool
 }
 
 type WindowSummary struct {
@@ -140,15 +142,13 @@ func parseJSONLChunk(transcript *Transcript, chunk []byte, startOffset int64) er
 		if err != nil {
 			return fmt.Errorf("parse %s line %d offset %d: %w", transcript.SourcePath, lineNumber, absoluteStart, err)
 		}
-		if meta.SessionID != "" {
-			if transcript.SessionID == "" || transcript.SessionID == "history" {
-				transcript.SessionID = meta.SessionID
-			}
+		if meta.SessionID != "" && shouldBindSessionMeta(*transcript) {
+			transcript.SessionID = meta.SessionID
+			transcript.sessionMetaBound = true
 		}
-		if meta.AgentID != "" {
-			if transcript.AgentID == "" || transcript.AgentID == "codex" {
-				transcript.AgentID = meta.AgentID
-			}
+		if meta.AgentID != "" && shouldBindAgentMeta(*transcript) {
+			transcript.AgentID = meta.AgentID
+			transcript.agentMetaBound = true
 		}
 		if ok {
 			event.OffsetStart = absoluteStart
@@ -397,6 +397,30 @@ func dedupeEvents(events []Event) []Event {
 func inferSessionID(path string) string {
 	base := filepath.Base(path)
 	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
+func shouldBindSessionMeta(transcript Transcript) bool {
+	if transcript.sessionMetaBound {
+		return false
+	}
+	switch transcript.SessionID {
+	case "", "history", inferSessionID(transcript.SourcePath):
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldBindAgentMeta(transcript Transcript) bool {
+	if transcript.agentMetaBound {
+		return false
+	}
+	switch transcript.AgentID {
+	case "", "codex":
+		return true
+	default:
+		return false
+	}
 }
 
 func sanitizeAgentID(value string) string {

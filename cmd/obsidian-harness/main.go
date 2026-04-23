@@ -356,13 +356,13 @@ func runDraftCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 func runDaemonCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "daemon: missing subcommand")
-		fmt.Fprintln(stderr, "usage: obsidian-harness daemon run [--workdir <dir>] [--poll 2s] [--debounce 500ms] [--once]")
+		fmt.Fprintln(stderr, "usage: obsidian-harness daemon run [--workdir <dir>] [--poll 2s] [--debounce 500ms] [--once] [--codex-jsonl <session.jsonl>]")
 		return 1
 	}
 
 	switch args[0] {
 	case "run":
-		workDir, pollEvery, debounce, once, err := parseDaemonFlags(args[1:], stderr)
+		workDir, pollEvery, debounce, once, codexParams, err := parseDaemonFlags(args[1:], stderr)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -378,9 +378,10 @@ func runDaemonCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 		if err := runtime.RunVaultDaemon(ctx, app.VaultDaemonRunOptions{
-			PollEvery: pollEvery,
-			Once:      once,
-			Stdout:    stdout,
+			PollEvery:  pollEvery,
+			Once:       once,
+			Stdout:     stdout,
+			CodexJSONL: codexParams,
 		}); err != nil {
 			fmt.Fprintf(stderr, "daemon run: %v\n", err)
 			return 1
@@ -619,7 +620,7 @@ func parseConsoleFlags(args []string, stderr io.Writer) (string, string, error) 
 	return filepath.Clean(*workDir), strings.TrimSpace(*once), nil
 }
 
-func parseDaemonFlags(args []string, stderr io.Writer) (string, time.Duration, time.Duration, bool, error) {
+func parseDaemonFlags(args []string, stderr io.Writer) (string, time.Duration, time.Duration, bool, *app.ImportCodexJSONLParams, error) {
 	flags := flag.NewFlagSet("daemon run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
@@ -627,18 +628,36 @@ func parseDaemonFlags(args []string, stderr io.Writer) (string, time.Duration, t
 	pollEvery := flags.Duration("poll", 2*time.Second, "poll interval for vault scans")
 	debounce := flags.Duration("debounce", 500*time.Millisecond, "minimum stable age before processing a file change")
 	once := flags.Bool("once", false, "run one scan and exit")
+	codexJSONL := flags.String("codex-jsonl", "", "path to a Codex session JSONL to sync each cycle")
+	agentID := flags.String("agent", "", "override Codex agent id for daemon transcript sync")
+	sessionID := flags.String("session", "", "override Codex session id for daemon transcript sync")
+	windowSize := flags.Duration("window", 0, "override checkpoint window size for daemon transcript sync")
+	skipRollup := flags.Bool("skip-rollup", false, "skip daily rollup for daemon transcript sync")
 
 	if err := flags.Parse(args); err != nil {
-		return "", 0, 0, false, err
+		return "", 0, 0, false, nil, err
 	}
 	if strings.TrimSpace(*workDir) == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
-			return "", 0, 0, false, err
+			return "", 0, 0, false, nil, err
 		}
 		*workDir = cwd
 	}
-	return filepath.Clean(*workDir), *pollEvery, *debounce, *once, nil
+
+	var codexParams *app.ImportCodexJSONLParams
+	if strings.TrimSpace(*codexJSONL) != "" {
+		cleanInput := filepath.Clean(strings.TrimSpace(*codexJSONL))
+		codexParams = &app.ImportCodexJSONLParams{
+			InputPath:  cleanInput,
+			AgentID:    strings.TrimSpace(*agentID),
+			SessionID:  strings.TrimSpace(*sessionID),
+			Window:     *windowSize,
+			SkipRollup: *skipRollup,
+		}
+	}
+
+	return filepath.Clean(*workDir), *pollEvery, *debounce, *once, codexParams, nil
 }
 
 func parseDraftFlags(name string, args []string, stderr io.Writer, requireID bool) (string, string, error) {

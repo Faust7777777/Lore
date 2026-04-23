@@ -473,6 +473,59 @@ func TestRuntimeSyncCodexJSONLGeneratesPlaceholderForClosedIdleWindow(t *testing
 	if len(second.Import.Reports[0].WindowKeys) != 2 {
 		t.Fatalf("len(second.Import.Reports[0].WindowKeys) = %d, want 2", len(second.Import.Reports[0].WindowKeys))
 	}
+
+	firstWindowKey := model.SessionWindow{
+		AgentID:     "codex",
+		SessionID:   "session-idle",
+		WindowStart: time.Date(2026, 4, 22, 9, 0, 0, 0, loc),
+		WindowEnd:   time.Date(2026, 4, 22, 9, 30, 0, 0, loc),
+	}.Key()
+	firstCheckpoint, err := runtime.Store.ProcessSink().GetCheckpointByWindowKey(firstWindowKey)
+	if err != nil {
+		t.Fatalf("GetCheckpointByWindowKey(first) error = %v", err)
+	}
+	if firstCheckpoint.State != model.CheckpointMaterialized {
+		t.Fatalf("first checkpoint state = %q, want %q", firstCheckpoint.State, model.CheckpointMaterialized)
+	}
+}
+
+func TestRuntimeSyncCodexJSONLInitialSyncDoesNotBackfillHistoricalIdleWindows(t *testing.T) {
+	loc := useFixedLocalZone(t)
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "historical-initial.jsonl")
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-historical","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"historical event"}}`,
+	)
+
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	result, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-historical",
+	}, time.Date(2026, 4, 23, 10, 0, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("SyncCodexJSONL() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Changed = false, want initial import change")
+	}
+	if len(result.Import.Checkpoints) != 1 {
+		t.Fatalf("len(result.Import.Checkpoints) = %d, want 1 material checkpoint", len(result.Import.Checkpoints))
+	}
+	if result.Import.Checkpoints[0].State != model.CheckpointMaterialized {
+		t.Fatalf("checkpoint state = %q, want %q", result.Import.Checkpoints[0].State, model.CheckpointMaterialized)
+	}
+	if len(result.Import.Reports) != 1 {
+		t.Fatalf("len(result.Import.Reports) = %d, want 1", len(result.Import.Reports))
+	}
+	if len(result.Import.Reports[0].WindowKeys) != 1 {
+		t.Fatalf("len(result.Import.Reports[0].WindowKeys) = %d, want 1", len(result.Import.Reports[0].WindowKeys))
+	}
 }
 
 func useFixedLocalZone(t *testing.T) *time.Location {

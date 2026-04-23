@@ -189,7 +189,6 @@ func (a ModelAgent) Decide(input string, ctx Context) (Decision, error) {
 			{Role: "user", Content: buildUserPrompt(raw, ctx)},
 		},
 		Temperature: 0,
-		MaxTokens:   220,
 	})
 	if err != nil {
 		return Decision{}, fmt.Errorf("operator agent: model request failed: %w", err)

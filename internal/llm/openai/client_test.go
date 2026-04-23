@@ -26,6 +26,9 @@ func TestChatCompletion(t *testing.T) {
 		if payload["model"] != "gpt-test" {
 			t.Fatalf("model = %#v, want gpt-test", payload["model"])
 		}
+		if _, ok := payload["max_tokens"]; ok {
+			t.Fatalf("payload unexpectedly included max_tokens: %#v", payload["max_tokens"])
+		}
 
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{{
@@ -65,6 +68,74 @@ func TestChatCompletion(t *testing.T) {
 	}
 }
 
+func TestChatCompletionUsesResponsesAPIForGPT5(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("path = %q, want /responses", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer secret" {
+			t.Fatalf("authorization = %q, want bearer token", got)
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if payload["model"] != "gpt-5.4" {
+			t.Fatalf("model = %#v, want gpt-5.4", payload["model"])
+		}
+		if payload["instructions"] != "be concise" {
+			t.Fatalf("instructions = %#v, want be concise", payload["instructions"])
+		}
+		input, ok := payload["input"].([]any)
+		if !ok || len(input) != 1 {
+			t.Fatalf("input = %#v, want single message", payload["input"])
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": []map[string]any{{
+				"type": "message",
+				"role": "assistant",
+				"content": []map[string]any{{
+					"type": "output_text",
+					"text": `{"action":"show_status"}`,
+				}},
+			}},
+			"usage": map[string]any{
+				"input_tokens":  21,
+				"output_tokens": 7,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL: server.URL,
+		APIKey:  "secret",
+		Model:   "gpt-5.4",
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.ChatCompletion(context.Background(), ChatCompletionRequest{
+		Messages: []Message{
+			{Role: "system", Content: "be concise"},
+			{Role: "user", Content: "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() error = %v", err)
+	}
+	if resp.Content != `{"action":"show_status"}` {
+		t.Fatalf("resp.Content = %q", resp.Content)
+	}
+	if resp.PromptTokens != 21 || resp.CompletionTokens != 7 {
+		t.Fatalf("usage = %+v, want prompt=21 completion=7", resp)
+	}
+}
+
 func TestChatCompletionReturnsAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
@@ -93,6 +164,106 @@ func TestChatCompletionReturnsAPIError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "upstream unavailable") {
 		t.Fatalf("error = %q, want upstream unavailable", err)
+	}
+}
+
+func TestChatCompletionRetriesTransientGatewayError(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{
+					"content": `{"action":"show_status"}`,
+				},
+			}},
+			"usage": map[string]any{
+				"prompt_tokens":     8,
+				"completion_tokens": 4,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL: server.URL,
+		APIKey:  "secret",
+		Model:   "gpt-test",
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.ChatCompletion(context.Background(), ChatCompletionRequest{
+		Messages: []Message{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() error = %v", err)
+	}
+	if requests != 2 {
+		t.Fatalf("request count = %d, want 2", requests)
+	}
+	if resp.Content != `{"action":"show_status"}` {
+		t.Fatalf("resp.Content = %q", resp.Content)
+	}
+}
+
+func TestChatCompletionRetriesTransportEOF(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			hijacker, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("response writer does not support hijacking")
+			}
+			conn, _, err := hijacker.Hijack()
+			if err != nil {
+				t.Fatalf("Hijack() error = %v", err)
+			}
+			_ = conn.Close()
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{
+					"content": `{"action":"show_status"}`,
+				},
+			}},
+			"usage": map[string]any{
+				"prompt_tokens":     9,
+				"completion_tokens": 4,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL: server.URL,
+		APIKey:  "secret",
+		Model:   "gpt-test",
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.ChatCompletion(context.Background(), ChatCompletionRequest{
+		Messages: []Message{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() error = %v", err)
+	}
+	if requests != 2 {
+		t.Fatalf("request count = %d, want 2", requests)
+	}
+	if resp.Content != `{"action":"show_status"}` {
+		t.Fatalf("resp.Content = %q", resp.Content)
 	}
 }
 

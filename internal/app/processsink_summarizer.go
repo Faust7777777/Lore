@@ -108,7 +108,6 @@ func (s *modelProcessSinkSummarizer) runSummaryPrompt(system string, user string
 			{Role: "user", Content: user},
 		},
 		Temperature: 0,
-		MaxTokens:   700,
 	})
 	if err != nil {
 		return "", "", err

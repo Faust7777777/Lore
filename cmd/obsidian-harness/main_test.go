@@ -46,6 +46,15 @@ func newOperatorAgentTestServer(t *testing.T) *httptest.Server {
 		} `json:"messages"`
 	}
 
+	type responsesRequest struct {
+		Instructions string `json:"instructions"`
+		Input        []struct {
+			Type    string `json:"type"`
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"input"`
+	}
+
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/chat/completions":
@@ -80,6 +89,46 @@ func newOperatorAgentTestServer(t *testing.T) *httptest.Server {
 				"usage": map[string]any{
 					"prompt_tokens":     10,
 					"completion_tokens": 5,
+				},
+			})
+		case "/responses":
+			var req responsesRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode responses request: %v", err)
+			}
+			if len(req.Input) == 0 {
+				t.Fatal("responses request missing input")
+			}
+
+			systemPrompt := req.Instructions
+			userPrompt := req.Input[len(req.Input)-1].Content
+			content := `{"action":"help"}`
+			switch {
+			case strings.Contains(systemPrompt, "external coding-agent checkpoint window"):
+				content = `{"title":"codex checkpoint 09:00-09:30","content":"## Summary\n- checkpoint summary from test provider"}`
+			case strings.Contains(systemPrompt, "day of external coding-agent checkpoints"):
+				content = `{"title":"codex daily report","content":"## Summary\n- daily summary from test provider"}`
+			case strings.Contains(userPrompt, "show current status"):
+				content = `{"action":"show_status"}`
+			case strings.Contains(userPrompt, "review draft"):
+				content = `{"action":"review_draft"}`
+			case strings.Contains(userPrompt, "approve current draft"):
+				content = `{"action":"approve_draft","use_focused_draft":true}`
+			}
+
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"output": []map[string]any{
+					{
+						"type": "message",
+						"role": "assistant",
+						"content": []map[string]any{
+							{"type": "output_text", "text": content},
+						},
+					},
+				},
+				"usage": map[string]any{
+					"input_tokens":  10,
+					"output_tokens": 5,
 				},
 			})
 		case "/models":
@@ -288,9 +337,11 @@ func TestRunSyncCodexJSONL(t *testing.T) {
 	workDir := t.TempDir()
 	configureLLMTestEnv(t)
 	transcriptPath := filepath.Join(workDir, "sync.jsonl")
+	windowStart := time.Now().In(time.Local).Truncate(30 * time.Minute)
+	eventAt := windowStart.Add(5 * time.Minute)
 	content := "" +
-		"{\"timestamp\":\"2026-04-22T09:01:00+08:00\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-1\",\"agent_nickname\":\"Codex\"}}\n" +
-		"{\"timestamp\":\"2026-04-22T09:05:00+08:00\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"build adapter\"}}\n"
+		"{\"timestamp\":\"" + windowStart.Format(time.RFC3339) + "\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-1\",\"agent_nickname\":\"Codex\"}}\n" +
+		"{\"timestamp\":\"" + eventAt.Format(time.RFC3339) + "\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"build adapter\"}}\n"
 	if err := os.WriteFile(transcriptPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile(transcript) error = %v", err)
 	}
@@ -491,6 +542,40 @@ func TestRunDaemonOnceTriggersDraftAfterStablePlanChange(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "triggered drafts: 1") {
 		t.Fatalf("expected triggered draft output, got %q", stdout.String())
+	}
+}
+
+func TestRunDaemonOnceSyncsCodexJSONLWhenConfigured(t *testing.T) {
+	workDir := t.TempDir()
+	configureLLMTestEnv(t)
+
+	transcriptPath := filepath.Join(workDir, "daemon-codex.jsonl")
+	content := "" +
+		"{\"timestamp\":\"2026-04-22T09:01:00+08:00\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-daemon\",\"agent_nickname\":\"Codex\"}}\n" +
+		"{\"timestamp\":\"2026-04-22T09:05:00+08:00\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"build daemon integration\"}}\n"
+	if err := os.WriteFile(transcriptPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(transcript) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"daemon", "run",
+		"--workdir", workDir,
+		"--once",
+		"--codex-jsonl", transcriptPath,
+	}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Codex JSONL synced") {
+		t.Fatalf("expected daemon codex sync output, got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "- agent: codex") {
+		t.Fatalf("expected codex agent output, got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "- daily reports:") {
+		t.Fatalf("expected daily report output, got %q", stdout.String())
 	}
 }
 

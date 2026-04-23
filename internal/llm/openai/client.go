@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -69,6 +71,42 @@ type chatCompletionResponsePayload struct {
 	} `json:"error,omitempty"`
 }
 
+type responsesRequestPayload struct {
+	Model           string                  `json:"model"`
+	Input           []responsesInputMessage `json:"input"`
+	Instructions    string                  `json:"instructions,omitempty"`
+	Temperature     float64                 `json:"temperature,omitempty"`
+	MaxOutputTokens int                     `json:"max_output_tokens,omitempty"`
+	Stream          bool                    `json:"stream"`
+}
+
+type responsesInputMessage struct {
+	Type    string `json:"type"`
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type responsesResponsePayload struct {
+	Output []struct {
+		Type    string `json:"type"`
+		Role    string `json:"role,omitempty"`
+		Text    string `json:"text,omitempty"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content,omitempty"`
+	} `json:"output"`
+	OutputText string `json:"output_text,omitempty"`
+	Usage      struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
+	Error *struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	} `json:"error,omitempty"`
+}
+
 type listModelsResponsePayload struct {
 	Data []struct {
 		ID string `json:"id"`
@@ -116,6 +154,31 @@ func (c *Client) ChatCompletion(ctx context.Context, req ChatCompletionRequest) 
 		return ChatCompletionResponse{}, fmt.Errorf("openai client: at least one message is required")
 	}
 
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			if err := waitForRetry(ctx, time.Duration(attempt)*200*time.Millisecond); err != nil {
+				return ChatCompletionResponse{}, err
+			}
+		}
+
+		resp, err := c.chatCompletionOnce(ctx, req)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if !isRetryableChatCompletionError(err) {
+			return ChatCompletionResponse{}, err
+		}
+	}
+	return ChatCompletionResponse{}, lastErr
+}
+
+func (c *Client) chatCompletionOnce(ctx context.Context, req ChatCompletionRequest) (ChatCompletionResponse, error) {
+	if usesResponsesAPI(c.cfg.Model) {
+		return c.responsesOnce(ctx, req)
+	}
+
 	payload := chatCompletionRequestPayload{
 		Model:       c.cfg.Model,
 		Messages:    req.Messages,
@@ -148,17 +211,16 @@ func (c *Client) ChatCompletion(ctx context.Context, req ChatCompletionRequest) 
 		return ChatCompletionResponse{}, err
 	}
 
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return ChatCompletionResponse{}, chatCompletionAPIError{
+			StatusCode: httpResp.StatusCode,
+			Message:    extractAPIErrorBody(body, httpResp.Status),
+		}
+	}
+
 	var parsed chatCompletionResponsePayload
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return ChatCompletionResponse{}, fmt.Errorf("openai client: decode response: %w", err)
-	}
-
-	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		message := strings.TrimSpace(extractAPIError(parsed, string(body)))
-		if message == "" {
-			message = httpResp.Status
-		}
-		return ChatCompletionResponse{}, fmt.Errorf("openai client: chat completion failed: %s", message)
 	}
 
 	if len(parsed.Choices) == 0 {
@@ -174,6 +236,60 @@ func (c *Client) ChatCompletion(ctx context.Context, req ChatCompletionRequest) 
 		Content:          content,
 		PromptTokens:     parsed.Usage.PromptTokens,
 		CompletionTokens: parsed.Usage.CompletionTokens,
+	}, nil
+}
+
+func (c *Client) responsesOnce(ctx context.Context, req ChatCompletionRequest) (ChatCompletionResponse, error) {
+	payload, err := buildResponsesPayload(c.cfg.Model, req)
+	if err != nil {
+		return ChatCompletionResponse{}, err
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return ChatCompletionResponse{}, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+"/responses", bytes.NewReader(data))
+	if err != nil {
+		return ChatCompletionResponse{}, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("User-Agent", "obsidian-harness/operator-agent")
+
+	httpResp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return ChatCompletionResponse{}, err
+	}
+	defer httpResp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
+	if err != nil {
+		return ChatCompletionResponse{}, err
+	}
+
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return ChatCompletionResponse{}, chatCompletionAPIError{
+			StatusCode: httpResp.StatusCode,
+			Message:    extractAPIErrorBody(body, httpResp.Status),
+		}
+	}
+
+	var parsed responsesResponsePayload
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return ChatCompletionResponse{}, fmt.Errorf("openai client: decode responses payload: %w", err)
+	}
+
+	content := extractResponsesText(parsed)
+	if content == "" {
+		return ChatCompletionResponse{}, fmt.Errorf("openai client: empty response output")
+	}
+
+	return ChatCompletionResponse{
+		Content:          content,
+		PromptTokens:     parsed.Usage.InputTokens,
+		CompletionTokens: parsed.Usage.OutputTokens,
 	}, nil
 }
 
@@ -245,6 +361,70 @@ func extractAPIError(parsed chatCompletionResponsePayload, raw string) string {
 	return raw
 }
 
+type chatCompletionAPIError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e chatCompletionAPIError) Error() string {
+	message := strings.TrimSpace(e.Message)
+	if message == "" {
+		message = http.StatusText(e.StatusCode)
+	}
+	if message == "" {
+		message = "request failed"
+	}
+	return fmt.Sprintf("openai client: chat completion failed (%d): %s", e.StatusCode, message)
+}
+
+func isRetryableChatCompletionError(err error) bool {
+	apiErr, ok := err.(chatCompletionAPIError)
+	if ok {
+		switch {
+		case apiErr.StatusCode >= 500 && apiErr.StatusCode <= 599:
+			return true
+		default:
+			return false
+		}
+	}
+
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
+}
+
+func extractAPIErrorBody(body []byte, fallback string) string {
+	var parsed chatCompletionResponsePayload
+	if err := json.Unmarshal(body, &parsed); err == nil {
+		if message := strings.TrimSpace(extractAPIError(parsed, "")); message != "" {
+			return message
+		}
+	}
+
+	raw := strings.TrimSpace(string(body))
+	if raw == "" {
+		return strings.TrimSpace(fallback)
+	}
+	if len(raw) > 300 {
+		raw = raw[:300] + "..."
+	}
+	return raw
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func extractModelListError(parsed listModelsResponsePayload, raw string) string {
 	if parsed.Error != nil {
 		return strings.TrimSpace(parsed.Error.Message)
@@ -254,4 +434,64 @@ func extractModelListError(parsed listModelsResponsePayload, raw string) string 
 		raw = raw[:300] + "..."
 	}
 	return raw
+}
+
+func usesResponsesAPI(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(model, "gpt-5")
+}
+
+func buildResponsesPayload(model string, req ChatCompletionRequest) (responsesRequestPayload, error) {
+	payload := responsesRequestPayload{
+		Model:           model,
+		Temperature:     req.Temperature,
+		MaxOutputTokens: req.MaxTokens,
+		Stream:          false,
+	}
+
+	instructions := make([]string, 0, len(req.Messages))
+	input := make([]responsesInputMessage, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		role := strings.TrimSpace(strings.ToLower(message.Role))
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		switch role {
+		case "system", "developer":
+			instructions = append(instructions, content)
+		case "user", "assistant":
+			input = append(input, responsesInputMessage{
+				Type:    "message",
+				Role:    role,
+				Content: content,
+			})
+		default:
+			input = append(input, responsesInputMessage{
+				Type:    "message",
+				Role:    "user",
+				Content: content,
+			})
+		}
+	}
+	if len(input) == 0 {
+		return responsesRequestPayload{}, fmt.Errorf("openai client: responses input is empty")
+	}
+	payload.Input = input
+	payload.Instructions = strings.Join(instructions, "\n\n")
+	return payload, nil
+}
+
+func extractResponsesText(parsed responsesResponsePayload) string {
+	for _, item := range parsed.Output {
+		if item.Type == "output_text" && strings.TrimSpace(item.Text) != "" {
+			return strings.TrimSpace(item.Text)
+		}
+		for _, part := range item.Content {
+			if part.Type == "output_text" && strings.TrimSpace(part.Text) != "" {
+				return strings.TrimSpace(part.Text)
+			}
+		}
+	}
+	return strings.TrimSpace(parsed.OutputText)
 }

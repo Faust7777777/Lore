@@ -23,9 +23,10 @@ type VaultDaemonScanResult struct {
 }
 
 type VaultDaemonRunOptions struct {
-	PollEvery time.Duration
-	Once      bool
-	Stdout    io.Writer
+	PollEvery  time.Duration
+	Once       bool
+	Stdout     io.Writer
+	CodexJSONL *ImportCodexJSONLParams
 }
 
 func (r *Runtime) ScanVaultChanges(now time.Time) (VaultDaemonScanResult, error) {
@@ -112,6 +113,14 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 			return err
 		}
 		writeDaemonScanSummary(opts.Stdout, result)
+
+		if opts.CodexJSONL != nil && strings.TrimSpace(opts.CodexJSONL.InputPath) != "" {
+			syncResult, err := r.SyncCodexJSONL(*opts.CodexJSONL, time.Now())
+			if err != nil {
+				return err
+			}
+			writeDaemonCodexSummary(opts.Stdout, syncResult)
+		}
 		if opts.Once {
 			return nil
 		}
@@ -150,6 +159,26 @@ func writeDaemonLine(stdout io.Writer, format string, args ...any) {
 		return
 	}
 	fmt.Fprintf(stdout, format, args...)
+}
+
+func writeDaemonCodexSummary(stdout io.Writer, result SyncCodexJSONLResult) {
+	if stdout == nil {
+		return
+	}
+	if !result.Changed {
+		fmt.Fprintf(stdout, "Codex JSONL unchanged\n- cursor: %s\n", result.Fingerprint)
+		return
+	}
+
+	fmt.Fprintf(
+		stdout,
+		"Codex JSONL synced\n- agent: %s\n- session: %s\n- cursor: %s\n- checkpoints: %d\n- daily reports: %d\n",
+		result.Import.AgentID,
+		result.Import.SessionID,
+		result.Fingerprint,
+		len(result.Import.Checkpoints),
+		len(result.Import.Reports),
+	)
 }
 
 func isDaemonPlanClass(docClass model.DocClass) bool {

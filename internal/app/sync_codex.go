@@ -78,7 +78,10 @@ func (r *Runtime) SyncCodexJSONL(params ImportCodexJSONLParams, now time.Time) (
 	if allowCursorIdentity && !hasNewEvent {
 		windows = nil
 	}
-	trailing := codexJSONLTrailingPlaceholders(transcript, baseCursor, windows, windowSize, now)
+	trailing := []codexjsonl.WindowSummary(nil)
+	if savedCursorRaw != "" {
+		trailing = codexJSONLTrailingPlaceholders(transcript, baseCursor, windows, windowSize, now)
+	}
 	if allowCursorIdentity && !hasNewEvent && nextOffset == baseCursor.Offset && len(trailing) == 0 {
 		return SyncCodexJSONLResult{
 			Changed:     false,
