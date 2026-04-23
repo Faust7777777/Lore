@@ -135,6 +135,8 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 		return 0
 	case "import-codex-jsonl":
 		return runImportCodexJSONL(args[1:], stdout, stderr)
+	case "import-codex-appserver":
+		return runImportCodexAppServer(args[1:], stdout, stderr, version)
 	case "sync-codex-jsonl":
 		return runSyncCodexJSONL(args[1:], stdout, stderr)
 	case "attach-codex-jsonl":
@@ -170,6 +172,7 @@ Commands:
   models               List models from the configured LLM endpoint
   mcp [workdir]        Run the read-only MCP server over stdio
   import-codex-jsonl   Import a Codex session JSONL into checkpoints and daily reports
+  import-codex-appserver Import a Codex app-server thread into checkpoints and daily reports
   sync-codex-jsonl     Sync a Codex session JSONL only when the file changed
   attach-codex-jsonl   Poll a Codex session JSONL and keep syncing it
   version              Print the CLI version

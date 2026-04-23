@@ -27,10 +27,10 @@ type Event struct {
 }
 
 type Transcript struct {
-	AgentID    string
-	SessionID  string
-	SourcePath string
-	Events     []Event
+	AgentID          string
+	SessionID        string
+	SourcePath       string
+	Events           []Event
 	sessionMetaBound bool
 	agentMetaBound   bool
 }
@@ -112,6 +112,13 @@ func finalizeTranscript(transcript *Transcript) {
 	if transcript.SessionID == "" {
 		transcript.SessionID = inferSessionID(transcript.SourcePath)
 	}
+}
+
+// FinalizeTranscript normalizes transcript ordering, deduplicates events, and
+// binds fallback agent/session identifiers for non-JSONL sources that reuse the
+// same transcript/window pipeline.
+func FinalizeTranscript(transcript *Transcript) {
+	finalizeTranscript(transcript)
 }
 
 func parseJSONLChunk(transcript *Transcript, chunk []byte, startOffset int64) error {
