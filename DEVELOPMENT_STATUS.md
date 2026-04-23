@@ -16,6 +16,7 @@ Updated: 2026-04-23
   - dependency health service
   - audit service
   - vault daemon with one-shot mode, recursive fsnotify watching, debounce, and polling fallback
+  - daemon-side Codex JSONL watching with poll fallback
 - Storage:
   - in-memory store for tests
   - persistent JSON state store for restart recovery

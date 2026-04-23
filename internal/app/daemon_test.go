@@ -279,6 +279,75 @@ func TestRunVaultDaemonWatcherIgnoresObsidianDirectory(t *testing.T) {
 	}
 }
 
+func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
+	loc := useFixedLocalZone(t)
+	workDir := t.TempDir()
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	runtime.Config.Vault.DebounceWindow = 50 * time.Millisecond
+
+	transcriptPath := filepath.Join(workDir, "daemon-codex-watch.jsonl")
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-daemon-watch","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"first watcher sync"}}`,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var output bytes.Buffer
+	errCh := make(chan error, 1)
+	startedAt := time.Now()
+	go func() {
+		errCh <- runtime.RunVaultDaemon(ctx, VaultDaemonRunOptions{
+			PollEvery: 5 * time.Second,
+			Stdout:    &output,
+			CodexJSONL: &ImportCodexJSONLParams{
+				InputPath: transcriptPath,
+				AgentID:   "codex",
+				SessionID: "session-daemon-watch",
+			},
+		})
+	}()
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return strings.Contains(output.String(), "Codex watcher active")
+	})
+
+	file, err := os.OpenFile(transcriptPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile(append) error = %v", err)
+	}
+	if _, err := file.WriteString("{\"timestamp\":\"2026-04-22T09:35:00+08:00\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"phase\":\"commentary\",\"message\":\"second watcher sync\"}}\n"); err != nil {
+		file.Close()
+		t.Fatalf("WriteString(append) error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close(append) error = %v", err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		view, err := runtime.ProcessSinkDay("codex", time.Date(2026, 4, 22, 12, 0, 0, 0, loc))
+		return err == nil && len(view.Checkpoints) == 2
+	})
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("RunVaultDaemon() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunVaultDaemon() did not stop after cancel")
+	}
+
+	if elapsed := time.Since(startedAt); elapsed >= 5*time.Second {
+		t.Fatalf("daemon elapsed = %s, want watcher-triggered codex sync before poll interval", elapsed)
+	}
+}
+
 func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool) {
 	t.Helper()
 

@@ -32,6 +32,8 @@ type VaultDaemonRunOptions struct {
 	CodexJSONL *ImportCodexJSONLParams
 }
 
+const codexWatchDebounce = 200 * time.Millisecond
+
 func (r *Runtime) ScanVaultChanges(now time.Time) (VaultDaemonScanResult, error) {
 	if _, err := r.Bootstrap(now); err != nil {
 		return VaultDaemonScanResult{}, err
@@ -158,12 +160,25 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 		writeDaemonLine(opts.Stdout, "Vault watcher active\n")
 	}
 
+	var codexWatcher *singleFileWatcher
+	if opts.CodexJSONL != nil && strings.TrimSpace(opts.CodexJSONL.InputPath) != "" {
+		codexWatcher, err = newSingleFileWatcher(opts.CodexJSONL.InputPath)
+		if err != nil {
+			writeDaemonLine(opts.Stdout, "Codex watcher unavailable\n- error: %s\n- mode: polling fallback\n", err)
+		} else {
+			defer codexWatcher.Close()
+			writeDaemonLine(opts.Stdout, "Codex watcher active\n")
+		}
+	}
+
 	ticker := time.NewTicker(opts.PollEvery)
 	defer ticker.Stop()
 
 	var (
-		debounceTimer *time.Timer
-		debounceCh    <-chan time.Time
+		debounceTimer      *time.Timer
+		debounceCh         <-chan time.Time
+		codexDebounceTimer *time.Timer
+		codexDebounceCh    <-chan time.Time
 	)
 	pendingPaths := make(map[string]struct{})
 
@@ -179,6 +194,18 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 		}
 		debounceCh = nil
 	}
+	stopCodexDebounce := func() {
+		if codexDebounceTimer == nil {
+			return
+		}
+		if !codexDebounceTimer.Stop() {
+			select {
+			case <-codexDebounceTimer.C:
+			default:
+			}
+		}
+		codexDebounceCh = nil
+	}
 	resetDebounce := func() {
 		if debounceTimer == nil {
 			debounceTimer = time.NewTimer(r.Config.Vault.DebounceWindow)
@@ -193,6 +220,21 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 		}
 		debounceTimer.Reset(r.Config.Vault.DebounceWindow)
 		debounceCh = debounceTimer.C
+	}
+	resetCodexDebounce := func() {
+		if codexDebounceTimer == nil {
+			codexDebounceTimer = time.NewTimer(codexWatchDebounce)
+			codexDebounceCh = codexDebounceTimer.C
+			return
+		}
+		if !codexDebounceTimer.Stop() {
+			select {
+			case <-codexDebounceTimer.C:
+			default:
+			}
+		}
+		codexDebounceTimer.Reset(codexWatchDebounce)
+		codexDebounceCh = codexDebounceTimer.C
 	}
 	flushPending := func(now time.Time) error {
 		if len(pendingPaths) == 0 {
@@ -227,15 +269,22 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 		var (
 			watchEvents <-chan fsnotify.Event
 			watchErrors <-chan error
+			codexEvents <-chan fsnotify.Event
+			codexErrors <-chan error
 		)
 		if watcher != nil {
 			watchEvents = watcher.Events()
 			watchErrors = watcher.Errors()
 		}
+		if codexWatcher != nil {
+			codexEvents = codexWatcher.Events()
+			codexErrors = codexWatcher.Errors()
+		}
 
 		select {
 		case <-ctx.Done():
 			stopDebounce()
+			stopCodexDebounce()
 			writeDaemonLine(opts.Stdout, "Vault daemon stopped\n")
 			return nil
 		case event, ok := <-watchEvents:
@@ -255,6 +304,18 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 				pendingPaths[path] = struct{}{}
 			}
 			resetDebounce()
+		case event, ok := <-codexEvents:
+			if !ok {
+				codexWatcher = nil
+				continue
+			}
+			if !codexWatcher.Matches(event) {
+				continue
+			}
+			if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Chmod) == 0 {
+				continue
+			}
+			resetCodexDebounce()
 		case err, ok := <-watchErrors:
 			if !ok {
 				watcher = nil
@@ -265,11 +326,24 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 				watcher.Close()
 			}
 			watcher = nil
+		case err, ok := <-codexErrors:
+			if !ok {
+				codexWatcher = nil
+				continue
+			}
+			writeDaemonLine(opts.Stdout, "Codex watcher error\n- error: %s\n- mode: polling fallback\n", err)
+			if codexWatcher != nil {
+				codexWatcher.Close()
+			}
+			codexWatcher = nil
 		case now := <-debounceCh:
 			debounceCh = nil
 			if err := flushPending(now); err != nil {
 				return err
 			}
+		case <-codexDebounceCh:
+			codexDebounceCh = nil
+			r.syncCodexJSONLIfConfigured(opts, modelAvailable)
 		case now := <-ticker.C:
 			if watcher == nil {
 				result, err := r.ScanVaultChanges(now)
@@ -278,7 +352,9 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 				}
 				writeDaemonScanSummary(opts.Stdout, result)
 			}
-			r.syncCodexJSONLIfConfigured(opts, modelAvailable)
+			if codexWatcher == nil {
+				r.syncCodexJSONLIfConfigured(opts, modelAvailable)
+			}
 		}
 	}
 }

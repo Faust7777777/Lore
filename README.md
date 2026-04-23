@@ -18,6 +18,7 @@ Key product constraints already baked into the scaffold:
 - Model availability is a hard dependency for the main chain
 - Cost control is observe-first, not a hard gate in P0/P1
 - Vault daemon now uses recursive fsnotify watching with debounce and polling fallback
+- When `daemon run --codex-jsonl ...` is enabled, Codex transcript sync also uses watcher-first wakeups with polling fallback
 
 ## Layout
 
