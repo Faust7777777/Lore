@@ -35,6 +35,7 @@ Key product constraints already baked into the scaffold:
 - `bootstrap [workdir]`
 - `demo-p0a [workdir]`
 - `demo-p0b [workdir]`
+- `tui --workdir <dir> [--agent <id>] [--day YYYY-MM-DD] [--once "<request>"]`
 - `mcp [workdir]`
 - `import-codex-jsonl --workdir <dir> --input <session.jsonl> [--agent <id>] [--session <id>] [--window 30m] [--skip-rollup]`
 - `sync-codex-jsonl --workdir <dir> --input <session.jsonl> [--agent <id>] [--session <id>] [--window 30m] [--skip-rollup]`

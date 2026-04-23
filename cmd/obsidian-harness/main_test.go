@@ -258,6 +258,31 @@ func TestRunConsoleOnceStatus(t *testing.T) {
 	}
 }
 
+func TestRunTUIOnceStatus(t *testing.T) {
+	workDir := t.TempDir()
+	configureLLMTestEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"tui", "--workdir", workDir, "--once", "show current status"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	text := stdout.String()
+	for _, expected := range []string{
+		"Obsidian Harness Workbench",
+		"Pending Drafts",
+		"Process Sink",
+		"Last Action",
+		"Managed Status",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("expected tui output to contain %q, got %q", expected, text)
+		}
+	}
+}
+
 func TestRunModelsList(t *testing.T) {
 	clearOperatorEnv(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

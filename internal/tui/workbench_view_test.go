@@ -1,0 +1,65 @@
+package tui
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"obsidian-harness/internal/app"
+	"obsidian-harness/internal/model"
+)
+
+func TestRenderWorkbenchIncludesCorePanels(t *testing.T) {
+	day := time.Date(2026, 4, 23, 12, 0, 0, 0, time.Local)
+	view := RenderWorkbench(
+		"test",
+		model.ManagedStatusView{
+			Ready:     true,
+			WorkDir:   "work",
+			VaultRoot: "vault",
+			Health:    model.HealthSnapshot{Outcome: model.NewOutcome(model.StatusOK), Message: "healthy"},
+			CoreDocs: []model.ManagedCoreStatus{
+				{Name: "system", Exists: true, Path: "00-system/system.md"},
+			},
+		},
+		[]model.Draft{{
+			ID:    "draft-1",
+			State: model.DraftPendingReview,
+			Kind:  model.DraftKindProgressSync,
+			Target: model.DocumentRef{
+				Path: "progress.md",
+			},
+			Title: "pending draft",
+		}},
+		app.ProcessSinkDayView{
+			AgentID: "codex",
+			Day:     day,
+			Checkpoints: []model.CheckpointDoc{{
+				Window: model.SessionWindow{
+					AgentID:     "codex",
+					SessionID:   "session-1",
+					WindowStart: day.Truncate(24 * time.Hour).Add(9 * time.Hour),
+					WindowEnd:   day.Truncate(24 * time.Hour).Add(9*time.Hour + 30*time.Minute),
+				},
+				State: model.CheckpointMaterialized,
+				Title: "morning checkpoint",
+			}},
+		},
+		"Managed Status\n============\nReady: yes",
+	)
+
+	for _, expected := range []string{
+		"Obsidian Harness Workbench",
+		"Managed Core",
+		"Pending Drafts",
+		"Process Sink",
+		"Last Action",
+		"morning checkpoint",
+		"pending draft",
+		"Managed Status",
+	} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("expected workbench to contain %q, got %q", expected, view)
+		}
+	}
+}

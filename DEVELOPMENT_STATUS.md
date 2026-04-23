@@ -15,6 +15,7 @@ Updated: 2026-04-22
   - in-process event broker
   - dependency health service
   - audit service
+  - polling vault daemon with one-shot and long-running modes
 - Storage:
   - in-memory store for tests
   - persistent JSON state store for restart recovery
@@ -37,11 +38,19 @@ Updated: 2026-04-22
   - manual import path from CLI into checkpoint and daily report writes
   - cursor-backed file fingerprint sync to skip unchanged transcripts
   - local attach mode via polling wrapper around sync
+- LLM/operator path:
+  - OpenAI-compatible provider client
+  - model discovery and operator-model selection
+  - GPT-5 `/responses` transport for compatible providers
+  - retry hardening for `429` / `5xx` / transport EOF
 - CLI:
   - `status [workdir]`
   - `bootstrap [workdir]`
   - `demo-p0a [workdir]`
   - `demo-p0b [workdir]`
+  - `tui --workdir <dir> [--once "<request>"]`
+  - `console --workdir <dir> [--once "<request>"]`
+  - `daemon run --workdir <dir> [--once] [--codex-jsonl <session.jsonl>]`
   - `mcp [workdir]`
   - `import-codex-jsonl --workdir <dir> --input <session.jsonl>`
   - `sync-codex-jsonl --workdir <dir> --input <session.jsonl>`
@@ -65,24 +74,19 @@ Commands verified locally with the repo-managed Go toolchain:
 
 ## Current Gaps
 
-- No real daemon loop yet
-- No file watcher yet
-- No provider/model adapter yet
+- No file watcher yet; vault daemon still uses polling + full markdown walk
 - No live app-server / offset-tail Codex adapter yet; current P0-B supports manual import plus file-fingerprint sync/attach over local JSONL files
-- No real TUI framework yet; current output is text-mode status and demo commands
+- No full-screen TUI framework yet; `tui` is a text workbench, not a Bubble Tea-style interface
 - No SQLite state store yet; JSON store is the minimal persisted recovery layer
-- Draft apply is append-based, not diff/patch-based
-- Process-sink import currently uses deterministic transcript rendering; model summarizer integration is not wired
 - Attachment refs are surfaced in read APIs, but binary/media extraction is not implemented yet
 
 ## Suggested Next Steps
 
-1. Add a real daemon service and watcher loop around `orchestrator.Harness`.
-2. Upgrade JSONL attach from whole-file resync to a true offset/tail adapter with partial-line handling and source identity checks.
-3. Replace append-only draft apply with structured patch/diff application.
-4. Connect transcript import to a real summarizer/model pipeline instead of deterministic window rendering.
-5. Move from text status view to a real interactive TUI.
-6. Add SQLite-backed state/audit store once the shape stabilizes.
+1. Add a real file watcher around the daemon so vault processing becomes event-driven instead of poll-walk based.
+2. Upgrade JSONL attach from file-fingerprint sync to a stronger live adapter with source-specific streaming or app-server integration.
+3. Move from the text workbench to a fuller interactive TUI once panel structure stabilizes.
+4. Add SQLite-backed state/audit store once the shape stabilizes.
+5. Extend attachment/media extraction beyond markdown ref surfacing.
 
 ## Git Checkpoints
 

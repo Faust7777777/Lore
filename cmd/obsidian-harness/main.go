@@ -110,6 +110,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "P0-B completed\n- checkpoint: %s\n- report: %s\n", result.Checkpoint.Path, result.Report.Path)
 		return 0
+	case "tui":
+		return runTUICommand(args[1:], os.Stdin, stdout, stderr)
 	case "console":
 		return runConsoleCommand(args[1:], os.Stdin, stdout, stderr)
 	case "daemon":
@@ -166,6 +168,7 @@ Commands:
   bootstrap [workdir]  Scaffold the managed vault skeleton
   demo-p0a [workdir]   Run the managed doc -> draft -> apply demo chain
   demo-p0b [workdir]   Run the checkpoint -> daily report demo chain
+  tui                  Text workbench: dashboard + natural language operator loop
   console              Operator console: NL -> one explicit reviewed action
   daemon               Run the vault watcher daemon / one-shot scan
   draft                Review and act on pending drafts
@@ -270,6 +273,98 @@ func runConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 		fmt.Fprint(stdout, output)
 		if !strings.HasSuffix(output, "\n") {
 			fmt.Fprintln(stdout)
+		}
+	}
+}
+
+func runTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	workDir, utterance, agentID, day, err := parseTUIFlags(args, stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	runtime, err := app.OpenRuntime(workDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "open runtime: %v\n", err)
+		return 1
+	}
+
+	session := console.NewSession(version)
+	session.DefaultAgentID = agentID
+
+	render := func(lastOutput string) error {
+		managed, err := runtime.ManagedStatus()
+		if err != nil {
+			return err
+		}
+		drafts, err := runtime.ListDrafts()
+		if err != nil {
+			return err
+		}
+		processSink, err := runtime.ProcessSinkDay(agentID, day)
+		if err != nil {
+			return err
+		}
+		fmt.Fprint(stdout, tui.RenderWorkbench(version, managed, drafts, processSink, lastOutput))
+		return nil
+	}
+
+	if strings.TrimSpace(utterance) != "" {
+		output, err := session.Handle(utterance, runtime)
+		if err != nil {
+			fmt.Fprintf(stderr, "tui: %v\n", err)
+			return 1
+		}
+		if err := render(output); err != nil {
+			fmt.Fprintf(stderr, "tui: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	if err := render(""); err != nil {
+		fmt.Fprintf(stderr, "tui: %v\n", err)
+		return 1
+	}
+
+	scanner := bufio.NewScanner(stdin)
+	lastOutput := ""
+	for {
+		fmt.Fprint(stdout, "\nworkbench> ")
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				fmt.Fprintf(stderr, "tui: %v\n", err)
+				return 1
+			}
+			fmt.Fprintln(stdout, "\nWorkbench stopped")
+			return 0
+		}
+
+		line := strings.TrimSpace(scanner.Text())
+		switch strings.ToLower(line) {
+		case "":
+			continue
+		case "/quit", "/exit":
+			fmt.Fprintln(stdout, "Workbench stopped")
+			return 0
+		case "/refresh":
+			if err := render(lastOutput); err != nil {
+				fmt.Fprintf(stderr, "tui: %v\n", err)
+				return 1
+			}
+			continue
+		}
+
+		output, err := session.Handle(line, runtime)
+		if err != nil {
+			fmt.Fprintf(stderr, "tui action: %v\n", err)
+			continue
+		}
+		lastOutput = output
+		if err := render(lastOutput); err != nil {
+			fmt.Fprintf(stderr, "tui: %v\n", err)
+			return 1
 		}
 	}
 }
@@ -620,6 +715,33 @@ func parseConsoleFlags(args []string, stderr io.Writer) (string, string, error) 
 	return filepath.Clean(*workDir), strings.TrimSpace(*once), nil
 }
 
+func parseTUIFlags(args []string, stderr io.Writer) (string, string, string, time.Time, error) {
+	flags := flag.NewFlagSet("tui", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	once := flags.String("once", "", "single utterance to execute")
+	agentID := flags.String("agent", "codex", "default agent for process-sink panel")
+	dayRaw := flags.String("day", "", "day for process-sink panel (YYYY-MM-DD)")
+	if err := flags.Parse(args); err != nil {
+		return "", "", "", time.Time{}, err
+	}
+	if strings.TrimSpace(*workDir) == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", "", "", time.Time{}, err
+		}
+		*workDir = cwd
+	}
+
+	day, err := resolveWorkbenchDay(*dayRaw, time.Now())
+	if err != nil {
+		return "", "", "", time.Time{}, fmt.Errorf("tui: invalid --day: %w", err)
+	}
+
+	return filepath.Clean(*workDir), strings.TrimSpace(*once), strings.TrimSpace(*agentID), day, nil
+}
+
 func parseDaemonFlags(args []string, stderr io.Writer) (string, time.Duration, time.Duration, bool, *app.ImportCodexJSONLParams, error) {
 	flags := flag.NewFlagSet("daemon run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -695,6 +817,18 @@ func isConsoleExit(value string) bool {
 	default:
 		return false
 	}
+}
+
+func resolveWorkbenchDay(raw string, now time.Time) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return model.NormalizeDay(now), nil
+	}
+	parsed, err := time.ParseInLocation("2006-01-02", raw, time.Local)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return model.NormalizeDay(parsed), nil
 }
 
 func parseProcessSinkDayFlags(args []string, stderr io.Writer) (string, string, time.Time, error) {
