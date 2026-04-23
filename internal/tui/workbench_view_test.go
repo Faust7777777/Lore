@@ -45,6 +45,20 @@ func TestRenderWorkbenchIncludesCorePanels(t *testing.T) {
 				Title: "morning checkpoint",
 			}},
 		},
+		&app.DraftReview{
+			Draft: model.Draft{
+				ID:              "draft-1",
+				State:           model.DraftPendingReview,
+				Kind:            model.DraftKindProgressSync,
+				Title:           "pending draft",
+				Summary:         "sync the weekly progress table",
+				ProposedContent: "- [x] done",
+				Target: model.DocumentRef{
+					Path: "progress.md",
+				},
+			},
+			BaseVersionMatches: true,
+		},
 		"Managed Status\n============\nReady: yes",
 	)
 
@@ -52,10 +66,13 @@ func TestRenderWorkbenchIncludesCorePanels(t *testing.T) {
 		"Obsidian Harness Workbench",
 		"Managed Core",
 		"Pending Drafts",
+		"Focused Draft",
 		"Process Sink",
 		"Last Action",
 		"morning checkpoint",
 		"pending draft",
+		"sync the weekly progress table",
+		"approve it",
 		"Managed Status",
 	} {
 		if !strings.Contains(view, expected) {

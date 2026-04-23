@@ -8,7 +8,7 @@ import (
 	"obsidian-harness/internal/model"
 )
 
-func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, lastOutput string) string {
+func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, lastOutput string) string {
 	var builder strings.Builder
 
 	builder.WriteString("Obsidian Harness Workbench\n")
@@ -50,6 +50,26 @@ func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []m
 		}
 	}
 
+	builder.WriteString("\nFocused Draft\n")
+	builder.WriteString("-------------\n")
+	if focusedReview == nil {
+		builder.WriteString("No focused draft. Try: review the pending draft.\n")
+	} else {
+		writeField(&builder, "ID", focusedReview.Draft.ID)
+		writeField(&builder, "State", string(focusedReview.Draft.State))
+		writeField(&builder, "Target", focusedReview.Draft.Target.Path)
+		writeField(&builder, "Base Match", yesNo(focusedReview.BaseVersionMatches))
+		builder.WriteString("\n")
+		builder.WriteString("Summary\n")
+		builder.WriteString("~~~~~~~\n")
+		builder.WriteString(strings.TrimSpace(excerpt(focusedReview.Draft.Summary, 240)))
+		builder.WriteString("\n\n")
+		builder.WriteString("Patch Preview\n")
+		builder.WriteString("~~~~~~~~~~~~~\n")
+		builder.WriteString(strings.TrimSpace(excerpt(focusedReview.Draft.ProposedContent, 320)))
+		builder.WriteString("\n")
+	}
+
 	builder.WriteString("\nProcess Sink\n")
 	builder.WriteString("------------\n")
 	writeField(&builder, "Checkpoints", fmt.Sprintf("%d", len(processSink.Checkpoints)))
@@ -87,6 +107,13 @@ func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []m
 	builder.WriteString("--------\n")
 	builder.WriteString("Type a natural language request.\n")
 	builder.WriteString("Special commands: /refresh, /quit\n")
+	builder.WriteString("Examples:\n")
+	builder.WriteString("  show status\n")
+	builder.WriteString("  list pending drafts\n")
+	builder.WriteString("  review the pending draft\n")
+	builder.WriteString("  approve it\n")
+	builder.WriteString("  apply it\n")
+	builder.WriteString("  show codex daily report today\n")
 
 	return builder.String()
 }

@@ -306,7 +306,14 @@ func runTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 		if err != nil {
 			return err
 		}
-		fmt.Fprint(stdout, tui.RenderWorkbench(version, managed, drafts, processSink, lastOutput))
+		var focusedReview *app.DraftReview
+		if strings.TrimSpace(session.CurrentDraftID) != "" {
+			review, err := runtime.ReviewDraft(session.CurrentDraftID)
+			if err == nil {
+				focusedReview = &review
+			}
+		}
+		fmt.Fprint(stdout, tui.RenderWorkbench(version, managed, drafts, processSink, focusedReview, lastOutput))
 		return nil
 	}
 
