@@ -298,26 +298,11 @@ func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 		if interactive {
 			clearInteractiveTUI(stdout)
 		}
-		managed, err := runtime.ManagedStatus()
+		viewModel, err := loadWorkbenchViewModel(version, runtime, session, agentID, day, localExec, shellProfileEnabled(localExec), lastOutput)
 		if err != nil {
 			return err
 		}
-		drafts, err := runtime.ListDrafts()
-		if err != nil {
-			return err
-		}
-		processSink, err := runtime.ProcessSinkDay(agentID, day)
-		if err != nil {
-			return err
-		}
-		var focusedReview *app.DraftReview
-		if strings.TrimSpace(session.CurrentDraftID) != "" {
-			review, err := runtime.ReviewDraft(session.CurrentDraftID)
-			if err == nil {
-				focusedReview = &review
-			}
-		}
-		fmt.Fprint(stdout, tui.RenderWorkbench(version, managed, drafts, processSink, focusedReview, session.LastToolTrace, localExec, shellProfileEnabled(localExec), lastOutput))
+		fmt.Fprint(stdout, tui.RenderWorkbenchViewModel(viewModel))
 		return nil
 	}
 
@@ -360,6 +345,30 @@ func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 			fmt.Fprintln(stdout, "Lore stopped")
 			return 0
 		case "/refresh":
+			if err := render(lastOutput); err != nil {
+				fmt.Fprintf(stderr, "tui: %v\n", err)
+				return 1
+			}
+			continue
+		case "/status":
+			managed, err := runtime.ManagedStatus()
+			if err != nil {
+				fmt.Fprintf(stderr, "tui: %v\n", err)
+				return 1
+			}
+			lastOutput = tui.RenderManagedStatus(version, managed)
+			if err := render(lastOutput); err != nil {
+				fmt.Fprintf(stderr, "tui: %v\n", err)
+				return 1
+			}
+			continue
+		case "/drafts":
+			drafts, err := runtime.ListDrafts()
+			if err != nil {
+				fmt.Fprintf(stderr, "tui: %v\n", err)
+				return 1
+			}
+			lastOutput = tui.RenderDraftList(drafts)
 			if err := render(lastOutput); err != nil {
 				fmt.Fprintf(stderr, "tui: %v\n", err)
 				return 1

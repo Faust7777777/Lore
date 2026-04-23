@@ -305,7 +305,8 @@ func TestRunTUIOnceStatus(t *testing.T) {
 		"Lore",
 		"Pending Drafts",
 		"Process Sink",
-		"Last Action",
+		"Conversation Lane",
+		"Latest Output",
 		"Managed Status",
 	} {
 		if !strings.Contains(text, expected) {
@@ -325,7 +326,7 @@ func TestRunTUIInteractiveSurfacesActionErrorsInWorkbench(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "Last Action") || !strings.Contains(stdout.String(), "Error:") {
+	if !strings.Contains(stdout.String(), "Latest Output") || !strings.Contains(stdout.String(), "Error:") {
 		t.Fatalf("expected interactive tui to surface action error in workbench, got %q", stdout.String())
 	}
 }
