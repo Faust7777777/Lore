@@ -3,6 +3,7 @@ package app
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,11 +15,19 @@ import (
 	"obsidian-harness/internal/store"
 )
 
+const codexJSONLLockStaleAfter = 30 * time.Second
+
 type SyncCodexJSONLResult struct {
 	Changed     bool
 	CursorKey   string
 	Fingerprint string
 	Import      ImportCodexJSONLResult
+}
+
+type codexJSONLLockPayload struct {
+	PID       int    `json:"pid"`
+	CreatedAt string `json:"created_at"`
+	CursorKey string `json:"cursor_key"`
 }
 
 func (r *Runtime) SyncCodexJSONL(params ImportCodexJSONLParams, now time.Time) (SyncCodexJSONLResult, error) {
@@ -318,22 +327,97 @@ func acquireCodexJSONLLock(stateDir string, cursorKey string) (func(), error) {
 		return nil, err
 	}
 
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if err != nil {
-		if os.IsExist(err) {
+	payload := codexJSONLLockPayload{
+		PID:       os.Getpid(),
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		CursorKey: cursorKey,
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err == nil {
+			encoder := json.NewEncoder(file)
+			encoder.SetIndent("", "  ")
+			writeErr := encoder.Encode(payload)
+			closeErr := file.Close()
+			if writeErr != nil {
+				_ = os.Remove(lockPath)
+				return nil, writeErr
+			}
+			if closeErr != nil {
+				_ = os.Remove(lockPath)
+				return nil, closeErr
+			}
+			return func() {
+				_ = os.Remove(lockPath)
+			}, nil
+		}
+		if !os.IsExist(err) {
+			return nil, err
+		}
+
+		stale, owner, staleErr := shouldReclaimCodexJSONLLock(lockPath, time.Now())
+		if staleErr != nil {
+			return nil, staleErr
+		}
+		if !stale {
+			if owner != "" {
+				return nil, fmt.Errorf("codex jsonl source already syncing: %s (%s)", cursorKey, owner)
+			}
 			return nil, fmt.Errorf("codex jsonl source already syncing: %s", cursorKey)
 		}
-		return nil, err
+		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
 	}
-	_, _ = file.WriteString(cursorKey + "\n")
-	_ = file.Close()
-
-	return func() {
-		_ = os.Remove(lockPath)
-	}, nil
+	return nil, fmt.Errorf("codex jsonl source already syncing: %s", cursorKey)
 }
 
 func codexJSONLLockName(cursorKey string) string {
 	sum := sha256.Sum256([]byte(cursorKey))
 	return hex.EncodeToString(sum[:8]) + ".lock"
+}
+
+func shouldReclaimCodexJSONLLock(lockPath string, now time.Time) (bool, string, error) {
+	payload, parsed := readCodexJSONLLockPayload(lockPath)
+	if parsed {
+		if createdAt, err := time.Parse(time.RFC3339Nano, payload.CreatedAt); err == nil {
+			if now.Sub(createdAt) > codexJSONLLockStaleAfter {
+				return true, codexJSONLLockOwner(payload), nil
+			}
+		}
+	}
+
+	info, err := os.Stat(lockPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, "", nil
+		}
+		return false, "", err
+	}
+	if now.Sub(info.ModTime()) > codexJSONLLockStaleAfter {
+		return true, codexJSONLLockOwner(payload), nil
+	}
+	return false, codexJSONLLockOwner(payload), nil
+}
+
+func readCodexJSONLLockPayload(lockPath string) (codexJSONLLockPayload, bool) {
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		return codexJSONLLockPayload{}, false
+	}
+	var payload codexJSONLLockPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return codexJSONLLockPayload{}, false
+	}
+	if payload.PID <= 0 || strings.TrimSpace(payload.CreatedAt) == "" {
+		return codexJSONLLockPayload{}, false
+	}
+	return payload, true
+}
+
+func codexJSONLLockOwner(payload codexJSONLLockPayload) string {
+	if payload.PID <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("pid %d", payload.PID)
 }

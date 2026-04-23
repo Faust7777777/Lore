@@ -136,6 +136,65 @@ func TestChatCompletionUsesResponsesAPIForGPT5(t *testing.T) {
 	}
 }
 
+func TestChatCompletionUsesResponsesAPIPreservesAssistantHistory(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("path = %q, want /responses", r.URL.Path)
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		input, ok := payload["input"].([]any)
+		if !ok || len(input) != 3 {
+			t.Fatalf("input = %#v, want 3-message history", payload["input"])
+		}
+		gotRoles := make([]string, 0, len(input))
+		for _, item := range input {
+			record, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("input item = %#v, want object", item)
+			}
+			gotRoles = append(gotRoles, record["role"].(string))
+		}
+		if strings.Join(gotRoles, ",") != "user,assistant,user" {
+			t.Fatalf("roles = %v, want [user assistant user]", gotRoles)
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output_text": `{"action":"show_status"}`,
+			"usage": map[string]any{
+				"input_tokens":  13,
+				"output_tokens": 4,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL: server.URL,
+		APIKey:  "secret",
+		Model:   "gpt-5.4",
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	_, err = client.ChatCompletion(context.Background(), ChatCompletionRequest{
+		Messages: []Message{
+			{Role: "system", Content: "be concise"},
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", Content: "previous answer"},
+			{Role: "user", Content: "follow up"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() error = %v", err)
+	}
+}
+
 func TestChatCompletionReturnsAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
@@ -193,6 +252,63 @@ func TestChatCompletionRetriesTransientGatewayError(t *testing.T) {
 		BaseURL: server.URL,
 		APIKey:  "secret",
 		Model:   "gpt-test",
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.ChatCompletion(context.Background(), ChatCompletionRequest{
+		Messages: []Message{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() error = %v", err)
+	}
+	if requests != 2 {
+		t.Fatalf("request count = %d, want 2", requests)
+	}
+	if resp.Content != `{"action":"show_status"}` {
+		t.Fatalf("resp.Content = %q", resp.Content)
+	}
+}
+
+func TestChatCompletionRetriesRateLimitForResponsesAPI(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/responses" {
+			t.Fatalf("path = %q, want /responses", r.URL.Path)
+		}
+		if requests == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"message": "rate limited",
+				},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": []map[string]any{{
+				"type": "message",
+				"role": "assistant",
+				"content": []map[string]any{{
+					"type": "output_text",
+					"text": `{"action":"show_status"}`,
+				}},
+			}},
+			"usage": map[string]any{
+				"input_tokens":  11,
+				"output_tokens": 3,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL: server.URL,
+		APIKey:  "secret",
+		Model:   "gpt-5.4",
 		Timeout: time.Second,
 	})
 	if err != nil {
@@ -284,6 +400,64 @@ func TestChatCompletionRequiresModel(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "model is required") {
 		t.Fatalf("error = %q, want missing model", err)
+	}
+}
+
+func TestChatCompletionResponsesEmptyOutputReturnsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": []map[string]any{},
+			"usage": map[string]any{
+				"input_tokens":  3,
+				"output_tokens": 0,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL: server.URL,
+		APIKey:  "secret",
+		Model:   "gpt-5.4",
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	_, err = client.ChatCompletion(context.Background(), ChatCompletionRequest{
+		Messages: []Message{{Role: "user", Content: "hello"}},
+	})
+	if err == nil {
+		t.Fatal("ChatCompletion() error = nil, want empty response output error")
+	}
+	if !strings.Contains(err.Error(), "empty response output") {
+		t.Fatalf("error = %q, want empty response output", err)
+	}
+}
+
+func TestBuildResponsesPayloadRejectsUnknownRole(t *testing.T) {
+	_, err := buildResponsesPayload("gpt-5.4", ChatCompletionRequest{
+		Messages: []Message{
+			{Role: "system", Content: "be concise"},
+			{Role: "tool", Content: "tool result"},
+			{Role: "user", Content: "hello"},
+		},
+	})
+	if err == nil {
+		t.Fatal("buildResponsesPayload() error = nil, want unsupported role error")
+	}
+	if !strings.Contains(err.Error(), "unsupported responses message role") {
+		t.Fatalf("error = %q, want unsupported role error", err)
+	}
+}
+
+func TestUsesResponsesAPITightAllowlist(t *testing.T) {
+	if !usesResponsesAPI("gpt-5.4") {
+		t.Fatal("usesResponsesAPI(gpt-5.4) = false, want true")
+	}
+	if usesResponsesAPI("gpt-50") {
+		t.Fatal("usesResponsesAPI(gpt-50) = true, want false")
 	}
 }
 

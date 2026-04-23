@@ -104,7 +104,8 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 		opts.PollEvery = 2 * time.Second
 	}
 
-	r.Harness.UpdateDependencies(r.ProcessSinkSummarizer != nil && r.processSinkSummarizerErr == nil, false)
+	modelAvailable := r.ProcessSinkSummarizer != nil && r.processSinkSummarizerErr == nil
+	r.Harness.UpdateDependencies(modelAvailable, false)
 	writeDaemonLine(opts.Stdout, "Vault daemon running\n- poll: %s\n- debounce: %s\n", opts.PollEvery, r.Config.Vault.DebounceWindow)
 
 	for {
@@ -117,9 +118,11 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 		if opts.CodexJSONL != nil && strings.TrimSpace(opts.CodexJSONL.InputPath) != "" {
 			syncResult, err := r.SyncCodexJSONL(*opts.CodexJSONL, time.Now())
 			if err != nil {
-				return err
+				r.Harness.UpdateDependencies(modelAvailable, false)
+				writeDaemonCodexError(opts.Stdout, err)
+			} else {
+				writeDaemonCodexSummary(opts.Stdout, syncResult)
 			}
-			writeDaemonCodexSummary(opts.Stdout, syncResult)
 		}
 		if opts.Once {
 			return nil
@@ -179,6 +182,13 @@ func writeDaemonCodexSummary(stdout io.Writer, result SyncCodexJSONLResult) {
 		len(result.Import.Checkpoints),
 		len(result.Import.Reports),
 	)
+}
+
+func writeDaemonCodexError(stdout io.Writer, err error) {
+	if stdout == nil || err == nil {
+		return
+	}
+	fmt.Fprintf(stdout, "Codex JSONL sync failed\n- error: %s\n", err)
 }
 
 func isDaemonPlanClass(docClass model.DocClass) bool {

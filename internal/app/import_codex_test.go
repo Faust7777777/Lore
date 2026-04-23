@@ -296,6 +296,55 @@ func TestRuntimeSyncCodexJSONLRejectsConcurrentSourceLock(t *testing.T) {
 	}
 }
 
+func TestRuntimeSyncCodexJSONLReclaimsStaleSourceLock(t *testing.T) {
+	loc := useFixedLocalZone(t)
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "stale-lock.jsonl")
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-stale-lock","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"recover stale lock"}}`,
+	)
+
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	absolutePath, err := filepath.Abs(transcriptPath)
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+	cursorKey := codexJSONLCursorKey(absolutePath)
+	lockPath := filepath.Join(runtime.Config.Paths.StateDir, "locks", codexJSONLLockName(cursorKey))
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(lock dir) error = %v", err)
+	}
+	if err := os.WriteFile(lockPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(lockPath) error = %v", err)
+	}
+	staleAt := time.Now().Add(-codexJSONLLockStaleAfter - time.Second)
+	if err := os.Chtimes(lockPath, staleAt, staleAt); err != nil {
+		t.Fatalf("Chtimes(lockPath) error = %v", err)
+	}
+
+	result, err := runtime.SyncCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath,
+		AgentID:   "codex",
+		SessionID: "session-stale-lock",
+	}, time.Date(2026, 4, 22, 9, 10, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("SyncCodexJSONL() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Changed = false, want stale-lock recovery import")
+	}
+	if _, err := os.Stat(lockPath); err == nil {
+		t.Fatalf("expected lock file %s to be removed after sync", lockPath)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("Stat(lockPath) error = %v", err)
+	}
+}
+
 func TestRuntimeSyncCodexJSONLReplaysLastWindowWithoutDuplicatingCheckpoint(t *testing.T) {
 	loc := useFixedLocalZone(t)
 	workDir := t.TempDir()

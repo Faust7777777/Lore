@@ -1,6 +1,8 @@
 package app
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,6 +137,38 @@ func TestVaultDaemonScanSummaryIncludesDraftIDs(t *testing.T) {
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("expected summary to contain %q, got %q", expected, text)
+		}
+	}
+}
+
+func TestRunVaultDaemonContinuesAfterCodexSyncFailure(t *testing.T) {
+	workDir := t.TempDir()
+	runtime, err := OpenRuntime(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	var output bytes.Buffer
+	err = runtime.RunVaultDaemon(context.Background(), VaultDaemonRunOptions{
+		Once:   true,
+		Stdout: &output,
+		CodexJSONL: &ImportCodexJSONLParams{
+			InputPath: filepath.Join(workDir, "missing.jsonl"),
+			AgentID:   "codex",
+			SessionID: "session-missing",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunVaultDaemon() error = %v, want non-fatal sync failure", err)
+	}
+	text := output.String()
+	for _, expected := range []string{
+		"Vault daemon running",
+		"Vault daemon scan",
+		"Codex JSONL sync failed",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("expected daemon output to contain %q, got %q", expected, text)
 		}
 	}
 }

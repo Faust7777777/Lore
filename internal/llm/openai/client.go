@@ -47,6 +47,12 @@ type Client struct {
 	httpClient *http.Client
 }
 
+const (
+	chatCompletionRetryAttempts = 3
+	chatCompletionRetryMinDelay = 300 * time.Millisecond
+	chatCompletionRetryMaxDelay = 30 * time.Second
+)
+
 type chatCompletionRequestPayload struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages"`
@@ -155,19 +161,16 @@ func (c *Client) ChatCompletion(ctx context.Context, req ChatCompletionRequest) 
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			if err := waitForRetry(ctx, time.Duration(attempt)*200*time.Millisecond); err != nil {
-				return ChatCompletionResponse{}, err
-			}
-		}
-
+	for attempt := 1; attempt <= chatCompletionRetryAttempts; attempt++ {
 		resp, err := c.chatCompletionOnce(ctx, req)
 		if err == nil {
 			return resp, nil
 		}
 		lastErr = err
-		if !isRetryableChatCompletionError(err) {
+		if !isRetryableChatCompletionError(err) || attempt >= chatCompletionRetryAttempts {
+			return ChatCompletionResponse{}, err
+		}
+		if err := waitForRetry(ctx, retryDelayForChatCompletionError(err, attempt)); err != nil {
 			return ChatCompletionResponse{}, err
 		}
 	}
@@ -215,6 +218,7 @@ func (c *Client) chatCompletionOnce(ctx context.Context, req ChatCompletionReque
 		return ChatCompletionResponse{}, chatCompletionAPIError{
 			StatusCode: httpResp.StatusCode,
 			Message:    extractAPIErrorBody(body, httpResp.Status),
+			RetryAfter: parseRetryAfterHeader(httpResp.Header.Get("Retry-After")),
 		}
 	}
 
@@ -273,6 +277,7 @@ func (c *Client) responsesOnce(ctx context.Context, req ChatCompletionRequest) (
 		return ChatCompletionResponse{}, chatCompletionAPIError{
 			StatusCode: httpResp.StatusCode,
 			Message:    extractAPIErrorBody(body, httpResp.Status),
+			RetryAfter: parseRetryAfterHeader(httpResp.Header.Get("Retry-After")),
 		}
 	}
 
@@ -364,6 +369,7 @@ func extractAPIError(parsed chatCompletionResponsePayload, raw string) string {
 type chatCompletionAPIError struct {
 	StatusCode int
 	Message    string
+	RetryAfter time.Duration
 }
 
 func (e chatCompletionAPIError) Error() string {
@@ -378,9 +384,11 @@ func (e chatCompletionAPIError) Error() string {
 }
 
 func isRetryableChatCompletionError(err error) bool {
-	apiErr, ok := err.(chatCompletionAPIError)
-	if ok {
+	var apiErr chatCompletionAPIError
+	if errors.As(err, &apiErr) {
 		switch {
+		case apiErr.StatusCode == http.StatusTooManyRequests:
+			return true
 		case apiErr.StatusCode >= 500 && apiErr.StatusCode <= 599:
 			return true
 		default:
@@ -425,6 +433,19 @@ func waitForRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
+func retryDelayForChatCompletionError(err error, attempt int) time.Duration {
+	var apiErr chatCompletionAPIError
+	if errors.As(err, &apiErr) && apiErr.RetryAfter > 0 {
+		return clampDuration(maxDuration(apiErr.RetryAfter, chatCompletionRetryMinDelay), chatCompletionRetryMinDelay, chatCompletionRetryMaxDelay)
+	}
+
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := chatCompletionRetryMinDelay * time.Duration(1<<(attempt-1))
+	return clampDuration(delay, chatCompletionRetryMinDelay, chatCompletionRetryMaxDelay)
+}
+
 func extractModelListError(parsed listModelsResponsePayload, raw string) string {
 	if parsed.Error != nil {
 		return strings.TrimSpace(parsed.Error.Message)
@@ -438,7 +459,12 @@ func extractModelListError(parsed listModelsResponsePayload, raw string) string 
 
 func usesResponsesAPI(model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))
-	return strings.HasPrefix(model, "gpt-5")
+	switch model {
+	case "gpt-5.4", "gpt-5.4-pro":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildResponsesPayload(model string, req ChatCompletionRequest) (responsesRequestPayload, error) {
@@ -467,11 +493,7 @@ func buildResponsesPayload(model string, req ChatCompletionRequest) (responsesRe
 				Content: content,
 			})
 		default:
-			input = append(input, responsesInputMessage{
-				Type:    "message",
-				Role:    "user",
-				Content: content,
-			})
+			return responsesRequestPayload{}, fmt.Errorf("openai client: unsupported responses message role %q", message.Role)
 		}
 	}
 	if len(input) == 0 {
@@ -494,4 +516,38 @@ func extractResponsesText(parsed responsesResponsePayload) string {
 		}
 	}
 	return strings.TrimSpace(parsed.OutputText)
+}
+
+func parseRetryAfterHeader(raw string) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	if seconds, err := time.ParseDuration(raw + "s"); err == nil && seconds > 0 {
+		return seconds
+	}
+	if retryAt, err := http.ParseTime(raw); err == nil {
+		delay := time.Until(retryAt)
+		if delay > 0 {
+			return delay
+		}
+	}
+	return 0
+}
+
+func clampDuration(value time.Duration, min time.Duration, max time.Duration) time.Duration {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func maxDuration(a time.Duration, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
 }
