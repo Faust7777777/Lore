@@ -56,20 +56,25 @@ func newOperatorAgentTestServer(t *testing.T) *httptest.Server {
 				t.Fatal("chat request missing messages")
 			}
 
+			systemPrompt := req.Messages[0].Content
 			userPrompt := req.Messages[len(req.Messages)-1].Content
-			action := `{"action":"help"}`
+			content := `{"action":"help"}`
 			switch {
+			case strings.Contains(systemPrompt, "external coding-agent checkpoint window"):
+				content = `{"title":"codex checkpoint 09:00-09:30","content":"## Summary\n- checkpoint summary from test provider"}`
+			case strings.Contains(systemPrompt, "day of external coding-agent checkpoints"):
+				content = `{"title":"codex daily report","content":"## Summary\n- daily summary from test provider"}`
 			case strings.Contains(userPrompt, "show current status"):
-				action = `{"action":"show_status"}`
+				content = `{"action":"show_status"}`
 			case strings.Contains(userPrompt, "review draft"):
-				action = `{"action":"review_draft"}`
+				content = `{"action":"review_draft"}`
 			case strings.Contains(userPrompt, "approve current draft"):
-				action = `{"action":"approve_draft","use_focused_draft":true}`
+				content = `{"action":"approve_draft","use_focused_draft":true}`
 			}
 
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"choices": []map[string]any{
-					{"message": map[string]any{"content": action}},
+					{"message": map[string]any{"content": content}},
 				},
 				"usage": map[string]any{
 					"prompt_tokens":     10,
@@ -86,6 +91,16 @@ func newOperatorAgentTestServer(t *testing.T) *httptest.Server {
 			http.NotFound(w, r)
 		}
 	}))
+}
+
+func configureLLMTestEnv(t *testing.T) {
+	t.Helper()
+	clearOperatorEnv(t)
+	server := newOperatorAgentTestServer(t)
+	t.Cleanup(server.Close)
+	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", server.URL)
+	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "secret")
+	t.Setenv("OBSIDIAN_HARNESS_LLM_MODEL", "gpt-5.4")
 }
 
 func TestRunDefaultsToStatus(t *testing.T) {
@@ -164,6 +179,7 @@ func TestRunDemoP0A(t *testing.T) {
 
 func TestRunDemoP0B(t *testing.T) {
 	workDir := t.TempDir()
+	configureLLMTestEnv(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -178,12 +194,7 @@ func TestRunDemoP0B(t *testing.T) {
 
 func TestRunConsoleOnceStatus(t *testing.T) {
 	workDir := t.TempDir()
-	clearOperatorEnv(t)
-	server := newOperatorAgentTestServer(t)
-	defer server.Close()
-	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", server.URL)
-	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "secret")
-	t.Setenv("OBSIDIAN_HARNESS_LLM_MODEL", "gpt-5.4")
+	configureLLMTestEnv(t)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -233,6 +244,7 @@ func TestRunModelsList(t *testing.T) {
 
 func TestRunImportCodexJSONL(t *testing.T) {
 	workDir := t.TempDir()
+	configureLLMTestEnv(t)
 	transcriptPath := filepath.Join(workDir, "sample.jsonl")
 	content := "" +
 		"{\"timestamp\":\"2026-04-22T09:01:00+08:00\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-1\",\"agent_nickname\":\"Codex\"}}\n" +
@@ -273,6 +285,7 @@ func TestRunImportCodexJSONLMissingInput(t *testing.T) {
 
 func TestRunSyncCodexJSONL(t *testing.T) {
 	workDir := t.TempDir()
+	configureLLMTestEnv(t)
 	transcriptPath := filepath.Join(workDir, "sync.jsonl")
 	content := "" +
 		"{\"timestamp\":\"2026-04-22T09:01:00+08:00\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-1\",\"agent_nickname\":\"Codex\"}}\n" +
@@ -312,6 +325,7 @@ func TestRunSyncCodexJSONL(t *testing.T) {
 
 func TestRunAttachCodexJSONLOnce(t *testing.T) {
 	workDir := t.TempDir()
+	configureLLMTestEnv(t)
 	transcriptPath := filepath.Join(workDir, "attach.jsonl")
 	content := "" +
 		"{\"timestamp\":\"2026-04-22T09:01:00+08:00\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-attach\",\"agent_nickname\":\"Codex\"}}\n" +
@@ -422,12 +436,7 @@ func TestRunProcessSinkDay(t *testing.T) {
 func TestRunConsoleREPLDraftFlow(t *testing.T) {
 	workDir := t.TempDir()
 	seedDraftForCLI(t, workDir, "console flow")
-	clearOperatorEnv(t)
-	server := newOperatorAgentTestServer(t)
-	defer server.Close()
-	t.Setenv("OBSIDIAN_HARNESS_LLM_BASE_URL", server.URL)
-	t.Setenv("OBSIDIAN_HARNESS_LLM_API_KEY", "secret")
-	t.Setenv("OBSIDIAN_HARNESS_LLM_MODEL", "gpt-5.4")
+	configureLLMTestEnv(t)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

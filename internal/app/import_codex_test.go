@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,7 +22,7 @@ func TestRuntimeImportCodexJSONLWritesPlaceholderCheckpointAndSingleDayRollup(t 
 		`{"timestamp":"2026-04-22T10:05:00+08:00","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"drafted the next checkpoint"}}`,
 	)
 
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -95,7 +96,7 @@ func TestRuntimeImportCodexJSONLRollsUpAcrossTouchedDays(t *testing.T) {
 		`{"timestamp":"2026-04-23T00:10:00+08:00","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"started the next day handoff"}}`,
 	)
 
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -152,7 +153,7 @@ func TestRuntimeSyncCodexJSONLStoresStructuredCursorAndSkipsUnchangedTail(t *tes
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"review the weekly drift"}}`,
 	)
 
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -215,7 +216,7 @@ func TestRuntimeSyncCodexJSONLReimportsWhenFileChanges(t *testing.T) {
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"first event"}}`,
 	)
 
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -267,7 +268,7 @@ func TestRuntimeSyncCodexJSONLRejectsConcurrentSourceLock(t *testing.T) {
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"lock me"}}`,
 	)
 
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -304,7 +305,7 @@ func TestRuntimeSyncCodexJSONLReplaysLastWindowWithoutDuplicatingCheckpoint(t *t
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"first event"}}`,
 	)
 
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -370,7 +371,7 @@ func TestRuntimeSyncCodexJSONLDefersIncompleteTailUntilRecordCompletes(t *testin
 	partialLine := `{"timestamp":"2026-04-22T09:20:00+08:00","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"completed later"}}`
 	writeCodexJSONL(t, transcriptPath, metaLine, firstLine)
 
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -433,7 +434,7 @@ func TestRuntimeSyncCodexJSONLGeneratesPlaceholderForClosedIdleWindow(t *testing
 		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"only one active slot"}}`,
 	)
 
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(workDir)
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -503,4 +504,43 @@ func readFile(t *testing.T, path string) string {
 		t.Fatalf("ReadFile(%s) error = %v", path, err)
 	}
 	return string(data)
+}
+
+func openRuntimeWithFakeProcessSinkSummarizer(workDir string) (*Runtime, error) {
+	runtime, err := OpenRuntime(workDir)
+	if err != nil {
+		return nil, err
+	}
+	runtime.ProcessSinkSummarizer = fakeProcessSinkSummarizer{}
+	runtime.processSinkSummarizerErr = nil
+	return runtime, nil
+}
+
+type fakeProcessSinkSummarizer struct{}
+
+func (fakeProcessSinkSummarizer) SummarizeCheckpoint(window codexjsonl.WindowSummary) (string, string, error) {
+	if strings.TrimSpace(window.RawTranscript) == "" {
+		return "", "", nil
+	}
+	title := strings.TrimSpace(window.Title)
+	if title == "" {
+		title = fmt.Sprintf(
+			"%s checkpoint %s-%s",
+			window.Window.AgentID,
+			window.Window.WindowStart.Format("15:04"),
+			window.Window.WindowEnd.Format("15:04"),
+		)
+	}
+	return title, strings.TrimSpace(window.Content), nil
+}
+
+func (fakeProcessSinkSummarizer) SummarizeDaily(agentID string, _ time.Time, checkpoints []model.CheckpointDoc) (string, string, error) {
+	lines := make([]string, 0, len(checkpoints))
+	for _, checkpoint := range checkpoints {
+		lines = append(lines, fmt.Sprintf("- %s -> %s", checkpoint.Window.WindowStart.Format("15:04"), checkpoint.Title))
+	}
+	if len(lines) == 0 {
+		lines = append(lines, "- no checkpoints recorded")
+	}
+	return fmt.Sprintf("%s daily report", agentID), strings.Join(lines, "\n"), nil
 }

@@ -1,9 +1,11 @@
 package app
 
 import (
+	"fmt"
 	"path/filepath"
 	"time"
 
+	"obsidian-harness/internal/adapter/codexjsonl"
 	"obsidian-harness/internal/config"
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/orchestrator"
@@ -13,9 +15,11 @@ import (
 )
 
 type Runtime struct {
-	Config  config.Config
-	Harness *orchestrator.Harness
-	Store   store.StateStore
+	Config                   config.Config
+	Harness                  *orchestrator.Harness
+	Store                    store.StateStore
+	ProcessSinkSummarizer    ProcessSinkSummarizer
+	processSinkSummarizerErr error
 }
 
 type DemoP0BResult struct {
@@ -34,10 +38,13 @@ func OpenRuntime(workDir string) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	processSinkSummarizer, processSinkErr := defaultProcessSinkSummarizer()
 	return &Runtime{
-		Config:  cfg,
-		Harness: h,
-		Store:   st,
+		Config:                   cfg,
+		Harness:                  h,
+		Store:                    st,
+		ProcessSinkSummarizer:    processSinkSummarizer,
+		processSinkSummarizerErr: processSinkErr,
 	}, nil
 }
 
@@ -69,6 +76,10 @@ func (r *Runtime) DemoP0A(now time.Time) (model.Draft, error) {
 
 func (r *Runtime) DemoP0B(now time.Time) (DemoP0BResult, error) {
 	r.Harness.UpdateDependencies(true, true)
+	summarizer, err := r.requireProcessSinkSummarizer()
+	if err != nil {
+		return DemoP0BResult{}, err
+	}
 
 	window := model.SessionWindow{
 		AgentID:     "codex",
@@ -76,17 +87,27 @@ func (r *Runtime) DemoP0B(now time.Time) (DemoP0BResult, error) {
 		WindowStart: now,
 		WindowEnd:   now.Add(30 * time.Minute),
 	}
+	windowSummary := codexjsonl.WindowSummary{
+		Window:        window,
+		Content:       "- source: `demo`\n- transcript events: 2\n\n## User Inputs\n- inspect the latest managed progress\n\n## Agent Outputs\n- [commentary] prepared the next checkpoint",
+		RawTranscript: "{\"role\":\"user\",\"message\":\"inspect the latest managed progress\"}\n{\"role\":\"assistant\",\"phase\":\"commentary\",\"message\":\"prepared the next checkpoint\"}",
+		EventCount:    2,
+	}
+	title, content, err := summarizer.SummarizeCheckpoint(windowSummary)
+	if err != nil {
+		return DemoP0BResult{}, err
+	}
 	checkpoint, err := r.Harness.IngestSessionWindow(
 		window,
-		"demo checkpoint",
-		"Summarized external agent work for this window.",
-		"raw transcript placeholder",
+		title,
+		content,
+		windowSummary.RawTranscript,
 		window.WindowEnd,
 	)
 	if err != nil {
 		return DemoP0BResult{}, err
 	}
-	report, err := r.Harness.RollupDaily(window.AgentID, now, now.Add(12*time.Hour))
+	report, err := r.rollupProcessSinkDay(window.AgentID, now, now.Add(12*time.Hour))
 	if err != nil {
 		return DemoP0BResult{}, err
 	}
@@ -94,4 +115,31 @@ func (r *Runtime) DemoP0B(now time.Time) (DemoP0BResult, error) {
 		Checkpoint: checkpoint,
 		Report:     report,
 	}, nil
+}
+
+func (r *Runtime) requireProcessSinkSummarizer() (ProcessSinkSummarizer, error) {
+	if r.ProcessSinkSummarizer != nil {
+		return r.ProcessSinkSummarizer, nil
+	}
+	if r.processSinkSummarizerErr != nil {
+		return nil, r.processSinkSummarizerErr
+	}
+	return nil, fmt.Errorf("process sink summarizer: model-backed summarizer is required; configure OBSIDIAN_HARNESS_LLM_BASE_URL and OBSIDIAN_HARNESS_LLM_API_KEY")
+}
+
+func (r *Runtime) rollupProcessSinkDay(agentID string, day time.Time, at time.Time) (model.DailyReport, error) {
+	summarizer, err := r.requireProcessSinkSummarizer()
+	if err != nil {
+		return model.DailyReport{}, err
+	}
+
+	checkpoints, err := r.Store.ProcessSink().ListCheckpointsByDay(agentID, day)
+	if err != nil {
+		return model.DailyReport{}, err
+	}
+	title, content, err := summarizer.SummarizeDaily(agentID, day, checkpoints)
+	if err != nil {
+		return model.DailyReport{}, err
+	}
+	return r.Harness.RollupDailyWithSummary(agentID, day, title, content, at)
 }

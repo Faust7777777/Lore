@@ -319,6 +319,18 @@ func (h *Harness) RollupDaily(agentID string, day time.Time, at time.Time) (mode
 	if err != nil {
 		return model.DailyReport{}, err
 	}
+	return h.publishDailyRollup(agentID, report, at), nil
+}
+
+func (h *Harness) RollupDailyWithSummary(agentID string, day time.Time, title string, content string, at time.Time) (model.DailyReport, error) {
+	report, err := h.sink.RollupDayWithSummary(agentID, day, title, content, at)
+	if err != nil {
+		return model.DailyReport{}, err
+	}
+	return h.publishDailyRollup(agentID, report, at), nil
+}
+
+func (h *Harness) publishDailyRollup(agentID string, report model.DailyReport, at time.Time) model.DailyReport {
 	_ = h.broker.Publish(context.Background(), hruntime.Event{
 		ID:         report.Path,
 		Type:       hruntime.EventDailyRollupWritten,
@@ -337,7 +349,7 @@ func (h *Harness) RollupDaily(agentID string, day time.Time, at time.Time) (mode
 			"day":      report.ReportDay.Format("2006-01-02"),
 		},
 	})
-	return report, nil
+	return report
 }
 
 type fileWriter struct {

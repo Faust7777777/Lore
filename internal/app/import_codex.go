@@ -67,6 +67,11 @@ func applyCodexJSONLIdentity(transcript *codexjsonl.Transcript, params ImportCod
 }
 
 func (r *Runtime) importCodexWindows(inputPath string, transcript codexjsonl.Transcript, windows []codexjsonl.WindowSummary, skipRollup bool, now time.Time) (ImportCodexJSONLResult, error) {
+	summarizer, err := r.requireProcessSinkSummarizer()
+	if err != nil {
+		return ImportCodexJSONLResult{}, err
+	}
+
 	result := ImportCodexJSONLResult{
 		InputPath: filepath.Clean(inputPath),
 		AgentID:   transcript.AgentID,
@@ -75,10 +80,14 @@ func (r *Runtime) importCodexWindows(inputPath string, transcript codexjsonl.Tra
 
 	reportDays := make(map[string]time.Time)
 	for _, payload := range windows {
+		title, content, err := summarizer.SummarizeCheckpoint(payload)
+		if err != nil {
+			return ImportCodexJSONLResult{}, err
+		}
 		checkpoint, err := r.Harness.IngestSessionWindow(
 			payload.Window,
-			payload.Title,
-			payload.Content,
+			title,
+			content,
 			payload.RawTranscript,
 			payload.Window.WindowEnd,
 		)
@@ -100,7 +109,7 @@ func (r *Runtime) importCodexWindows(inputPath string, transcript codexjsonl.Tra
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		report, err := r.Harness.RollupDaily(transcript.AgentID, reportDays[key], now)
+		report, err := r.rollupProcessSinkDay(transcript.AgentID, reportDays[key], now)
 		if err != nil {
 			return ImportCodexJSONLResult{}, err
 		}

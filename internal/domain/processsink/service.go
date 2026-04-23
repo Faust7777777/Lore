@@ -67,7 +67,18 @@ func (s *Service) RollupDay(agentID string, day time.Time, at time.Time) (model.
 	if err != nil {
 		return model.DailyReport{}, err
 	}
+	return s.rollupDayWithCheckpoints(agentID, day, checkpoints, "", "", at)
+}
 
+func (s *Service) RollupDayWithSummary(agentID string, day time.Time, title string, content string, at time.Time) (model.DailyReport, error) {
+	checkpoints, err := s.store.ListCheckpointsByDay(agentID, day)
+	if err != nil {
+		return model.DailyReport{}, err
+	}
+	return s.rollupDayWithCheckpoints(agentID, day, checkpoints, title, content, at)
+}
+
+func (s *Service) rollupDayWithCheckpoints(agentID string, day time.Time, checkpoints []model.CheckpointDoc, title string, content string, at time.Time) (model.DailyReport, error) {
 	windowKeys := make([]string, 0, len(checkpoints))
 	lines := make([]string, 0, len(checkpoints))
 	for _, checkpoint := range checkpoints {
@@ -83,8 +94,8 @@ func (s *Service) RollupDay(agentID string, day time.Time, at time.Time) (model.
 		ReportDay:  model.NormalizeDay(day),
 		Path:       s.dailyReportPath(agentID, day),
 		WindowKeys: windowKeys,
-		Title:      fmt.Sprintf("%s daily report", agentID),
-		Content:    strings.Join(lines, "\n"),
+		Title:      withFallback(title, fmt.Sprintf("%s daily report", agentID)),
+		Content:    withFallback(content, strings.Join(lines, "\n")),
 		CreatedAt:  at,
 		UpdatedAt:  at,
 	}
