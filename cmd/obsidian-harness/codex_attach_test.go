@@ -12,14 +12,15 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"obsidian-harness/internal/app"
+	"obsidian-harness/internal/cli"
 )
 
 func TestCodexAttachEventMatchesTargetPath(t *testing.T) {
 	target := filepath.Clean(`C:\tmp\session.jsonl`)
-	if !codexAttachEventMatches(fsnotify.Event{Name: `C:\tmp\session.jsonl`}, target) {
+	if !cli.CodexAttachEventMatches(fsnotify.Event{Name: `C:\tmp\session.jsonl`}, target) {
 		t.Fatal("codexAttachEventMatches() = false, want true for same path")
 	}
-	if codexAttachEventMatches(fsnotify.Event{Name: `C:\tmp\other.jsonl`}, target) {
+	if cli.CodexAttachEventMatches(fsnotify.Event{Name: `C:\tmp\other.jsonl`}, target) {
 		t.Fatal("codexAttachEventMatches() = true, want false for different file")
 	}
 }
@@ -45,7 +46,7 @@ func TestRunCodexAttachLoopSyncsOnWatcherEventBeforePoll(t *testing.T) {
 	errCh := make(chan error, 1)
 	startedAt := time.Now()
 	go func() {
-		errCh <- runCodexAttachLoop(ctx, syncer, app.ImportCodexJSONLParams{
+		errCh <- cli.RunCodexAttachLoop(ctx, syncer, app.ImportCodexJSONLParams{
 			InputPath: transcriptPath,
 			AgentID:   "codex",
 			SessionID: "session-watch",

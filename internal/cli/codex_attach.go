@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"context"
@@ -15,11 +15,11 @@ import (
 
 const codexAttachDebounce = 200 * time.Millisecond
 
-type codexJSONLSyncer interface {
+type CodexJSONLSyncer interface {
 	SyncCodexJSONL(params app.ImportCodexJSONLParams, now time.Time) (app.SyncCodexJSONLResult, error)
 }
 
-func runCodexAttachLoop(ctx context.Context, syncer codexJSONLSyncer, params app.ImportCodexJSONLParams, pollEvery time.Duration, stdout io.Writer, stderr io.Writer) error {
+func RunCodexAttachLoop(ctx context.Context, syncer CodexJSONLSyncer, params app.ImportCodexJSONLParams, pollEvery time.Duration, stdout io.Writer, stderr io.Writer) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -108,7 +108,7 @@ func runCodexAttachLoop(ctx context.Context, syncer codexJSONLSyncer, params app
 				watcher = nil
 				continue
 			}
-			if !codexAttachEventMatches(event, absoluteInputPath) {
+			if !CodexAttachEventMatches(event, absoluteInputPath) {
 				continue
 			}
 			if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Chmod) == 0 {
@@ -138,7 +138,7 @@ func runCodexAttachLoop(ctx context.Context, syncer codexJSONLSyncer, params app
 	}
 }
 
-func syncCodexAttachOnce(syncer codexJSONLSyncer, params app.ImportCodexJSONLParams, stdout io.Writer) error {
+func syncCodexAttachOnce(syncer CodexJSONLSyncer, params app.ImportCodexJSONLParams, stdout io.Writer) error {
 	result, err := syncer.SyncCodexJSONL(params, time.Now())
 	if err != nil {
 		return err
@@ -162,7 +162,7 @@ func writeCodexAttachSummary(stdout io.Writer, result app.SyncCodexJSONLResult) 
 	)
 }
 
-func codexAttachEventMatches(event fsnotify.Event, absoluteInputPath string) bool {
+func CodexAttachEventMatches(event fsnotify.Event, absoluteInputPath string) bool {
 	eventPath := filepath.Clean(event.Name)
 	targetPath := filepath.Clean(absoluteInputPath)
 	return strings.EqualFold(eventPath, targetPath)

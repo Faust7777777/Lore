@@ -45,6 +45,7 @@ Updated: 2026-04-23
   - GPT-5 `/responses` transport for compatible providers
   - retry hardening for `429` / `5xx` / transport EOF
 - CLI:
+  - preferred `cmd/lore` entrypoint with legacy `cmd/obsidian-harness` compatibility
   - `status [workdir]`
   - `bootstrap [workdir]`
   - `demo-p0a [workdir]`
@@ -63,6 +64,7 @@ Commands verified locally with the repo-managed Go toolchain:
 
 ```powershell
 .tools\go\bin\go.exe test ./...
+.tools\go\bin\go.exe run ./cmd/lore version
 .tools\go\bin\go.exe run ./cmd/obsidian-harness bootstrap .\tmp\demo
 .tools\go\bin\go.exe run ./cmd/obsidian-harness demo-p0a .\tmp\demo
 .tools\go\bin\go.exe run ./cmd/obsidian-harness demo-p0b .\tmp\demo

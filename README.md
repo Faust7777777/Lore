@@ -22,7 +22,8 @@ Key product constraints already baked into the scaffold:
 
 ## Layout
 
-- `cmd/obsidian-harness`: current CLI source entrypoint for the Lore binary surface
+- `cmd/lore`: preferred Lore CLI entrypoint
+- `cmd/obsidian-harness`: legacy-compatible CLI entrypoint retained during rename
 - `internal/config`: runtime and vault configuration
 - `internal/model`: shared domain/runtime types
 - `internal/runtime`: event bus, health, audit services
@@ -33,7 +34,7 @@ Key product constraints already baked into the scaffold:
 
 ## Current Commands
 
-The source entrypoint still lives under `./cmd/obsidian-harness`, but the user-facing CLI surface is branded as `lore`.
+The repo now exposes both `./cmd/lore` and `./cmd/obsidian-harness`. `lore` is the preferred binary surface; `obsidian-harness` remains as a compatibility entrypoint.
 
 - `status [workdir]`
 - `bootstrap [workdir]`
