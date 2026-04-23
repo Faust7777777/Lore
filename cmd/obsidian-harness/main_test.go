@@ -74,12 +74,12 @@ func newOperatorAgentTestServer(t *testing.T) *httptest.Server {
 				content = `{"title":"codex checkpoint 09:00-09:30","content":"## Summary\n- checkpoint summary from test provider"}`
 			case strings.Contains(systemPrompt, "day of external coding-agent checkpoints"):
 				content = `{"title":"codex daily report","content":"## Summary\n- daily summary from test provider"}`
-			case strings.Contains(userPrompt, "show current status"):
-				content = `{"action":"show_status"}`
-			case strings.Contains(userPrompt, "review draft"):
-				content = `{"action":"review_draft"}`
 			case strings.Contains(userPrompt, "approve current draft"):
 				content = `{"action":"approve_draft","use_focused_draft":true}`
+			case strings.Contains(userPrompt, "review draft"):
+				content = `{"action":"review_draft"}`
+			case strings.Contains(userPrompt, "show current status"):
+				content = `{"action":"show_status"}`
 			}
 
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -108,12 +108,12 @@ func newOperatorAgentTestServer(t *testing.T) *httptest.Server {
 				content = `{"title":"codex checkpoint 09:00-09:30","content":"## Summary\n- checkpoint summary from test provider"}`
 			case strings.Contains(systemPrompt, "day of external coding-agent checkpoints"):
 				content = `{"title":"codex daily report","content":"## Summary\n- daily summary from test provider"}`
-			case strings.Contains(userPrompt, "show current status"):
-				content = `{"action":"show_status"}`
-			case strings.Contains(userPrompt, "review draft"):
-				content = `{"action":"review_draft"}`
 			case strings.Contains(userPrompt, "approve current draft"):
 				content = `{"action":"approve_draft","use_focused_draft":true}`
+			case strings.Contains(userPrompt, "review draft"):
+				content = `{"action":"review_draft"}`
+			case strings.Contains(userPrompt, "show current status"):
+				content = `{"action":"show_status"}`
 			}
 
 			_ = json.NewEncoder(w).Encode(map[string]any{

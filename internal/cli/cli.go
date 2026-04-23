@@ -163,7 +163,7 @@ Commands:
   demo-p0a [workdir]   Run the managed doc -> draft -> apply demo chain
   demo-p0b [workdir]   Run the checkpoint -> daily report demo chain
   tui                  Lore dashboard + natural language operator loop
-  console              Operator console: NL -> one explicit reviewed action
+  console              Lore natural-language agent loop
   daemon               Run the vault watcher daemon / one-shot scan
   draft                Review and act on pending drafts
   process-sink         Inspect checkpoint and daily report status
@@ -239,7 +239,7 @@ func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 	}
 
 	fmt.Fprintln(stdout, "Lore Console")
-	fmt.Fprintln(stdout, "The operator agent picks one explicit action per prompt. Type `help` for examples. Type `exit` to quit. A configured model-backed operator agent is required.")
+	fmt.Fprintln(stdout, "Lore runs a bounded natural-language agent loop. Type `help` for examples. Type `exit` to quit. A configured model-backed operator agent is required.")
 	scanner := bufio.NewScanner(stdin)
 	for {
 		fmt.Fprint(stdout, "> ")

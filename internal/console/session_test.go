@@ -52,6 +52,59 @@ func (f *fakeRuntime) ProcessSinkDay(agentID string, day time.Time) (app.Process
 	return f.processSink, nil
 }
 
+func (f *fakeRuntime) SystemDocGet(name string) (model.VaultDocument, error) {
+	return model.VaultDocument{Path: name + ".md", Content: "# " + name}, nil
+}
+
+func (f *fakeRuntime) VaultRead(relPath string) (model.VaultDocument, error) {
+	return model.VaultDocument{Path: relPath, Content: "content"}, nil
+}
+
+func (f *fakeRuntime) VaultList(relDir string) ([]model.VaultEntry, error) {
+	return []model.VaultEntry{{Path: relDir, Name: relDir, Kind: "dir"}}, nil
+}
+
+func (f *fakeRuntime) VaultSearchText(query string, relDir string, limit int) ([]model.SearchHit, error) {
+	return []model.SearchHit{{Path: "progress.md", Line: 1, Preview: query}}, nil
+}
+
+func (f *fakeRuntime) VaultBacklinks(relPath string, limit int) ([]model.SearchHit, error) {
+	return []model.SearchHit{{Path: "ref.md", Line: 3, Preview: relPath}}, nil
+}
+
+func (f *fakeRuntime) DocClassify(relPath string) model.DocClassificationView {
+	return model.DocClassificationView{Path: relPath, DocClass: model.DocClassNote}
+}
+
+func (f *fakeRuntime) ContextPack(targetPath string, task string, limit int) (model.ContextPack, error) {
+	return model.ContextPack{
+		Task:       task,
+		TargetPath: targetPath,
+		Managed:    f.managed,
+	}, nil
+}
+
+func (f *fakeRuntime) WorkDirPath() string {
+	if f.managed.WorkDir != "" {
+		return f.managed.WorkDir
+	}
+	return "workdir"
+}
+
+func (f *fakeRuntime) VaultRootPath() string {
+	if f.managed.VaultRoot != "" {
+		return f.managed.VaultRoot
+	}
+	return "workdir/vault"
+}
+
+func (f *fakeRuntime) StateDirPath() string {
+	if f.managed.WorkDir != "" {
+		return f.managed.WorkDir + "/state"
+	}
+	return "workdir/state"
+}
+
 type fakeAgent struct {
 	decisions []operatoragent.Decision
 	inputs    []string
@@ -67,6 +120,25 @@ func (f *fakeAgent) Decide(input string, ctx operatoragent.Context) (operatorage
 	decision := f.decisions[0]
 	f.decisions = f.decisions[1:]
 	return decision, nil
+}
+
+type fakeLoopAgent struct {
+	response operatoragent.Response
+	err      error
+	inputs   []string
+	contexts []operatoragent.Context
+	tools    [][]operatoragent.ToolDefinition
+}
+
+func (f *fakeLoopAgent) Decide(_ string, _ operatoragent.Context) (operatoragent.Decision, error) {
+	return operatoragent.Decision{}, nil
+}
+
+func (f *fakeLoopAgent) Respond(input string, ctx operatoragent.Context, runtime operatoragent.ToolRuntime) (operatoragent.Response, error) {
+	f.inputs = append(f.inputs, input)
+	f.contexts = append(f.contexts, ctx)
+	f.tools = append(f.tools, runtime.DescribeTools(ctx))
+	return f.response, f.err
 }
 
 func TestSessionHandleUsesInjectedAgentForStatusAndHelp(t *testing.T) {
@@ -197,5 +269,38 @@ func TestSessionHandleProcessSinkDayUsesAgentDecision(t *testing.T) {
 	}
 	if !strings.Contains(view, "Process Sink Day") || !strings.Contains(view, "codex") {
 		t.Fatalf("view = %q, want Process Sink Day codex", view)
+	}
+}
+
+func TestSessionHandleUsesLoopAgentResponseAndStoresHistory(t *testing.T) {
+	agent := &fakeLoopAgent{
+		response: operatoragent.Response{
+			Final: "Managed Status\n--------------\nready\n",
+		},
+	}
+	session := NewSessionWithAgent("test", agent)
+	session.Now = func() time.Time { return time.Date(2026, 4, 22, 9, 0, 0, 0, time.Local) }
+
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			Ready:     true,
+			WorkDir:   "work",
+			VaultRoot: "vault",
+			Health:    model.HealthSnapshot{Outcome: model.NewOutcome(model.StatusOK), Message: "healthy"},
+		},
+	}
+
+	output, err := session.Handle("show me status", runtime)
+	if err != nil {
+		t.Fatalf("Handle(loop) error = %v", err)
+	}
+	if !strings.Contains(output, "Managed Status") {
+		t.Fatalf("output = %q, want Managed Status", output)
+	}
+	if len(agent.tools) != 1 || len(agent.tools[0]) == 0 {
+		t.Fatalf("loop tools = %+v, want non-empty tool list", agent.tools)
+	}
+	if len(session.History) != 2 {
+		t.Fatalf("history len = %d, want 2", len(session.History))
 	}
 }

@@ -20,12 +20,23 @@ type Runtime interface {
 	RequestDraftRevision(id string) (model.Draft, error)
 	ApplyDraft(id string) (model.Draft, error)
 	ProcessSinkDay(agentID string, day time.Time) (app.ProcessSinkDayView, error)
+	SystemDocGet(name string) (model.VaultDocument, error)
+	VaultRead(relPath string) (model.VaultDocument, error)
+	VaultList(relDir string) ([]model.VaultEntry, error)
+	VaultSearchText(query string, relDir string, limit int) ([]model.SearchHit, error)
+	VaultBacklinks(relPath string, limit int) ([]model.SearchHit, error)
+	DocClassify(relPath string) model.DocClassificationView
+	ContextPack(targetPath string, task string, limit int) (model.ContextPack, error)
+	WorkDirPath() string
+	VaultRootPath() string
+	StateDirPath() string
 }
 
 type Session struct {
 	Version        string
 	CurrentDraftID string
 	DefaultAgentID string
+	History        []operatoragent.ConversationTurn
 	Now            func() time.Time
 	Agent          operatoragent.Agent
 }
@@ -47,11 +58,43 @@ func NewSessionWithAgent(version string, agent operatoragent.Agent) *Session {
 }
 
 func (s *Session) Handle(input string, runtime Runtime) (string, error) {
+	if loopAgent, ok := s.Agent.(operatoragent.LoopAgent); ok {
+		response, err := loopAgent.Respond(input, s.agentContext(), newToolRuntime(s, runtime))
+		if err != nil {
+			return "", err
+		}
+		if response.Decision != nil {
+			output, err := s.executeDecision(*response.Decision, runtime)
+			if err != nil {
+				return "", err
+			}
+			s.rememberTurn(input, output)
+			return output, nil
+		}
+		output := strings.TrimSpace(response.Final)
+		s.rememberTurn(input, output)
+		if output == "" {
+			return "", fmt.Errorf("operator agent returned an empty response")
+		}
+		if strings.HasSuffix(response.Final, "\n") {
+			return response.Final, nil
+		}
+		return output + "\n", nil
+	}
+
 	decision, err := s.Agent.Decide(input, s.agentContext())
 	if err != nil {
 		return "", err
 	}
+	output, err := s.executeDecision(decision, runtime)
+	if err != nil {
+		return "", err
+	}
+	s.rememberTurn(input, output)
+	return output, nil
+}
 
+func (s *Session) executeDecision(decision operatoragent.Decision, runtime Runtime) (string, error) {
 	switch decision.Action {
 	case operatoragent.ActionHelp:
 		return renderConsoleHelp(), nil
@@ -142,6 +185,20 @@ func (s *Session) agentContext() operatoragent.Context {
 		CurrentDraftID: strings.TrimSpace(s.CurrentDraftID),
 		DefaultAgentID: defaultAgentID(strings.TrimSpace(s.DefaultAgentID)),
 		Now:            now,
+		History:        append([]operatoragent.ConversationTurn(nil), s.History...),
+	}
+}
+
+func (s *Session) rememberTurn(input string, output string) {
+	if strings.TrimSpace(input) == "" && strings.TrimSpace(output) == "" {
+		return
+	}
+	s.History = append(s.History,
+		operatoragent.ConversationTurn{Role: "user", Content: strings.TrimSpace(input)},
+		operatoragent.ConversationTurn{Role: "assistant", Content: strings.TrimSpace(output)},
+	)
+	if len(s.History) > 12 {
+		s.History = append([]operatoragent.ConversationTurn(nil), s.History[len(s.History)-12:]...)
 	}
 }
 
@@ -207,8 +264,9 @@ Examples:
   approve current draft
   show codex daily report 2026-04-22
 Notes:
-  - the operator agent chooses one explicit action at a time
+  - Lore runs a bounded natural-language agent loop with internal tools
   - timed jobs still belong to runtime/scheduler, not this console
+  - shell/workspace tools are only for explicit local file/code/run requests
   - this console requires a configured model-backed operator agent
 `) + "\n"
 }

@@ -35,6 +35,13 @@ type modelDecision struct {
 	Day             string `json:"day"`
 }
 
+type loopEnvelope struct {
+	Type      string         `json:"type"`
+	Tool      string         `json:"tool"`
+	Arguments map[string]any `json:"arguments"`
+	Message   string         `json:"message"`
+}
+
 type EnvConfig struct {
 	BaseURL string
 	APIKey  string
@@ -48,6 +55,11 @@ type ModelCatalog struct {
 }
 
 var ErrUnavailable = errors.New("operator agent: model-backed operator agent is required")
+
+const (
+	maxLoopSteps                   = 8
+	repeatedToolCallAbortThreshold = 3
+)
 
 func NewDefault() Agent {
 	agent, err := NewFromEnv()
@@ -197,8 +209,87 @@ func (a ModelAgent) Decide(input string, ctx Context) (Decision, error) {
 	return parseModelDecision(resp.Content, ctx)
 }
 
+func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Response, error) {
+	raw := strings.TrimSpace(input)
+	if raw == "" {
+		return Response{}, fmt.Errorf("empty input")
+	}
+	if asksForBackgroundRuntime(strings.ToLower(raw)) {
+		return Response{}, fmt.Errorf("timed and background runtime tasks stay outside the operator console")
+	}
+	if runtime == nil {
+		return Response{}, fmt.Errorf("operator agent: tool runtime is required")
+	}
+
+	tools := runtime.DescribeTools(ctx)
+	messages := []openai.Message{
+		{Role: "system", Content: loopSystemPrompt(tools, ctx)},
+		{Role: "user", Content: buildLoopUserPrompt(raw, ctx)},
+	}
+
+	toolHistory := make([]string, 0, maxLoopSteps)
+	for step := 0; step < maxLoopSteps; step++ {
+		resp, err := a.client.ChatCompletion(context.Background(), openai.ChatCompletionRequest{
+			Messages:    messages,
+			Temperature: 0,
+		})
+		if err != nil {
+			return Response{}, fmt.Errorf("operator agent: model request failed: %w", err)
+		}
+
+		envelope, legacyDecision, err := parseLoopResponse(resp.Content, ctx)
+		if err != nil {
+			return Response{}, fmt.Errorf("operator agent: invalid loop response: %w", err)
+		}
+		if legacyDecision != nil {
+			return Response{Decision: legacyDecision}, nil
+		}
+
+		switch envelope.Type {
+		case "final":
+			final := strings.TrimSpace(envelope.Message)
+			if final == "" {
+				return Response{}, fmt.Errorf("operator agent: final response is empty")
+			}
+			return Response{Final: final}, nil
+		case "tool_call":
+			toolName := strings.TrimSpace(envelope.Tool)
+			if toolName == "" {
+				return Response{}, fmt.Errorf("operator agent: tool_call.tool is required")
+			}
+			callSignature := toolCallSignature(toolName, envelope.Arguments)
+			toolHistory = append(toolHistory, callSignature)
+			if hasRepeatedToolLoop(toolHistory, callSignature, repeatedToolCallAbortThreshold) {
+				return Response{}, fmt.Errorf("operator agent: repeated tool loop detected for %s", toolName)
+			}
+			if hasPingPongToolLoop(toolHistory) {
+				return Response{}, fmt.Errorf("operator agent: alternating tool loop detected")
+			}
+
+			toolResult, toolErr := runtime.CallTool(toolName, envelope.Arguments)
+			toolContent := strings.TrimSpace(toolResult.Content)
+			if toolErr != nil && toolContent != "" {
+				toolErr = fmt.Errorf("%w\n%s", toolErr, toolContent)
+			}
+			messages = append(messages, openai.Message{Role: "assistant", Content: strings.TrimSpace(resp.Content)})
+			messages = append(messages, openai.Message{
+				Role:    "user",
+				Content: buildToolResultPrompt(toolName, toolContent, toolErr),
+			})
+		default:
+			return Response{}, fmt.Errorf("operator agent: unsupported response type %q", envelope.Type)
+		}
+	}
+
+	return Response{}, fmt.Errorf("operator agent: exceeded max loop steps (%d)", maxLoopSteps)
+}
+
 func (a ErrorAgent) Decide(_ string, _ Context) (Decision, error) {
 	return Decision{}, a.err
+}
+
+func (a ErrorAgent) Respond(_ string, _ Context, _ ToolRuntime) (Response, error) {
+	return Response{}, a.err
 }
 
 func parseModelDecision(content string, ctx Context) (Decision, error) {
@@ -236,6 +327,42 @@ func parseModelDecision(content string, ctx Context) (Decision, error) {
 		AgentID:         withFallback(strings.TrimSpace(parsed.AgentID), withFallback(strings.TrimSpace(ctx.DefaultAgentID), "codex")),
 		Day:             day,
 	}, nil
+}
+
+func parseLoopResponse(content string, ctx Context) (loopEnvelope, *Decision, error) {
+	jsonPayload, err := extractJSONObject(content)
+	if err != nil {
+		return loopEnvelope{}, nil, err
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(jsonPayload), &raw); err != nil {
+		return loopEnvelope{}, nil, fmt.Errorf("decode loop response: %w", err)
+	}
+	if _, ok := raw["action"]; ok {
+		decision, err := parseModelDecision(jsonPayload, ctx)
+		if err != nil {
+			return loopEnvelope{}, nil, err
+		}
+		return loopEnvelope{}, &decision, nil
+	}
+
+	var envelope loopEnvelope
+	if err := json.Unmarshal([]byte(jsonPayload), &envelope); err != nil {
+		return loopEnvelope{}, nil, fmt.Errorf("decode loop envelope: %w", err)
+	}
+	envelope.Type = strings.TrimSpace(envelope.Type)
+	envelope.Tool = strings.TrimSpace(envelope.Tool)
+	envelope.Message = strings.TrimSpace(envelope.Message)
+	if envelope.Arguments == nil {
+		envelope.Arguments = make(map[string]any)
+	}
+	switch envelope.Type {
+	case "tool_call", "final":
+		return envelope, nil, nil
+	default:
+		return loopEnvelope{}, nil, fmt.Errorf("unsupported type %q", envelope.Type)
+	}
 }
 
 func extractJSONObject(content string) (string, error) {
@@ -302,6 +429,50 @@ Return schema:
 `)
 }
 
+func loopSystemPrompt(tools []ToolDefinition, ctx Context) string {
+	var builder strings.Builder
+	builder.WriteString(strings.TrimSpace(`
+You are the main Lore chat agent.
+Return exactly one JSON object and nothing else.
+
+You may respond in exactly one of two forms:
+1. {"type":"tool_call","tool":"tool_name","arguments":{...}}
+2. {"type":"final","message":"user-facing response"}
+
+Rules:
+- call at most one tool per response
+- prefer Lore governance/read tools over workspace and shell tools
+- workspace_* and shell_exec are only for explicit local file/code/run requests
+- never use workspace_* or shell_exec on Lore-managed vault docs or runtime state files
+- never schedule, poll, sync, import, attach, or run background jobs from this chat loop
+- if a tool already returns a user-ready render, you may return it verbatim in final.message
+- if a tool fails, either try a different tool or explain the failure in final.message
+- if no tool is needed, answer directly with type=final
+`))
+	builder.WriteString("\n\nAvailable tools:\n")
+	for _, tool := range tools {
+		builder.WriteString("- ")
+		builder.WriteString(tool.Name)
+		builder.WriteString(": ")
+		builder.WriteString(strings.TrimSpace(tool.Description))
+		if args := strings.TrimSpace(tool.Arguments); args != "" {
+			builder.WriteString(" | args: ")
+			builder.WriteString(args)
+		}
+		builder.WriteString("\n")
+	}
+	builder.WriteString("\nSession context:\n")
+	builder.WriteString("- current_draft_id: ")
+	builder.WriteString(strings.TrimSpace(ctx.CurrentDraftID))
+	builder.WriteString("\n- default_agent_id: ")
+	builder.WriteString(withFallback(strings.TrimSpace(ctx.DefaultAgentID), "codex"))
+	if !ctx.Now.IsZero() {
+		builder.WriteString("\n- today: ")
+		builder.WriteString(model.NormalizeDay(ctx.Now).Format("2006-01-02"))
+	}
+	return strings.TrimSpace(builder.String())
+}
+
 func buildUserPrompt(input string, ctx Context) string {
 	today := time.Now()
 	if !ctx.Now.IsZero() {
@@ -315,6 +486,89 @@ func buildUserPrompt(input string, ctx Context) string {
 		withFallback(strings.TrimSpace(ctx.DefaultAgentID), "codex"),
 		model.NormalizeDay(today).Format("2006-01-02"),
 	)
+}
+
+func buildLoopUserPrompt(input string, ctx Context) string {
+	var builder strings.Builder
+	builder.WriteString("User request:\n")
+	builder.WriteString(strings.TrimSpace(input))
+	if history := renderHistory(ctx.History, 6); history != "" {
+		builder.WriteString("\n\nRecent conversation:\n")
+		builder.WriteString(history)
+	}
+	return builder.String()
+}
+
+func renderHistory(history []ConversationTurn, limit int) string {
+	if len(history) == 0 || limit <= 0 {
+		return ""
+	}
+	start := 0
+	if len(history) > limit {
+		start = len(history) - limit
+	}
+	lines := make([]string, 0, len(history)-start)
+	for _, turn := range history[start:] {
+		role := strings.TrimSpace(turn.Role)
+		if role == "" {
+			role = "unknown"
+		}
+		lines = append(lines, fmt.Sprintf("- %s: %s", role, oneLine(turn.Content, 220)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildToolResultPrompt(toolName string, content string, toolErr error) string {
+	if toolErr != nil {
+		return fmt.Sprintf("Tool result for %s:\nERROR: %s", toolName, toolErr.Error())
+	}
+	if strings.TrimSpace(content) == "" {
+		content = "(empty result)"
+	}
+	return fmt.Sprintf("Tool result for %s:\n%s", toolName, content)
+}
+
+func toolCallSignature(toolName string, arguments map[string]any) string {
+	data, err := json.Marshal(arguments)
+	if err != nil {
+		return toolName
+	}
+	return toolName + ":" + string(data)
+}
+
+func hasRepeatedToolLoop(history []string, next string, threshold int) bool {
+	if threshold <= 1 {
+		return true
+	}
+	if len(history) < threshold {
+		return false
+	}
+	for i := len(history) - threshold; i < len(history); i++ {
+		if history[i] != next {
+			return false
+		}
+	}
+	return true
+}
+
+func hasPingPongToolLoop(history []string) bool {
+	if len(history) < 6 {
+		return false
+	}
+	last := history[len(history)-6:]
+	return last[0] == last[2] &&
+		last[2] == last[4] &&
+		last[1] == last[3] &&
+		last[3] == last[5] &&
+		last[0] != last[1]
+}
+
+func oneLine(value string, limit int) string {
+	value = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(value, "\r\n", "\n"), "\n", " "))
+	if limit > 0 && len(value) > limit {
+		return value[:limit] + "..."
+	}
+	return value
 }
 
 func firstNonEmptyEnv(names ...string) string {

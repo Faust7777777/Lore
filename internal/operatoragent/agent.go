@@ -26,12 +26,42 @@ type Decision struct {
 	Day             time.Time
 }
 
+type ConversationTurn struct {
+	Role    string
+	Content string
+}
+
 type Context struct {
 	CurrentDraftID string
 	DefaultAgentID string
 	Now            time.Time
+	History        []ConversationTurn
 }
 
 type Agent interface {
 	Decide(input string, ctx Context) (Decision, error)
+}
+
+type ToolDefinition struct {
+	Name        string
+	Description string
+	Arguments   string
+}
+
+type ToolResult struct {
+	Content string
+}
+
+type ToolRuntime interface {
+	DescribeTools(ctx Context) []ToolDefinition
+	CallTool(name string, arguments map[string]any) (ToolResult, error)
+}
+
+type Response struct {
+	Final    string
+	Decision *Decision
+}
+
+type LoopAgent interface {
+	Respond(input string, ctx Context, runtime ToolRuntime) (Response, error)
 }

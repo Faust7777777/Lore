@@ -179,6 +179,8 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 		debounceCh         <-chan time.Time
 		codexDebounceTimer *time.Timer
 		codexDebounceCh    <-chan time.Time
+		codexSyncDone      = make(chan struct{}, 1)
+		codexSyncRunning   bool
 	)
 	pendingPaths := make(map[string]struct{})
 
@@ -264,8 +266,28 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 		}
 		return nil
 	}
+	stopAndReturn := func() error {
+		stopDebounce()
+		stopCodexDebounce()
+		writeDaemonLine(opts.Stdout, "Vault daemon stopped\n")
+		return nil
+	}
+	startCodexSync := func() {
+		if opts.CodexJSONL == nil || strings.TrimSpace(opts.CodexJSONL.InputPath) == "" || codexSyncRunning {
+			return
+		}
+		codexSyncRunning = true
+		go func() {
+			r.syncCodexJSONLIfConfigured(opts, modelAvailable)
+			codexSyncDone <- struct{}{}
+		}()
+	}
 
 	for {
+		if ctx.Err() != nil {
+			return stopAndReturn()
+		}
+
 		var (
 			watchEvents <-chan fsnotify.Event
 			watchErrors <-chan error
@@ -283,10 +305,7 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 
 		select {
 		case <-ctx.Done():
-			stopDebounce()
-			stopCodexDebounce()
-			writeDaemonLine(opts.Stdout, "Vault daemon stopped\n")
-			return nil
+			return stopAndReturn()
 		case event, ok := <-watchEvents:
 			if !ok {
 				watcher = nil
@@ -341,9 +360,17 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 			if err := flushPending(now); err != nil {
 				return err
 			}
+			if ctx.Err() != nil {
+				return stopAndReturn()
+			}
 		case <-codexDebounceCh:
 			codexDebounceCh = nil
-			r.syncCodexJSONLIfConfigured(opts, modelAvailable)
+			startCodexSync()
+			if ctx.Err() != nil {
+				return stopAndReturn()
+			}
+		case <-codexSyncDone:
+			codexSyncRunning = false
 		case now := <-ticker.C:
 			if watcher == nil {
 				result, err := r.ScanVaultChanges(now)
@@ -353,7 +380,10 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 				writeDaemonScanSummary(opts.Stdout, result)
 			}
 			if codexWatcher == nil {
-				r.syncCodexJSONLIfConfigured(opts, modelAvailable)
+				startCodexSync()
+			}
+			if ctx.Err() != nil {
+				return stopAndReturn()
 			}
 		}
 	}

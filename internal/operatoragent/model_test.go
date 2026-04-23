@@ -10,14 +10,44 @@ import (
 )
 
 type fakeCompletionClient struct {
-	response openai.ChatCompletionResponse
-	err      error
-	requests []openai.ChatCompletionRequest
+	response  openai.ChatCompletionResponse
+	responses []openai.ChatCompletionResponse
+	err       error
+	requests  []openai.ChatCompletionRequest
 }
 
 func (f *fakeCompletionClient) ChatCompletion(_ context.Context, req openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
 	f.requests = append(f.requests, req)
+	if len(f.responses) > 0 {
+		resp := f.responses[0]
+		f.responses = f.responses[1:]
+		return resp, f.err
+	}
 	return f.response, f.err
+}
+
+type fakeToolRuntime struct {
+	tools     []ToolDefinition
+	results   map[string]ToolResult
+	calls     []string
+	arguments []map[string]any
+	callErr   error
+}
+
+func (f *fakeToolRuntime) DescribeTools(_ Context) []ToolDefinition {
+	return append([]ToolDefinition(nil), f.tools...)
+}
+
+func (f *fakeToolRuntime) CallTool(name string, arguments map[string]any) (ToolResult, error) {
+	f.calls = append(f.calls, name)
+	f.arguments = append(f.arguments, arguments)
+	if f.callErr != nil {
+		return ToolResult{}, f.callErr
+	}
+	if result, ok := f.results[name]; ok {
+		return result, nil
+	}
+	return ToolResult{}, nil
 }
 
 func clearOperatorEnv(t *testing.T) {
@@ -181,6 +211,114 @@ func TestModelAgentDecideErrorsOnInvalidModelOutput(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid model response") {
 		t.Fatalf("error = %q, want invalid model response", err)
+	}
+}
+
+func TestModelAgentRespondRunsToolLoopThenFinal(t *testing.T) {
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{Content: `{"type":"tool_call","tool":"managed_status","arguments":{}}`},
+			{Content: `{"type":"final","message":"Managed Status\n--------------\nready"}`},
+		},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}},
+		results: map[string]ToolResult{
+			"managed_status": {Content: "Managed Status\n--------------\nready"},
+		},
+	}
+
+	response, err := agent.Respond("show current status", Context{
+		DefaultAgentID: "codex",
+		Now:            time.Date(2026, 4, 22, 11, 0, 0, 0, time.Local),
+	}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if strings.TrimSpace(response.Final) != "Managed Status\n--------------\nready" {
+		t.Fatalf("response.Final = %q", response.Final)
+	}
+	if len(runtime.calls) != 1 || runtime.calls[0] != "managed_status" {
+		t.Fatalf("tool calls = %+v, want managed_status", runtime.calls)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(client.requests))
+	}
+}
+
+func TestModelAgentRespondFallsBackToLegacyDecisionJSON(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{
+			Content: `{"action":"show_status"}`,
+		},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{}
+
+	response, err := agent.Respond("show current status", Context{DefaultAgentID: "codex"}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if response.Decision == nil || response.Decision.Action != ActionShowStatus {
+		t.Fatalf("response.Decision = %+v, want show_status", response.Decision)
+	}
+}
+
+func TestModelAgentRespondDetectsRepeatedToolLoop(t *testing.T) {
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{Content: `{"type":"tool_call","tool":"managed_status","arguments":{}}`},
+			{Content: `{"type":"tool_call","tool":"managed_status","arguments":{}}`},
+			{Content: `{"type":"tool_call","tool":"managed_status","arguments":{}}`},
+		},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}},
+		results: map[string]ToolResult{
+			"managed_status": {Content: "ok"},
+		},
+	}
+
+	_, err := agent.Respond("show current status", Context{DefaultAgentID: "codex"}, runtime)
+	if err == nil {
+		t.Fatal("Respond() error = nil, want repeated tool loop error")
+	}
+	if !strings.Contains(err.Error(), "repeated tool loop") {
+		t.Fatalf("error = %q, want repeated tool loop", err)
+	}
+}
+
+func TestModelAgentRespondDetectsAlternatingToolLoop(t *testing.T) {
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{Content: `{"type":"tool_call","tool":"managed_status","arguments":{}}`},
+			{Content: `{"type":"tool_call","tool":"draft_list","arguments":{}}`},
+			{Content: `{"type":"tool_call","tool":"managed_status","arguments":{}}`},
+			{Content: `{"type":"tool_call","tool":"draft_list","arguments":{}}`},
+			{Content: `{"type":"tool_call","tool":"managed_status","arguments":{}}`},
+			{Content: `{"type":"tool_call","tool":"draft_list","arguments":{}}`},
+		},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{
+			{Name: "managed_status", Description: "show status"},
+			{Name: "draft_list", Description: "list drafts"},
+		},
+		results: map[string]ToolResult{
+			"managed_status": {Content: "ok"},
+			"draft_list":     {Content: "ok"},
+		},
+	}
+
+	_, err := agent.Respond("keep checking", Context{DefaultAgentID: "codex"}, runtime)
+	if err == nil {
+		t.Fatal("Respond() error = nil, want alternating tool loop error")
+	}
+	if !strings.Contains(err.Error(), "alternating tool loop") {
+		t.Fatalf("error = %q, want alternating tool loop", err)
 	}
 }
 
