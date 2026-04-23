@@ -398,15 +398,70 @@ func extractJSONObject(content string) (string, error) {
 		return trimmed, nil
 	}
 
+	if candidate, ok := extractFirstJSONObject(trimmed); ok {
+		return candidate, nil
+	}
+
 	start := strings.Index(trimmed, "{")
-	end := strings.LastIndex(trimmed, "}")
-	if start >= 0 && end > start {
-		candidate := strings.TrimSpace(trimmed[start : end+1])
-		if json.Valid([]byte(candidate)) {
+	if start >= 0 {
+		if candidate, ok := extractFirstJSONObject(trimmed[start:]); ok {
 			return candidate, nil
 		}
 	}
 	return "", fmt.Errorf("no valid json object found")
+}
+
+func extractFirstJSONObject(content string) (string, bool) {
+	start := -1
+	depth := 0
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(content); i++ {
+		ch := content[i]
+
+		if start == -1 {
+			if ch == '{' {
+				start = i
+				depth = 1
+				inString = false
+				escaped = false
+			}
+			continue
+		}
+
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch ch {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				candidate := strings.TrimSpace(content[start : i+1])
+				if json.Valid([]byte(candidate)) {
+					return candidate, true
+				}
+				start = -1
+			}
+		}
+	}
+
+	return "", false
 }
 
 func systemPrompt() string {

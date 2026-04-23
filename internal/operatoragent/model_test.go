@@ -265,6 +265,36 @@ func TestModelAgentRespondRunsToolLoopThenFinal(t *testing.T) {
 	}
 }
 
+func TestModelAgentRespondUsesLeadingJSONObjectWhenProviderConcatenatesObjects(t *testing.T) {
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{Content: `{"type":"tool_call","tool":"managed_status","arguments":{}}{"type":"final","message":"ignore this trailing object"}`},
+			{Content: `{"type":"final","message":"Managed Status\n--------------\nready"}`},
+		},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}},
+		results: map[string]ToolResult{
+			"managed_status": {Content: "Managed Status\n--------------\nready"},
+		},
+	}
+
+	response, err := agent.Respond("show current status", Context{
+		DefaultAgentID: "codex",
+		Now:            time.Date(2026, 4, 22, 11, 0, 0, 0, time.Local),
+	}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if strings.TrimSpace(response.Final) != "Managed Status\n--------------\nready" {
+		t.Fatalf("response.Final = %q", response.Final)
+	}
+	if len(runtime.calls) != 1 || runtime.calls[0] != "managed_status" {
+		t.Fatalf("tool calls = %+v, want managed_status", runtime.calls)
+	}
+}
+
 func TestModelAgentRespondPromptIncludesGovernanceSummaryAndModes(t *testing.T) {
 	client := &fakeCompletionClient{
 		response: openai.ChatCompletionResponse{
