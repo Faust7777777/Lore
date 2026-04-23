@@ -23,6 +23,14 @@ type TextHit struct {
 	Preview string
 }
 
+func NormalizeRelativePath(value string) string {
+	return normalizeRelativePath(value)
+}
+
+func ShouldIgnoreRelativePath(rel string) bool {
+	return shouldIgnoreRelativePath(rel)
+}
+
 func ListEntries(root string, relDir string) ([]ListEntry, error) {
 	absolute, normalized, err := resolveUnderRoot(root, relDir)
 	if err != nil {

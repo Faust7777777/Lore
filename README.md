@@ -17,6 +17,7 @@ Key product constraints already baked into the scaffold:
 - `process-sink` writes are internal Harness writes with audit
 - Model availability is a hard dependency for the main chain
 - Cost control is observe-first, not a hard gate in P0/P1
+- Vault daemon now uses recursive fsnotify watching with debounce and polling fallback
 
 ## Layout
 
@@ -35,7 +36,9 @@ Key product constraints already baked into the scaffold:
 - `bootstrap [workdir]`
 - `demo-p0a [workdir]`
 - `demo-p0b [workdir]`
+- `console --workdir <dir> [--once "<request>"]`
 - `tui --workdir <dir> [--agent <id>] [--day YYYY-MM-DD] [--once "<request>"]`
+- `daemon run --workdir <dir> [--once] [--poll 2s] [--debounce 500ms] [--codex-jsonl <session.jsonl>]`
 - `mcp [workdir]`
 - `import-codex-jsonl --workdir <dir> --input <session.jsonl> [--agent <id>] [--session <id>] [--window 30m] [--skip-rollup]`
 - `sync-codex-jsonl --workdir <dir> --input <session.jsonl> [--agent <id>] [--session <id>] [--window 30m] [--skip-rollup]`

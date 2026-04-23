@@ -172,3 +172,122 @@ func TestRunVaultDaemonContinuesAfterCodexSyncFailure(t *testing.T) {
 		}
 	}
 }
+
+func TestRunVaultDaemonWatcherCreatesDraftAfterFileChange(t *testing.T) {
+	workDir := t.TempDir()
+	runtime, err := OpenRuntime(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	runtime.Config.Vault.DebounceWindow = 50 * time.Millisecond
+
+	now := time.Date(2026, 4, 23, 9, 0, 0, 0, time.Local)
+	if _, err := runtime.Bootstrap(now); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	relPath := filepath.Join("0-éŽºæŽ“æ¹¡", "04-éŽµÑ†î”‘", "week.md")
+	absPath := filepath.Join(runtime.Config.Paths.VaultRoot, relPath)
+	writeTestPlan(t, runtime, absPath, "# Week\n\n- [ ] initial", now.Add(-time.Second))
+	if _, err := runtime.ScanVaultChanges(now); err != nil {
+		t.Fatalf("ScanVaultChanges(prime) error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var output bytes.Buffer
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runtime.RunVaultDaemon(ctx, VaultDaemonRunOptions{
+			PollEvery:  250 * time.Millisecond,
+			Stdout:     &output,
+			CodexJSONL: nil,
+		})
+	}()
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return strings.Contains(output.String(), "Vault watcher active")
+	})
+
+	writeTestPlan(t, runtime, absPath, "# Week\n\n- [x] watcher update", time.Now())
+	waitForCondition(t, 2*time.Second, func() bool {
+		drafts, err := runtime.ListDrafts()
+		return err == nil && len(drafts) == 1
+	})
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("RunVaultDaemon() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunVaultDaemon() did not stop after cancel")
+	}
+}
+
+func TestRunVaultDaemonWatcherIgnoresObsidianDirectory(t *testing.T) {
+	workDir := t.TempDir()
+	runtime, err := OpenRuntime(workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	runtime.Config.Vault.DebounceWindow = 50 * time.Millisecond
+
+	now := time.Date(2026, 4, 23, 9, 0, 0, 0, time.Local)
+	if _, err := runtime.Bootstrap(now); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var output bytes.Buffer
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runtime.RunVaultDaemon(ctx, VaultDaemonRunOptions{
+			PollEvery: 250 * time.Millisecond,
+			Stdout:    &output,
+		})
+	}()
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return strings.Contains(output.String(), "Vault watcher active")
+	})
+
+	ignoredPath := filepath.Join(runtime.Config.Paths.VaultRoot, ".obsidian", "04-éŽµÑ†î”‘", "week.md")
+	writeTestPlan(t, runtime, ignoredPath, "# Week\n\n- [x] ignored", time.Now())
+	time.Sleep(250 * time.Millisecond)
+
+	drafts, err := runtime.ListDrafts()
+	if err != nil {
+		t.Fatalf("ListDrafts() error = %v", err)
+	}
+	if len(drafts) != 0 {
+		t.Fatalf("len(drafts) = %d, want 0 for ignored watcher path", len(drafts))
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("RunVaultDaemon() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunVaultDaemon() did not stop after cancel")
+	}
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("condition was not met within %s", timeout)
+}

@@ -1,6 +1,6 @@
 # Development Status
 
-Updated: 2026-04-22
+Updated: 2026-04-23
 
 ## Implemented
 
@@ -15,7 +15,7 @@ Updated: 2026-04-22
   - in-process event broker
   - dependency health service
   - audit service
-  - polling vault daemon with one-shot and long-running modes
+  - vault daemon with one-shot mode, recursive fsnotify watching, debounce, and polling fallback
 - Storage:
   - in-memory store for tests
   - persistent JSON state store for restart recovery
@@ -74,7 +74,6 @@ Commands verified locally with the repo-managed Go toolchain:
 
 ## Current Gaps
 
-- No file watcher yet; vault daemon still uses polling + full markdown walk
 - No live app-server / offset-tail Codex adapter yet; current P0-B supports manual import plus file-fingerprint sync/attach over local JSONL files
 - No full-screen TUI framework yet; `tui` is a text workbench, not a Bubble Tea-style interface
 - No SQLite state store yet; JSON store is the minimal persisted recovery layer
@@ -82,11 +81,10 @@ Commands verified locally with the repo-managed Go toolchain:
 
 ## Suggested Next Steps
 
-1. Add a real file watcher around the daemon so vault processing becomes event-driven instead of poll-walk based.
-2. Upgrade JSONL attach from file-fingerprint sync to a stronger live adapter with source-specific streaming or app-server integration.
-3. Move from the text workbench to a fuller interactive TUI once panel structure stabilizes.
-4. Add SQLite-backed state/audit store once the shape stabilizes.
-5. Extend attachment/media extraction beyond markdown ref surfacing.
+1. Upgrade JSONL attach from file-fingerprint sync to a stronger live adapter with source-specific streaming or app-server integration.
+2. Move from the text workbench to a fuller interactive TUI once panel structure stabilizes.
+3. Add SQLite-backed state/audit store once the shape stabilizes.
+4. Extend attachment/media extraction beyond markdown ref surfacing.
 
 ## Git Checkpoints
 
