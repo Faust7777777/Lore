@@ -35,7 +35,8 @@ func TestServerToolsListAndCall(t *testing.T) {
 	input := buildFrame(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`) +
 		buildFrame(`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`) +
 		buildFrame(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"managed_status","arguments":{}}}`) +
-		buildFrame(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"context_pack","arguments":{"task":"SQL","limit":3}}}`)
+		buildFrame(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"context_pack","arguments":{"task":"SQL","limit":3}}}`) +
+		buildFrame(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"vault_resolve","arguments":{"query":"note","limit":3}}}`)
 
 	var output bytes.Buffer
 	if err := server.Serve(context.Background(), strings.NewReader(input), &output); err != nil {
@@ -43,8 +44,8 @@ func TestServerToolsListAndCall(t *testing.T) {
 	}
 
 	responses := decodeFrames(t, output.Bytes())
-	if len(responses) != 4 {
-		t.Fatalf("response count = %d, want 4", len(responses))
+	if len(responses) != 5 {
+		t.Fatalf("response count = %d, want 5", len(responses))
 	}
 
 	if responses[1]["result"] == nil {
@@ -90,6 +91,16 @@ func TestServerToolsListAndCall(t *testing.T) {
 	if contextStructured["progress_doc"] == nil {
 		t.Fatal("context_pack missing progress_doc")
 	}
+
+	resolveResult := responses[4]["result"].(map[string]any)
+	resolveStructured := resolveResult["structuredContent"].(map[string]any)
+	if resolveStructured["status"] != "unique" {
+		t.Fatalf("vault_resolve status = %#v, want unique", resolveStructured["status"])
+	}
+	if resolveStructured["selected_path"] != "03-notes/note.md" {
+		t.Fatalf("vault_resolve selected_path = %#v", resolveStructured["selected_path"])
+	}
+
 	if _, err := st.Audit().ListAudit(10); err != nil {
 		t.Fatalf("ListAudit() error = %v", err)
 	}

@@ -162,6 +162,8 @@ func (s *Server) callTool(name string, args map[string]any) (any, error) {
 		return s.harness.VaultList(getString(args, "path"))
 	case "vault_search_text":
 		return s.harness.VaultSearchText(getString(args, "query"), getString(args, "path"), getInt(args, "limit", 10))
+	case "vault_resolve":
+		return s.harness.VaultResolve(getString(args, "query"), getString(args, "path"), getInt(args, "limit", 5))
 	case "vault_backlinks":
 		return s.harness.VaultBacklinks(getString(args, "path"), getInt(args, "limit", 10))
 	case "doc_classify":

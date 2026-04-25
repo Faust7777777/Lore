@@ -313,6 +313,8 @@ func (h *Harness) ContextPack(targetPath string, task string, limit int) (model.
 			backlinks, err := h.VaultBacklinks(targetPath, limit)
 			if err == nil {
 				pack.Backlinks = backlinks
+			} else {
+				pack.Notes = append(pack.Notes, "backlinks could not be loaded: "+err.Error())
 			}
 		}
 	}
@@ -325,6 +327,8 @@ func (h *Harness) ContextPack(targetPath string, task string, limit int) (model.
 		hits, err := h.VaultSearchText(searchQuery, "", limit)
 		if err == nil {
 			pack.RelatedHits = dedupeHits(hits, limit)
+		} else {
+			pack.Notes = append(pack.Notes, "related search could not be loaded: "+err.Error())
 		}
 	}
 
