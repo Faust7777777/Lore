@@ -161,9 +161,9 @@ func (s *Server) callTool(name string, args map[string]any) (any, error) {
 	case "vault_list":
 		return s.harness.VaultList(getString(args, "path"))
 	case "vault_search_text":
-		return s.harness.VaultSearchText(getString(args, "query"), getString(args, "path"), getInt(args, "limit", 10))
+		return s.harness.VaultSearchText(getString(args, "query"), getDirArg(args), getInt(args, "limit", 10))
 	case "vault_resolve":
-		return s.harness.VaultResolve(getString(args, "query"), getString(args, "path"), getInt(args, "limit", 5))
+		return s.harness.VaultResolve(getString(args, "query"), getDirArg(args), getInt(args, "limit", 5))
 	case "vault_backlinks":
 		return s.harness.VaultBacklinks(getString(args, "path"), getInt(args, "limit", 10))
 	case "doc_classify":
@@ -205,7 +205,8 @@ func toolDefinitions() []map[string]any {
 			"type": "object",
 			"properties": map[string]any{
 				"query": map[string]any{"type": "string"},
-				"path":  map[string]any{"type": "string"},
+				"dir":   map[string]any{"type": "string"},
+				"path":  map[string]any{"type": "string", "description": "deprecated alias for dir"},
 				"limit": map[string]any{"type": "integer"},
 			},
 			"required": []string{"query"},
@@ -214,7 +215,8 @@ func toolDefinitions() []map[string]any {
 			"type": "object",
 			"properties": map[string]any{
 				"query": map[string]any{"type": "string"},
-				"path":  map[string]any{"type": "string"},
+				"dir":   map[string]any{"type": "string"},
+				"path":  map[string]any{"type": "string", "description": "deprecated alias for dir"},
 				"limit": map[string]any{"type": "integer"},
 			},
 			"required": []string{"query"},
@@ -327,6 +329,13 @@ func getString(args map[string]any, key string) string {
 	value, _ := args[key]
 	text, _ := value.(string)
 	return strings.TrimSpace(text)
+}
+
+func getDirArg(args map[string]any) string {
+	if dir := getString(args, "dir"); dir != "" {
+		return dir
+	}
+	return getString(args, "path")
 }
 
 func getInt(args map[string]any, key string, fallback int) int {

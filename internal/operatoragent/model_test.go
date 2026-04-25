@@ -649,6 +649,33 @@ func TestSelectOperatorModelPrefersGpt54(t *testing.T) {
 	}
 }
 
+func TestOpenAIToolDefinitionsExposeVaultResolveDirSchema(t *testing.T) {
+	definitions := openAIToolDefinitions([]ToolDefinition{{
+		Name:        "vault_resolve",
+		Description: "Resolve a natural-language note reference to vault markdown paths. Returns status unique, ambiguous, or not_found; read selected_path only when status is unique.",
+		Arguments:   `{"query":"note title or reference","dir":"","limit":5}`,
+	}})
+	if len(definitions) != 1 {
+		t.Fatalf("definitions = %+v, want one tool", definitions)
+	}
+	if !strings.Contains(definitions[0].Description, "read selected_path only when status is unique") {
+		t.Fatalf("description = %q, want selected_path guidance", definitions[0].Description)
+	}
+	properties, ok := definitions[0].Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters = %#v, want object schema", definitions[0].Parameters)
+	}
+	if _, ok := properties["query"].(map[string]any); !ok {
+		t.Fatalf("query schema missing: %#v", properties)
+	}
+	if dir, ok := properties["dir"].(map[string]any); !ok || dir["type"] != "string" {
+		t.Fatalf("dir schema = %#v, want string", properties["dir"])
+	}
+	if limit, ok := properties["limit"].(map[string]any); !ok || limit["type"] != "number" {
+		t.Fatalf("limit schema = %#v, want number", properties["limit"])
+	}
+}
+
 func TestSelectOperatorModelFallsBackToCompatibleTextModel(t *testing.T) {
 	modelName, err := selectOperatorModel([]string{"text-embedding-3-large", "claude-sonnet-4"})
 	if err != nil {

@@ -36,7 +36,7 @@ func TestServerToolsListAndCall(t *testing.T) {
 		buildFrame(`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`) +
 		buildFrame(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"managed_status","arguments":{}}}`) +
 		buildFrame(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"context_pack","arguments":{"task":"SQL","limit":3}}}`) +
-		buildFrame(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"vault_resolve","arguments":{"query":"note","limit":3}}}`)
+		buildFrame(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"vault_resolve","arguments":{"query":"note","dir":"03-notes","limit":3}}}`)
 
 	var output bytes.Buffer
 	if err := server.Serve(context.Background(), strings.NewReader(input), &output); err != nil {
