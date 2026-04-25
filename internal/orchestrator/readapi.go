@@ -125,6 +125,118 @@ func (h *Harness) VaultSearchText(query string, relDir string, limit int) ([]mod
 	return out, nil
 }
 
+func (h *Harness) VaultResolve(query string, relDir string, limit int) (model.VaultResolveResult, error) {
+	query = strings.TrimSpace(query)
+	if limit <= 0 {
+		limit = 5
+	}
+	result := model.VaultResolveResult{Query: query, Status: "not_found"}
+	if query == "" {
+		result.Reason = "empty_query"
+		return result, nil
+	}
+
+	paths, err := vault.WalkMarkdownPaths(h.cfg.Paths.VaultRoot, relDir)
+	if err != nil {
+		return model.VaultResolveResult{}, err
+	}
+	matches := make([]model.VaultResolveMatch, 0)
+	for _, path := range paths {
+		if score, reason := scoreVaultResolvePath(query, path); score > 0 {
+			matches = append(matches, model.VaultResolveMatch{
+				Path:     path,
+				Score:    score,
+				Reason:   reason,
+				DocClass: h.classifier.Classify(path).Class,
+			})
+		}
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].Score != matches[j].Score {
+			return matches[i].Score > matches[j].Score
+		}
+		return matches[i].Path < matches[j].Path
+	})
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	result.Matches = matches
+	if len(matches) == 0 {
+		result.Reason = "no_path_match"
+	} else if isUniqueVaultResolveMatch(matches, h.cfg.Vault.Resolve.UniqueScoreThreshold, h.cfg.Vault.Resolve.UniqueScoreMargin) {
+		result.Status = "unique"
+		result.SelectedPath = matches[0].Path
+		result.Reason = matches[0].Reason
+	} else {
+		result.Status = "ambiguous"
+		result.Reason = "score_below_unique_threshold_or_margin"
+	}
+	h.recordReadAudit("vault_resolve", normalizeAuditTarget(relDir), map[string]string{
+		"query":  query,
+		"status": result.Status,
+		"hits":   fmt.Sprintf("%d", len(matches)),
+	})
+	return result, nil
+}
+
+func scoreVaultResolvePath(query string, relPath string) (float64, string) {
+	q := normalizeResolveText(query)
+	if q == "" {
+		return 0, ""
+	}
+	path := normalizeResolveText(relPath)
+	base := strings.TrimSuffix(resolvePathBase(path), ".md")
+	pathNoExt := strings.TrimSuffix(path, ".md")
+	switch {
+	case q == path || q == pathNoExt:
+		return 1.0, "path_exact"
+	case q == base:
+		return 0.95, "title_exact"
+	case strings.Contains(base, q):
+		return 0.9, "title_contains_query"
+	case strings.Contains(q, base) && len([]rune(base)) >= 2:
+		return 0.88, "query_contains_title"
+	case strings.Contains(pathNoExt, q):
+		return 0.82, "path_contains_query"
+	default:
+		return 0, ""
+	}
+}
+
+func normalizeResolveText(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "\\", "/")
+	value = strings.TrimSuffix(value, ".md")
+	replacer := strings.NewReplacer(" ", "", "_", "", "-", "", "\t", "", "\r", "", "\n", "")
+	return replacer.Replace(value)
+}
+
+func resolvePathBase(value string) string {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	if value == "" {
+		return ""
+	}
+	parts := strings.Split(value, "/")
+	return parts[len(parts)-1]
+}
+func isUniqueVaultResolveMatch(matches []model.VaultResolveMatch, threshold float64, margin float64) bool {
+	if len(matches) == 0 {
+		return false
+	}
+	if threshold <= 0 {
+		threshold = 0.9
+	}
+	if margin <= 0 {
+		margin = 0.3
+	}
+	if matches[0].Score < threshold {
+		return false
+	}
+	if len(matches) == 1 {
+		return true
+	}
+	return matches[0].Score-matches[1].Score >= margin
+}
 func (h *Harness) VaultBacklinks(relPath string, limit int) ([]model.SearchHit, error) {
 	hits, err := vault.FindBacklinks(h.cfg.Paths.VaultRoot, "", relPath, limit)
 	if err != nil {
@@ -299,15 +411,15 @@ func (h *Harness) readDocument(relPath string, fallbackClass model.DocClass) (mo
 
 func (h *Harness) resolveSystemDoc(name string) (string, model.DocClass, error) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "system", "system_doc":
+	case "system", "system_doc", "system-doc", "\u7cfb\u7edf", "\u7cfb\u7edf\u8bf4\u660e":
 		return h.cfg.Vault.ManagedCore.SystemDoc, model.DocClassSystemDoc, nil
-	case "progress", "progress_index":
+	case "progress", "progress_index", "progress-index", "\u8fdb\u5ea6", "\u8fdb\u5ea6\u603b\u8868", "\u603b\u8868":
 		return h.cfg.Vault.ManagedCore.ProgressIndex, model.DocClassProgressIndex, nil
-	case "persona":
+	case "persona", "profile", "person", "\u4eba\u7269\u753b\u50cf", "\u753b\u50cf", "\u4eba\u8bbe":
 		return h.cfg.Vault.ManagedCore.Persona, model.DocClassPersona, nil
-	case "agent", "agent_doc":
+	case "agent", "agent_doc", "agent-doc", "agent.md", "\u4ee3\u7406\u6307\u4ee4", "\u64cd\u4f5c\u6307\u4ee4":
 		return h.cfg.Vault.ManagedCore.AgentDoc, model.DocClassAgentDoc, nil
-	case "identity", "identity_doc":
+	case "identity", "identity_doc", "identity-doc", "identity.md", "\u8eab\u4efd", "\u8eab\u4efd\u6587\u6863":
 		return h.cfg.Vault.ManagedCore.IdentityDoc, model.DocClassIdentityDoc, nil
 	default:
 		return "", model.DocClassUnknown, fmt.Errorf("unknown system document: %s", name)

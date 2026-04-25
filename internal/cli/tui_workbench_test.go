@@ -65,6 +65,9 @@ func (s workbenchRuntimeStub) VaultSearchText(query string, relDir string, limit
 	return nil, nil
 }
 
+func (s workbenchRuntimeStub) VaultResolve(query string, relDir string, limit int) (model.VaultResolveResult, error) {
+	return model.VaultResolveResult{}, nil
+}
 func (s workbenchRuntimeStub) VaultBacklinks(relPath string, limit int) ([]model.SearchHit, error) {
 	return nil, nil
 }

@@ -43,6 +43,20 @@ type SearchHit struct {
 	DocClass DocClass `json:"doc_class,omitempty"`
 }
 
+type VaultResolveResult struct {
+	Query        string              `json:"query"`
+	Status       string              `json:"status"`
+	SelectedPath string              `json:"selected_path,omitempty"`
+	Matches      []VaultResolveMatch `json:"matches,omitempty"`
+	Reason       string              `json:"reason,omitempty"`
+}
+
+type VaultResolveMatch struct {
+	Path     string   `json:"path"`
+	Score    float64  `json:"score"`
+	Reason   string   `json:"reason"`
+	DocClass DocClass `json:"doc_class,omitempty"`
+}
 type DocClassificationView struct {
 	Path     string   `json:"path"`
 	DocClass DocClass `json:"doc_class"`

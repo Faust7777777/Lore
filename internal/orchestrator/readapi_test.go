@@ -127,6 +127,83 @@ func TestVaultReadToolsRecordAudit(t *testing.T) {
 	}
 }
 
+func TestSystemDocGetAcceptsManagedCoreAliases(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+
+	tests := map[string]string{
+		"\u753b\u50cf":             cfg.Vault.ManagedCore.Persona,
+		"\u4eba\u7269\u753b\u50cf": cfg.Vault.ManagedCore.Persona,
+		"\u8fdb\u5ea6\u603b\u8868": cfg.Vault.ManagedCore.ProgressIndex,
+		"\u7cfb\u7edf\u8bf4\u660e": cfg.Vault.ManagedCore.SystemDoc,
+		"\u8eab\u4efd":             cfg.Vault.ManagedCore.IdentityDoc,
+	}
+	for name, wantPath := range tests {
+		doc, err := h.SystemDocGet(name)
+		if err != nil {
+			t.Fatalf("SystemDocGet(%q) error = %v", name, err)
+		}
+		if doc.Path != filepath.ToSlash(wantPath) {
+			t.Fatalf("SystemDocGet(%q).Path = %q, want %q", name, doc.Path, filepath.ToSlash(wantPath))
+		}
+	}
+}
+func TestVaultResolveUniqueAmbiguousAndNotFound(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+	files := map[string]string{
+		"notes/python.md":          "# Python",
+		"notes/python-diary.md":    "# Python Diary",
+		"notes/golang-handbook.md": "# Go",
+	}
+	for relPath, content := range files {
+		if _, err := vault.WriteFileAtomic(filepath.Join(cfg.Paths.VaultRoot, filepath.FromSlash(relPath)), []byte(content), cfg.Vault.TempSuffix); err != nil {
+			t.Fatalf("WriteFileAtomic(%s) error = %v", relPath, err)
+		}
+	}
+
+	unique, err := h.VaultResolve("golang handbook", "", 5)
+	if err != nil {
+		t.Fatalf("VaultResolve(unique) error = %v", err)
+	}
+	if unique.Status != "unique" || unique.SelectedPath != "notes/golang-handbook.md" {
+		t.Fatalf("unique result = %+v, want golang handbook unique", unique)
+	}
+
+	ambiguous, err := h.VaultResolve("python", "", 5)
+	if err != nil {
+		t.Fatalf("VaultResolve(ambiguous) error = %v", err)
+	}
+	if ambiguous.Status != "ambiguous" || len(ambiguous.Matches) < 2 {
+		t.Fatalf("ambiguous result = %+v, want multiple matches", ambiguous)
+	}
+
+	missing, err := h.VaultResolve("does-not-exist", "", 5)
+	if err != nil {
+		t.Fatalf("VaultResolve(missing) error = %v", err)
+	}
+	if missing.Status != "not_found" {
+		t.Fatalf("missing status = %q, want not_found", missing.Status)
+	}
+}
 func TestVaultReadAuditPrefersLoreAgentIdentity(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := config.Default(workDir)

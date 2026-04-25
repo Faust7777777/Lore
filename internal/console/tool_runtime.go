@@ -41,10 +41,11 @@ func (r toolRuntime) DescribeTools(_ operatoragent.Context) []operatoragent.Tool
 		{Name: "draft_request_revision", Description: "Request revision on a draft.", Arguments: `{"draft_id":"optional","use_focused_draft":true}`},
 		{Name: "draft_apply", Description: "Apply an approved draft to the vault.", Arguments: `{"draft_id":"optional","use_focused_draft":true}`},
 		{Name: "process_sink_day", Description: "Render checkpoint and daily report status for one agent day.", Arguments: `{"agent_id":"codex","day":"YYYY-MM-DD"}`},
-		{Name: "system_doc_get", Description: "Read a managed core document by name.", Arguments: `{"name":"system|progress|persona|agent|identity"}`},
+		{Name: "system_doc_get", Description: "Read a managed core document by name or alias. Aliases: persona=\\u4eba\\u7269\\u753b\\u50cf/\\u753b\\u50cf, progress=\\u8fdb\\u5ea6\\u603b\\u8868, system=\\u7cfb\\u7edf\\u8bf4\\u660e, agent=agent.md, identity=identity.md.", Arguments: `{"name":"system|progress|persona|agent|identity"}`},
 		{Name: "vault_read", Description: "Read one markdown note from the managed vault.", Arguments: `{"path":"relative/path.md"}`},
 		{Name: "vault_list", Description: "List files and folders under one vault directory.", Arguments: `{"dir":"relative/dir"}`},
 		{Name: "vault_search_text", Description: "Search markdown text in the vault.", Arguments: `{"query":"text","dir":"","limit":5}`},
+		{Name: "vault_resolve", Description: "Resolve a natural-language note reference to vault markdown paths. Returns status unique, ambiguous, or not_found; read selected_path only when status is unique.", Arguments: `{"query":"note title or reference","dir":"","limit":5}`},
 		{Name: "vault_backlinks", Description: "Find backlink mentions of one vault note.", Arguments: `{"path":"relative/path.md","limit":5}`},
 		{Name: "doc_classify", Description: "Return the inferred document class for one vault path.", Arguments: `{"path":"relative/path.md"}`},
 		{Name: "context_pack", Description: "Assemble a read-only Lore context pack for a task or target note.", Arguments: `{"target_path":"optional/path.md","task":"what you need","limit":6}`},
@@ -192,6 +193,20 @@ func (r toolRuntime) CallTool(name string, arguments map[string]any) (operatorag
 			return operatoragent.ToolResult{}, err
 		}
 		return jsonToolResult(hits)
+	case "vault_resolve":
+		query, err := requiredStringArg(arguments, "query")
+		if err != nil {
+			return operatoragent.ToolResult{}, err
+		}
+		resolved, err := r.runtime.VaultResolve(
+			query,
+			stringArg(arguments, "dir", ""),
+			intArg(arguments, "limit", 5),
+		)
+		if err != nil {
+			return operatoragent.ToolResult{}, err
+		}
+		return jsonToolResult(resolved)
 	case "vault_backlinks":
 		path, err := requiredStringArg(arguments, "path")
 		if err != nil {

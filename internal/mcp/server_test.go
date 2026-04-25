@@ -52,8 +52,13 @@ func TestServerToolsListAndCall(t *testing.T) {
 	}
 	toolsList := responses[1]["result"].(map[string]any)["tools"].([]any)
 	foundSystemDocEnum := false
+	foundVaultResolve := false
 	for _, item := range toolsList {
 		tool := item.(map[string]any)
+		if tool["name"] == "vault_resolve" {
+			foundVaultResolve = true
+			continue
+		}
 		if tool["name"] != "system_doc_get" {
 			continue
 		}
@@ -69,6 +74,9 @@ func TestServerToolsListAndCall(t *testing.T) {
 	}
 	if !foundSystemDocEnum {
 		t.Fatal("tools/list missing agent/identity system_doc_get enum values")
+	}
+	if !foundVaultResolve {
+		t.Fatal("tools/list missing vault_resolve")
 	}
 
 	result := responses[2]["result"].(map[string]any)

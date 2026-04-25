@@ -28,6 +28,12 @@ type VaultConfig struct {
 	DebounceWindow time.Duration          `json:"debounce_window"`
 	TempSuffix     string                 `json:"temp_suffix"`
 	ManagedCore    model.ManagedCorePaths `json:"managed_core"`
+	Resolve        VaultResolveConfig     `json:"resolve"`
+}
+
+type VaultResolveConfig struct {
+	UniqueScoreThreshold float64 `json:"unique_score_threshold"`
+	UniqueScoreMargin    float64 `json:"unique_score_margin"`
 }
 
 type RuntimeConfig struct {
@@ -74,6 +80,10 @@ func Default(workDir string) Config {
 				Persona:       filepath.Join("03-\u753b\u50cf", "\u4eba\u7269\u753b\u50cf.md"),
 				AgentDoc:      "agent.md",
 				IdentityDoc:   "identity.md",
+			},
+			Resolve: VaultResolveConfig{
+				UniqueScoreThreshold: 0.9,
+				UniqueScoreMargin:    0.3,
 			},
 		},
 		Runtime: RuntimeConfig{

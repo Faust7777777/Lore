@@ -22,6 +22,9 @@ func (r *Runtime) VaultSearchText(query string, relDir string, limit int) ([]mod
 	return r.Harness.VaultSearchText(query, relDir, limit)
 }
 
+func (r *Runtime) VaultResolve(query string, relDir string, limit int) (model.VaultResolveResult, error) {
+	return r.Harness.VaultResolve(query, relDir, limit)
+}
 func (r *Runtime) VaultBacklinks(relPath string, limit int) ([]model.SearchHit, error) {
 	return r.Harness.VaultBacklinks(relPath, limit)
 }

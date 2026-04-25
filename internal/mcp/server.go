@@ -208,7 +208,15 @@ func toolDefinitions() []map[string]any {
 			},
 			"required": []string{"query"},
 		}),
-		toolDefinition("vault_backlinks", "Find backlinks to a vault document.", map[string]any{
+		toolDefinition("vault_resolve", "Resolve a natural-language note reference to vault markdown paths. Returns unique, ambiguous, or not_found.", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string"},
+				"path":  map[string]any{"type": "string"},
+				"limit": map[string]any{"type": "integer"},
+			},
+			"required": []string{"query"},
+		}), toolDefinition("vault_backlinks", "Find backlinks to a vault document.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":  map[string]any{"type": "string"},
