@@ -1,7 +1,6 @@
 package orchestrator
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -444,7 +443,7 @@ func (h *Harness) recordReadAudit(tool string, target string, metadata map[strin
 		metadata = make(map[string]string)
 	}
 	metadata["tool"] = tool
-	_ = h.auditor.Record(context.Background(), model.AuditRecord{
+	h.recordAudit(model.AuditRecord{
 		ID:         auditID("mcp-read", time.Now()),
 		Kind:       model.AuditMCPRead,
 		Actor:      currentReadActor(),

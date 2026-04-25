@@ -57,6 +57,50 @@ func TestWriteLowRiskNoteWritesNoteAndAudits(t *testing.T) {
 	}
 }
 
+func TestAuditFailureMarksHealthButDoesNotBlockWrite(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := failingAuditStateStore{Store: memory.New()}
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	doc, err := h.WriteLowRiskNote("03-notes/audit-failure.md", []byte("# Audit Failure"), false, time.Date(2026, 4, 25, 9, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("WriteLowRiskNote() error = %v", err)
+	}
+	if doc.Path != "03-notes/audit-failure.md" {
+		t.Fatalf("doc.Path = %q", doc.Path)
+	}
+
+	snapshot := h.StatusSnapshot()
+	if snapshot.Outcome.Status != model.StatusError {
+		t.Fatalf("health status = %q, want error", snapshot.Outcome.Status)
+	}
+	if !strings.Contains(snapshot.Message, "audit record failed") {
+		t.Fatalf("health message = %q, want audit failure", snapshot.Message)
+	}
+}
+
+type failingAuditStateStore struct {
+	*memory.Store
+}
+
+func (s failingAuditStateStore) Audit() store.AuditStore {
+	return failingAuditStore{}
+}
+
+type failingAuditStore struct{}
+
+func (failingAuditStore) AppendAudit(model.AuditRecord) error {
+	return errors.New("forced audit failure")
+}
+
+func (failingAuditStore) ListAudit(int) ([]model.AuditRecord, error) {
+	return nil, errors.New("forced audit failure")
+}
 func TestWriteLowRiskNoteRejectsGovernedPaths(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := config.Default(workDir)
@@ -149,7 +193,7 @@ func TestBootstrapAndDraftLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(progress) error = %v", err)
 	}
-	if !strings.Contains(string(progressContent), "| 0-排期/04-执行/week.md | 周执行 | 已同步 | 2026-04-22 10:00 |") {
+	if !strings.Contains(string(progressContent), "| 0-\u6392\u671f/04-\u6267\u884c/week.md | \u5468\u6267\u884c | \u5df2\u540c\u6b65 | 2026-04-22 10:00 |") {
 		t.Fatalf("progress index missing structured progress row: %s", string(progressContent))
 	}
 }
@@ -167,7 +211,7 @@ func TestApplyDraftUpsertsProgressRowInsteadOfAppendingDuplicateBlock(t *testing
 		t.Fatalf("BootstrapManagedVault() error = %v", err)
 	}
 
-	relPath := filepath.Join("0-排期", "04-执行", "week.md")
+	relPath := filepath.Join("0-\u6392\u671f", "04-\u6267\u884c", "week.md")
 	firstDraft, err := h.ObserveDocumentChange(relPath, []byte("first pass"), time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("ObserveDocumentChange(first) error = %v", err)
@@ -196,10 +240,10 @@ func TestApplyDraftUpsertsProgressRowInsteadOfAppendingDuplicateBlock(t *testing
 		t.Fatalf("ReadFile(progress) error = %v", err)
 	}
 	got := string(progressContent)
-	if strings.Count(got, "0-排期/04-执行/week.md") != 1 {
+	if strings.Count(got, "0-\u6392\u671f/04-\u6267\u884c/week.md") != 1 {
 		t.Fatalf("expected one upserted progress row, got %s", got)
 	}
-	if !strings.Contains(got, "| 0-排期/04-执行/week.md | 周执行 | 已同步 | 2026-04-22 12:00 |") {
+	if !strings.Contains(got, "| 0-\u6392\u671f/04-\u6267\u884c/week.md | \u5468\u6267\u884c | \u5df2\u540c\u6b65 | 2026-04-22 12:00 |") {
 		t.Fatalf("progress row not updated to latest timestamp: %s", got)
 	}
 }

@@ -84,7 +84,7 @@ func (h *Harness) UpdateDependencies(modelAvailable bool, adapterConnected bool)
 		ModelAvailable:   modelAvailable,
 		AdapterConnected: adapterConnected,
 	})
-	_ = h.auditor.Record(context.Background(), model.AuditRecord{
+	h.recordAudit(model.AuditRecord{
 		ID:         auditID("health", snapshot.CheckedAt),
 		Kind:       model.AuditRuntimeHealth,
 		Actor:      "runtime",
@@ -145,7 +145,7 @@ func (h *Harness) ObserveDocumentChange(relPath string, content []byte, at time.
 	}); err != nil {
 		return model.Draft{}, err
 	}
-	_ = h.auditor.Record(context.Background(), model.AuditRecord{
+	h.recordAudit(model.AuditRecord{
 		ID:         auditID("draft-created", at),
 		Kind:       model.AuditDraftCreated,
 		Actor:      "runtime",
@@ -246,7 +246,7 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 	if err != nil {
 		return model.Draft{}, err
 	}
-	_ = h.auditor.Record(context.Background(), model.AuditRecord{
+	h.recordAudit(model.AuditRecord{
 		ID:         auditID("draft-applied", at),
 		Kind:       model.AuditDraftApplied,
 		Actor:      "operator",
@@ -290,7 +290,7 @@ func (h *Harness) WriteLowRiskNote(relPath string, content []byte, overwrite boo
 		Content:     string(content),
 		Attachments: vault.ExtractAttachmentRefs(string(content)),
 	}
-	_ = h.auditor.Record(context.Background(), model.AuditRecord{
+	h.recordAudit(model.AuditRecord{
 		ID:         auditID("low-risk-write", at),
 		Kind:       model.AuditLowRiskVaultWrite,
 		Actor:      "operator",
@@ -343,7 +343,7 @@ func (h *Harness) transitionDraftState(id string, next model.DraftState, source 
 		OccurredAt: at,
 		Payload:    updated,
 	})
-	_ = h.auditor.Record(context.Background(), model.AuditRecord{
+	h.recordAudit(model.AuditRecord{
 		ID:         auditID(auditPrefix, at),
 		Kind:       model.AuditDraftStateChange,
 		Actor:      actor,
@@ -369,7 +369,7 @@ func (h *Harness) IngestSessionWindow(window model.SessionWindow, title string, 
 		OccurredAt: at,
 		Payload:    doc,
 	})
-	_ = h.auditor.Record(context.Background(), model.AuditRecord{
+	h.recordAudit(model.AuditRecord{
 		ID:         auditID("checkpoint-write", at),
 		Kind:       model.AuditCheckpointWrite,
 		Actor:      "process_sink",
@@ -407,7 +407,7 @@ func (h *Harness) publishDailyRollup(agentID string, report model.DailyReport, a
 		OccurredAt: at,
 		Payload:    report,
 	})
-	_ = h.auditor.Record(context.Background(), model.AuditRecord{
+	h.recordAudit(model.AuditRecord{
 		ID:         auditID("daily-rollup", at),
 		Kind:       model.AuditDailyRollup,
 		Actor:      "process_sink",
@@ -476,7 +476,7 @@ func renderProgressPatch(relPath string, docClass model.DocClass, at time.Time) 
 		"| %s | %s | %s | %s |",
 		relPath,
 		progressDocTypeLabel(docClass),
-		"已同步",
+		"\u5df2\u540c\u6b65",
 		at.Format("2006-01-02 15:04"),
 	)
 }
@@ -495,13 +495,13 @@ func summarizeContent(content []byte) string {
 func progressDocTypeLabel(docClass model.DocClass) string {
 	switch docClass {
 	case model.DocClassPlanWeek:
-		return "周执行"
+		return "\u5468\u6267\u884c"
 	case model.DocClassPlanMaster:
-		return "计划总表"
+		return "\u8ba1\u5212\u603b\u8868"
 	case model.DocClassSystemDoc:
-		return "系统文档"
+		return "\u7cfb\u7edf\u6587\u6863"
 	case model.DocClassPersona:
-		return "人物画像"
+		return "\u4eba\u7269\u753b\u50cf"
 	default:
 		return string(docClass)
 	}
@@ -526,7 +526,7 @@ func upsertProgressIndexRow(current []byte, row string) ([]byte, error) {
 		if trimmed == "" {
 			return []byte(progressIndexTableBlock(row) + "\n"), nil
 		}
-		return []byte(strings.TrimRight(text, "\n") + "\n\n## 自动同步记录\n\n" + progressIndexTableBlock(row) + "\n"), nil
+		return []byte(strings.TrimRight(text, "\n") + "\n\n## 闁煎浜滄慨鈺呭触鐏炵虎鍔勯悹浣规緲缂嶅硵n\n" + progressIndexTableBlock(row) + "\n"), nil
 	}
 
 	replaced := false
@@ -550,7 +550,7 @@ func upsertProgressIndexRow(current []byte, row string) ([]byte, error) {
 
 func progressIndexTableBlock(row string) string {
 	return strings.Join([]string{
-		"| 文档 | 类型 | 状态 | 最近更新 |",
+		"| 闁哄倸娲﹂妴?| 缂侇偉顕ч悗?| 闁绘鍩栭埀?| 闁哄牃鍋撻弶鈺傚灦濞插潡寮?|",
 		"| --- | --- | --- | --- |",
 		row,
 	}, "\n")
@@ -576,7 +576,7 @@ func isProgressHeaderLine(line string) bool {
 	if !ok || len(cells) < 4 {
 		return false
 	}
-	expected := []string{"文档", "类型", "状态", "最近更新"}
+	expected := []string{"\u6587\u6863", "\u7c7b\u578b", "\u72b6\u6001", "\u6700\u8fd1\u66f4\u65b0"}
 	for i, want := range expected {
 		if cells[i] != want {
 			return false
@@ -628,6 +628,14 @@ func insertLine(lines []string, index int, line string) []string {
 	return lines
 }
 
+func (h *Harness) recordAudit(record model.AuditRecord) {
+	if record.OccurredAt.IsZero() {
+		record.OccurredAt = time.Now()
+	}
+	if err := h.auditor.Record(context.Background(), record); err != nil {
+		h.health.MarkError("audit record failed: " + err.Error())
+	}
+}
 func auditID(prefix string, at time.Time) string {
 	return fmt.Sprintf("%s-%d", prefix, at.UnixNano())
 }

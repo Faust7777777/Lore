@@ -72,6 +72,22 @@ func (s *HealthService) Update(probe DependencyProbe) model.HealthSnapshot {
 	return snapshot
 }
 
+func (s *HealthService) MarkError(message string) model.HealthSnapshot {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "unexpected runtime error"
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	snapshot := s.snapshot
+	snapshot.Outcome = model.NewOutcome(model.StatusError, model.ReasonUnexpectedFailure)
+	snapshot.Message = message
+	snapshot.CheckedAt = time.Now()
+	s.snapshot = snapshot
+	return snapshot
+}
 func (s *HealthService) Snapshot() model.HealthSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
