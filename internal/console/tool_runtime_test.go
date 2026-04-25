@@ -315,6 +315,39 @@ func TestToolRuntimeGitToolsRequireLocalExecMode(t *testing.T) {
 	}
 }
 
+func TestToolRuntimeWorkspaceWriteRunsWithoutConfirmation(t *testing.T) {
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+	}
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.EnableLocalWorkTools = true
+	tools := newToolRuntime(session, runtime)
+
+	result, err := tools.CallTool("workspace_write", map[string]any{
+		"path":    "notes.txt",
+		"content": "hello",
+	})
+	if err != nil {
+		t.Fatalf("workspace_write error = %v", err)
+	}
+	if session.PendingShellCommand != nil {
+		t.Fatalf("pending shell command = %+v, want nil for non-shell tool", session.PendingShellCommand)
+	}
+	if strings.Contains(result.Content, "pending confirmation") {
+		t.Fatalf("workspace_write result = %q, want immediate non-confirming result", result.Content)
+	}
+	data, err := os.ReadFile(filepath.Join(workDir, "notes.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile(notes.txt) error = %v", err)
+	}
+	if string(data) != "hello" {
+		t.Fatalf("notes.txt = %q, want hello", string(data))
+	}
+}
 func TestToolRuntimeWorkspaceWriteRequiresLocalExecMode(t *testing.T) {
 	workDir := t.TempDir()
 	runtime := &fakeRuntime{
