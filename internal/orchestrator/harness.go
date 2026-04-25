@@ -146,11 +146,12 @@ func (h *Harness) ObserveDocumentChange(relPath string, content []byte, at time.
 		return model.Draft{}, err
 	}
 	h.recordAudit(model.AuditRecord{
-		ID:         auditID("draft-created", at),
-		Kind:       model.AuditDraftCreated,
-		Actor:      "runtime",
-		Target:     draft.Target.Path,
-		OccurredAt: at,
+		ID:            auditID("draft-created", at),
+		Kind:          model.AuditDraftCreated,
+		CorrelationID: draft.ID,
+		Actor:         "runtime",
+		Target:        draft.Target.Path,
+		OccurredAt:    at,
 		Metadata: map[string]string{
 			"draft_id": draft.ID,
 			"source":   normalizedPath,
@@ -247,11 +248,12 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 		return model.Draft{}, err
 	}
 	h.recordAudit(model.AuditRecord{
-		ID:         auditID("draft-applied", at),
-		Kind:       model.AuditDraftApplied,
-		Actor:      "operator",
-		Target:     applied.Target.Path,
-		OccurredAt: at,
+		ID:            auditID("draft-applied", at),
+		Kind:          model.AuditDraftApplied,
+		CorrelationID: applied.ID,
+		Actor:         "operator",
+		Target:        applied.Target.Path,
+		OccurredAt:    at,
 		Metadata: map[string]string{
 			"draft_id": applied.ID,
 			"state":    string(applied.State),
@@ -344,11 +346,12 @@ func (h *Harness) transitionDraftState(id string, next model.DraftState, source 
 		Payload:    updated,
 	})
 	h.recordAudit(model.AuditRecord{
-		ID:         auditID(auditPrefix, at),
-		Kind:       model.AuditDraftStateChange,
-		Actor:      actor,
-		Target:     updated.Target.Path,
-		OccurredAt: at,
+		ID:            auditID(auditPrefix, at),
+		Kind:          model.AuditDraftStateChange,
+		CorrelationID: updated.ID,
+		Actor:         actor,
+		Target:        updated.Target.Path,
+		OccurredAt:    at,
 		Metadata: map[string]string{
 			"draft_id": updated.ID,
 			"state":    string(updated.State),

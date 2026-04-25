@@ -196,6 +196,29 @@ func TestBootstrapAndDraftLifecycle(t *testing.T) {
 	if !strings.Contains(string(progressContent), "| 0-\u6392\u671f/04-\u6267\u884c/week.md | \u5468\u6267\u884c | \u5df2\u540c\u6b65 | 2026-04-22 10:00 |") {
 		t.Fatalf("progress index missing structured progress row: %s", string(progressContent))
 	}
+
+	records, err := st.Audit().ListAudit(20)
+	if err != nil {
+		t.Fatalf("ListAudit() error = %v", err)
+	}
+	wantKinds := map[model.AuditKind]bool{
+		model.AuditDraftCreated:     false,
+		model.AuditDraftStateChange: false,
+		model.AuditDraftApplied:     false,
+	}
+	for _, record := range records {
+		if record.CorrelationID != draft.ID {
+			continue
+		}
+		if _, ok := wantKinds[record.Kind]; ok {
+			wantKinds[record.Kind] = true
+		}
+	}
+	for kind, found := range wantKinds {
+		if !found {
+			t.Fatalf("missing %s audit record with correlation_id %q in %+v", kind, draft.ID, records)
+		}
+	}
 }
 
 func TestApplyDraftUpsertsProgressRowInsteadOfAppendingDuplicateBlock(t *testing.T) {
