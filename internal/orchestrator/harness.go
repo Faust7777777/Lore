@@ -12,6 +12,7 @@ import (
 	"obsidian-harness/internal/bootstrap"
 	"obsidian-harness/internal/config"
 	"obsidian-harness/internal/domain/docclass"
+	"obsidian-harness/internal/domain/drafts"
 	"obsidian-harness/internal/domain/processsink"
 	"obsidian-harness/internal/model"
 	hruntime "obsidian-harness/internal/runtime"
@@ -217,6 +218,9 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 		return model.Draft{}, err
 	}
 	if hash != draft.Target.BaseVersion {
+		if err := drafts.ValidateTransition(draft.State, model.DraftConflicted); err != nil {
+			return model.Draft{}, ErrDraftNotReady
+		}
 		conflicted, updateErr := h.store.Drafts().UpdateDraftState(id, model.DraftConflicted, at)
 		if updateErr == nil {
 			_ = h.broker.Publish(context.Background(), hruntime.Event{
@@ -238,17 +242,10 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 		return model.Draft{}, err
 	}
 
-	applied, err := h.store.Drafts().UpdateDraftState(id, model.DraftApplied, at)
+	applied, err := h.transitionDraftState(id, model.DraftApplied, "apply_draft", "draft-applied-state", "operator", at)
 	if err != nil {
 		return model.Draft{}, err
 	}
-	_ = h.broker.Publish(context.Background(), hruntime.Event{
-		ID:         applied.ID,
-		Type:       hruntime.EventDraftStateChanged,
-		Source:     "apply_draft",
-		OccurredAt: at,
-		Payload:    applied,
-	})
 	_ = h.auditor.Record(context.Background(), model.AuditRecord{
 		ID:         auditID("draft-applied", at),
 		Kind:       model.AuditDraftApplied,
@@ -327,6 +324,14 @@ func (h *Harness) allowsLowRiskDirectWrite(relPath string) bool {
 }
 
 func (h *Harness) transitionDraftState(id string, next model.DraftState, source string, auditPrefix string, actor string, at time.Time) (model.Draft, error) {
+	draft, err := h.store.Drafts().GetDraft(id)
+	if err != nil {
+		return model.Draft{}, err
+	}
+	if err := drafts.ValidateTransition(draft.State, next); err != nil {
+		return model.Draft{}, ErrDraftNotReady
+	}
+
 	updated, err := h.store.Drafts().UpdateDraftState(id, next, at)
 	if err != nil {
 		return model.Draft{}, err

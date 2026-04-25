@@ -21,10 +21,15 @@ const (
 )
 
 const (
-	StateDraft    = model.DraftCreated
-	StateReview   = model.DraftPendingReview
-	StateApproved = model.DraftApproved
-	StateApplied  = model.DraftApplied
+	StateDraft      = model.DraftCreated
+	StateReview     = model.DraftPendingReview
+	StateApproved   = model.DraftApproved
+	StateApplied    = model.DraftApplied
+	StateRevision   = model.DraftRevisionRequested
+	StateRejected   = model.DraftRejected
+	StateExpired    = model.DraftExpired
+	StateSuperseded = model.DraftSuperseded
+	StateConflicted = model.DraftConflicted
 )
 
 type Source string
@@ -160,6 +165,26 @@ func (d *Draft) Apply(applier string, at time.Time) error {
 
 func (d Draft) ReadyToApply() bool {
 	return d.State == StateApproved
+}
+
+func CanTransition(from State, to State) bool {
+	switch from {
+	case StateDraft:
+		return to == StateReview || to == StateExpired || to == StateSuperseded
+	case StateReview:
+		return to == StateApproved || to == StateRejected || to == StateRevision || to == StateExpired || to == StateSuperseded
+	case StateApproved:
+		return to == StateApplied || to == StateConflicted || to == StateExpired || to == StateSuperseded
+	default:
+		return false
+	}
+}
+
+func ValidateTransition(from State, to State) error {
+	if CanTransition(from, to) {
+		return nil
+	}
+	return invalidTransition(from, "transition_to_"+string(to))
 }
 
 func (d Draft) AllowsDirectWrite() bool {

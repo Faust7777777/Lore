@@ -86,3 +86,47 @@ func TestDraftMustBeReviewedBeforeApply(t *testing.T) {
 		t.Fatalf("AppliedBy = %q, want %q", draft.AppliedBy, "operator")
 	}
 }
+
+func TestValidateTransitionCoversAllDraftTerminalStates(t *testing.T) {
+	validTransitions := []struct {
+		from State
+		to   State
+	}{
+		{StateDraft, StateReview},
+		{StateDraft, StateExpired},
+		{StateDraft, StateSuperseded},
+		{StateReview, StateApproved},
+		{StateReview, StateRejected},
+		{StateReview, StateRevision},
+		{StateReview, StateExpired},
+		{StateReview, StateSuperseded},
+		{StateApproved, StateApplied},
+		{StateApproved, StateConflicted},
+		{StateApproved, StateExpired},
+		{StateApproved, StateSuperseded},
+	}
+
+	for _, transition := range validTransitions {
+		if err := ValidateTransition(transition.from, transition.to); err != nil {
+			t.Fatalf("ValidateTransition(%q, %q) error = %v", transition.from, transition.to, err)
+		}
+	}
+
+	invalidTransitions := []struct {
+		from State
+		to   State
+	}{
+		{StateApplied, StateReview},
+		{StateRejected, StateApproved},
+		{StateRevision, StateApproved},
+		{StateConflicted, StateApplied},
+		{StateReview, StateApplied},
+		{StateApproved, StateRejected},
+	}
+
+	for _, transition := range invalidTransitions {
+		if err := ValidateTransition(transition.from, transition.to); err == nil {
+			t.Fatalf("ValidateTransition(%q, %q) error = nil, want invalid transition", transition.from, transition.to)
+		}
+	}
+}
