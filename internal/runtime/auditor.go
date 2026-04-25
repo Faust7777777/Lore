@@ -17,6 +17,7 @@ func NewAuditor(store store.AuditStore, broker Broker) *Auditor {
 }
 
 func (a *Auditor) Record(ctx context.Context, record model.AuditRecord) error {
+	record = model.NormalizeAuditRecord(record)
 	if err := a.store.AppendAudit(record); err != nil {
 		return err
 	}

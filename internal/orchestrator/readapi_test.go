@@ -233,6 +233,18 @@ func TestVaultReadAuditPrefersLoreAgentIdentity(t *testing.T) {
 	if records[0].Actor != "mcp:lore-agent" {
 		t.Fatalf("audit actor = %q, want mcp:lore-agent", records[0].Actor)
 	}
+	if records[0].ActorType != "mcp" {
+		t.Fatalf("audit actor_type = %q, want mcp", records[0].ActorType)
+	}
+	if records[0].ActorID != "lore-agent" {
+		t.Fatalf("audit actor_id = %q, want lore-agent", records[0].ActorID)
+	}
+	if records[0].ResultStatus != "ok" {
+		t.Fatalf("audit result_status = %q, want ok", records[0].ResultStatus)
+	}
+	if records[0].CorrelationID == "" {
+		t.Fatal("audit correlation_id is empty")
+	}
 }
 
 func TestVaultReadRejectsTraversal(t *testing.T) {

@@ -224,6 +224,7 @@ func (s *Store) GetDailyReport(agentID string, day time.Time) (model.DailyReport
 }
 
 func (s *Store) AppendAudit(record model.AuditRecord) error {
+	record = model.NormalizeAuditRecord(record)
 	payload, err := marshalPayload(record)
 	if err != nil {
 		return err
@@ -533,6 +534,7 @@ func saveDailyReportTx(tx *sql.Tx, report model.DailyReport) error {
 }
 
 func appendAuditTx(tx *sql.Tx, record model.AuditRecord) error {
+	record = model.NormalizeAuditRecord(record)
 	payload, err := marshalPayload(record)
 	if err != nil {
 		return err

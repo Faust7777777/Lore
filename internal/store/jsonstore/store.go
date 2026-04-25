@@ -173,6 +173,7 @@ func (s *Store) GetDailyReport(agentID string, day time.Time) (model.DailyReport
 func (s *Store) AppendAudit(record model.AuditRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	record = model.NormalizeAuditRecord(record)
 	s.state.Audit = append(s.state.Audit, record)
 	return s.persistLocked()
 }
