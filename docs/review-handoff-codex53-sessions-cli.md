@@ -12,13 +12,15 @@ Changed files:
 
 - `lore sessions list --workdir <dir> --limit 20`
 - `lore sessions search --workdir <dir> --limit 20 <query>`
+- `lore sessions show --workdir <dir> <session-id>`
 
 ## Contract
 
 - This is explicit transcript inspection only.
 - Fresh `console`/`tui` sessions still do not auto-load old transcripts.
 - `sessions search` reads only workspace-local `<workdir>/state/sessions` transcripts through `sessionlog.Search`.
-- Search output is a compact TSV-like list: session id, updated time, turn count, title.
+- List/search output is a compact TSV-like list: session id, updated time, turn count, title.
+- Show output is a read-only summary of metadata, working set, and conversation turns.
 - No tool calls are replayed and no session is resumed by these commands.
 
 ## Review Focus

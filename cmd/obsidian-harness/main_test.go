@@ -444,6 +444,38 @@ func TestRunSessionsSearchFindsTranscriptContent(t *testing.T) {
 		t.Fatalf("sessions search output = %q", stdout.String())
 	}
 }
+func TestRunSessionsShowDisplaysTranscriptSummary(t *testing.T) {
+	workDir := t.TempDir()
+	configureLLMTestEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := run([]string{"console", "--workdir", workDir, "--once", "show current status"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("console exit = %d, stderr = %q", code, stderr.String())
+	}
+
+	sessionDir := filepath.Join(workDir, "state", "sessions")
+	entries, err := os.ReadDir(sessionDir)
+	if err != nil {
+		t.Fatalf("ReadDir(sessionDir) error = %v", err)
+	}
+	transcripts := transcriptFiles(entries)
+	if len(transcripts) != 1 {
+		t.Fatalf("transcripts = %+v, want one", transcripts)
+	}
+	sessionID := strings.TrimSuffix(transcripts[0], ".jsonl")
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"sessions", "show", "--workdir", workDir, sessionID}, &stdout, &stderr); code != 0 {
+		t.Fatalf("sessions show exit = %d, stderr = %q", code, stderr.String())
+	}
+	for _, want := range []string{"Session: " + sessionID, "Conversation:", "user: show current status", "assistant:"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("sessions show output missing %q: %s", want, stdout.String())
+		}
+	}
+}
 func TestRunConsoleOnceWritesLowRiskDiary(t *testing.T) {
 	workDir := t.TempDir()
 	configureLLMTestEnv(t)

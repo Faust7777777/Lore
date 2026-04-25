@@ -259,6 +259,25 @@ func runSessionsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		renderSessionSummaries(stdout, sessions)
 		return 0
+	case "show":
+		workDir, sessionID, err := parseSessionsShowFlags(args[1:], stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		defer closeRuntime(stderr, runtime, "sessions show")
+		snapshot, err := sessionlog.Load(sessionLogRoot(runtime), sessionID)
+		if err != nil {
+			fmt.Fprintf(stderr, "sessions show: %v\n", err)
+			return 1
+		}
+		renderSessionSnapshot(stdout, snapshot)
+		return 0
 	case "search":
 		workDir, query, limit, err := parseSessionsSearchFlags(args[1:], stderr)
 		if err != nil {
@@ -284,6 +303,40 @@ func runSessionsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 }
 
+func renderSessionSnapshot(stdout io.Writer, snapshot sessionlog.Snapshot) {
+	summary := snapshot.Summary
+	fmt.Fprintf(stdout, "Session: %s\n", summary.ID)
+	fmt.Fprintf(stdout, "Updated: %s\n", summary.UpdatedAt.Format("2006-01-02 15:04"))
+	fmt.Fprintf(stdout, "Turns: %d\n", summary.TurnCount)
+	if summary.Title != "" {
+		fmt.Fprintf(stdout, "Title: %s\n", summary.Title)
+	}
+	if len(snapshot.WorkingSet) > 0 {
+		fmt.Fprintln(stdout, "Working Set:")
+		for _, item := range snapshot.WorkingSet {
+			fmt.Fprintf(stdout, "- %s %s\n", item.Kind, item.Path)
+		}
+	}
+	if len(snapshot.History) == 0 {
+		fmt.Fprintln(stdout, "No conversation history.")
+		return
+	}
+	fmt.Fprintln(stdout, "Conversation:")
+	for _, turn := range snapshot.History {
+		role := strings.TrimSpace(turn.Role)
+		if role == "" {
+			role = "unknown"
+		}
+		fmt.Fprintf(stdout, "%s: %s\n", role, clipOneLine(turn.Content, 240))
+	}
+}
+func clipOneLine(value string, limit int) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "..."
+}
 func renderSessionSummaries(stdout io.Writer, sessions []sessionlog.Summary) {
 	if len(sessions) == 0 {
 		fmt.Fprintln(stdout, "No sessions found.")
@@ -968,6 +1021,24 @@ func parseSessionsListFlags(args []string, stderr io.Writer) (string, int, error
 	return resolved, *limit, nil
 }
 
+func parseSessionsShowFlags(args []string, stderr io.Writer) (string, string, error) {
+	flags := flag.NewFlagSet("sessions show", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	if err := flags.Parse(args); err != nil {
+		return "", "", err
+	}
+	remaining := flags.Args()
+	if len(remaining) == 0 || strings.TrimSpace(remaining[0]) == "" {
+		return "", "", fmt.Errorf("sessions show: session id is required")
+	}
+	resolved, err := defaultWorkDir(*workDir)
+	if err != nil {
+		return "", "", err
+	}
+	return resolved, strings.TrimSpace(remaining[0]), nil
+}
 func parseSessionsSearchFlags(args []string, stderr io.Writer) (string, string, int, error) {
 	flags := flag.NewFlagSet("sessions search", flag.ContinueOnError)
 	flags.SetOutput(stderr)
