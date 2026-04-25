@@ -263,3 +263,201 @@ P0 不注册：shell_exec、file_write、file_read（通用）、git 操作。
 1. **P0**：把 console 从单动作 operator 改成标准 agent loop + system prompt 策略。注册 Lore 预设工具（第 7.3 节列表）。实现 `vault_write_low`。
 2. **P1（上线前置条件）**：注册 shell/coding/git 到主 Agent 内部工具面（不经过 MCP），加入第三层策略约束（默认不主动用，明确请求才激活）。补齐多轮上下文管理。**这不是可选增强，是上线必须完成的能力。**
 3. **P2**：更精细的策略控制（per-profile 策略、用户自定义策略规则）。
+
+---
+
+## 11. Session Transcript and Resume (Frozen Addendum)
+
+This section freezes the Lore session transcript / resume behavior. It is separate from process-sink, audit logs, and cross-session memory.
+
+### 11.1 Product Semantics
+
+Lore records local session transcripts for resume and debugging.
+
+Transcripts are not memory:
+
+- A new chat MUST NOT load previous transcripts by default.
+- Previous transcripts are read only when the user explicitly asks for resume or history search.
+- `--resume` continues a specific prior session context; it is not global long-term memory.
+- History search is explicit user action, not automatic prompt injection.
+
+### 11.2 Storage Location
+
+P0 storage is workspace-local:
+
+```text
+<workdir>/state/sessions/
+  index.json
+  lore-YYYYMMDD-HHMMSS-<suffix>.jsonl
+```
+
+Session history is scoped to the current `--workdir`. Sessions from different workdirs do not automatically share history.
+
+A global session index such as `~/.lore/sessions-index.json` is out of P0 scope.
+
+### 11.3 Format
+
+Session transcripts use append-only JSONL. Each line is one JSON event written with a JSON encoder, never hand-built strings.
+
+P0 event types:
+
+- `session_meta`
+- `user_message`
+- `assistant_message`
+- `tool_call`
+- `working_set`
+- `local_command`
+- `error`
+- `session_end`
+
+Example shape:
+
+```json
+{"type":"session_meta","version":1,"session_id":"lore-20260424-153012-a8f3","timestamp":"2026-04-24T15:30:12+08:00","agent_id":"lore","model":"gpt-5.4"}
+{"type":"user_message","timestamp":"2026-04-24T15:30:18+08:00","text":"show persona"}
+{"type":"tool_call","timestamp":"2026-04-24T15:30:19+08:00","name":"system_doc_get","arguments":{"name":"persona"},"status":"ok"}
+{"type":"assistant_message","timestamp":"2026-04-24T15:30:20+08:00","text":"# 人物画像\n..."}
+```
+
+### 11.4 Index
+
+`index.json` is a workspace-local acceleration index for listing recent sessions.
+
+It stores summaries such as:
+
+- session id
+- relative transcript path
+- started_at / updated_at
+- title
+- turn count
+- model
+- agent id
+
+The transcript JSONL remains the source of truth. The index may be rebuilt from transcripts if needed.
+
+P0 title generation is deterministic and cheap:
+
+- use the first `user_message`
+- trim whitespace
+- replace newlines with spaces
+- limit to 40 runes
+- fall back to session id if missing
+
+### 11.5 CLI Behavior
+
+P0 flags:
+
+```text
+--resume       list recent 20 sessions and choose interactively
+--resume-id    resume the specified session id directly
+```
+
+Avoid `--session-id` in P0 to reduce naming overlap with the future `lore sessions` command.
+
+Interactive selection belongs in the CLI entry layer, not in `console.Session`.
+
+Expected commands:
+
+```powershell
+lore tui --workdir <dir>
+lore tui --workdir <dir> --resume
+lore tui --workdir <dir> --resume-id lore-20260424-153012-a8f3
+lore console --workdir <dir> --resume-id lore-20260424-153012-a8f3
+```
+
+Future commands may include:
+
+```powershell
+lore sessions --workdir <dir> --recent 20
+lore sessions --workdir <dir> --search "persona"
+```
+
+### 11.6 Resume Semantics
+
+Resume reconstructs session state, but never replays old tool calls.
+
+P0 restore behavior:
+
+- rebuild `console.Session.History` from `user_message` and `assistant_message`
+- keep the existing prompt cap behavior, currently recent history only
+- restore `WorkingSet` from the latest persisted `working_set` event
+- do not inject unrelated old transcripts into new sessions
+- continue appending to the same JSONL transcript after resume
+
+WorkingSet recovery is best-effort. It restores the latest persisted working_set snapshot, not necessarily the last in-memory state if the process crashed before the snapshot was written.
+
+### 11.7 Safety and Size Limits
+
+The `sessionlog` layer owns truncation and sanitization for tool events. Callers must not be trusted to trim safely.
+
+P0 limits:
+
+- user and assistant message text: keep complete content
+- tool arguments JSON: truncate to a bounded size, default 4096 bytes
+- tool error text: truncate to a bounded size, default 2048 bytes
+- tool results are not recorded unless explicitly modeled later
+
+This avoids transcript blow-up from large write payloads or accidental oversized arguments.
+
+### 11.8 Package Boundaries
+
+Add a dedicated package:
+
+```text
+internal/sessionlog/
+  model.go
+  writer.go
+  reader.go
+  index.go
+  title.go
+```
+
+`console` defines a small recorder interface and does not depend on concrete storage:
+
+```go
+type TranscriptRecorder interface {
+    RecordUser(text string) error
+    RecordAssistant(text string) error
+    RecordToolTrace(trace []operatoragent.ToolCallTrace) error
+    RecordWorkingSet(items []operatoragent.WorkingSetItem) error
+}
+```
+
+`sessionlog` may depend on `operatoragent` for frozen data types such as `ConversationTurn` and `WorkingSetItem`.
+
+`operatoragent` must not depend on `sessionlog`.
+
+### 11.9 Corruption Tolerance
+
+The JSONL reader must tolerate partial or corrupted lines:
+
+- empty lines are skipped
+- invalid JSON lines are skipped
+- a truncated final line must not make resume fail
+- tests must cover corrupted-line recovery
+
+### 11.10 Relationship to Other Logs
+
+Do not mix these concerns:
+
+- `sessionlog`: local full conversation transcript for resume/debug/search
+- `process-sink`: checkpoint/daily operational knowledge output
+- `audit`: governance and safety accountability records
+
+Session transcripts live under state, not in the vault by default.
+
+Writing a session summary into the vault is a future explicit action, not automatic transcript persistence.
+
+### 11.11 P0 Acceptance Criteria
+
+P0 is complete when:
+
+- each new TUI/console session creates a JSONL transcript under `<workdir>/state/sessions/`
+- new sessions do not load previous transcripts by default
+- `--resume-id` restores a specified session
+- `--resume` lists the most recent 20 workspace-local sessions in the CLI entry layer
+- resumed sessions append to the same transcript
+- WorkingSet is restored from the latest snapshot
+- tool trace arguments/errors are truncated in `sessionlog`
+- corrupted JSONL lines do not break resume
+- TUI shows the current session id or transcript path somewhere discoverable
