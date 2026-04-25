@@ -26,14 +26,30 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+type ToolDefinition struct {
+	Name        string
+	Description string
+	Parameters  map[string]any
+	Strict      bool
+}
+
+type ToolCall struct {
+	ID        string
+	CallID    string
+	Name      string
+	Arguments map[string]any
+}
+
 type ChatCompletionRequest struct {
 	Messages    []Message
+	Tools       []ToolDefinition
 	Temperature float64
 	MaxTokens   int
 }
 
 type ChatCompletionResponse struct {
 	Content          string
+	ToolCalls        []ToolCall
 	PromptTokens     int
 	CompletionTokens int
 }
@@ -78,12 +94,14 @@ type chatCompletionResponsePayload struct {
 }
 
 type responsesRequestPayload struct {
-	Model           string                  `json:"model"`
-	Input           []responsesInputMessage `json:"input"`
-	Instructions    string                  `json:"instructions,omitempty"`
-	Temperature     float64                 `json:"temperature,omitempty"`
-	MaxOutputTokens int                     `json:"max_output_tokens,omitempty"`
-	Stream          bool                    `json:"stream"`
+	Model             string                  `json:"model"`
+	Input             []responsesInputMessage `json:"input"`
+	Tools             []responsesTool         `json:"tools,omitempty"`
+	ParallelToolCalls *bool                   `json:"parallel_tool_calls,omitempty"`
+	Instructions      string                  `json:"instructions,omitempty"`
+	Temperature       float64                 `json:"temperature,omitempty"`
+	MaxOutputTokens   int                     `json:"max_output_tokens,omitempty"`
+	Stream            bool                    `json:"stream"`
 }
 
 type responsesInputMessage struct {
@@ -92,12 +110,24 @@ type responsesInputMessage struct {
 	Content string `json:"content"`
 }
 
+type responsesTool struct {
+	Type        string         `json:"type"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters"`
+	Strict      bool           `json:"strict"`
+}
+
 type responsesResponsePayload struct {
 	Output []struct {
-		Type    string `json:"type"`
-		Role    string `json:"role,omitempty"`
-		Text    string `json:"text,omitempty"`
-		Content []struct {
+		Type      string `json:"type"`
+		Role      string `json:"role,omitempty"`
+		Text      string `json:"text,omitempty"`
+		Name      string `json:"name,omitempty"`
+		Arguments string `json:"arguments,omitempty"`
+		CallID    string `json:"call_id,omitempty"`
+		ID        string `json:"id,omitempty"`
+		Content   []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content,omitempty"`
@@ -287,12 +317,17 @@ func (c *Client) responsesOnce(ctx context.Context, req ChatCompletionRequest) (
 	}
 
 	content := extractResponsesText(parsed)
-	if content == "" {
+	toolCalls, err := extractResponsesToolCalls(parsed)
+	if err != nil {
+		return ChatCompletionResponse{}, err
+	}
+	if content == "" && len(toolCalls) == 0 {
 		return ChatCompletionResponse{}, fmt.Errorf("openai client: empty response output")
 	}
 
 	return ChatCompletionResponse{
 		Content:          content,
+		ToolCalls:        toolCalls,
 		PromptTokens:     parsed.Usage.InputTokens,
 		CompletionTokens: parsed.Usage.OutputTokens,
 	}, nil
@@ -501,6 +536,27 @@ func buildResponsesPayload(model string, req ChatCompletionRequest) (responsesRe
 	}
 	payload.Input = input
 	payload.Instructions = strings.Join(instructions, "\n\n")
+	if len(req.Tools) > 0 {
+		parallelToolCalls := false
+		payload.ParallelToolCalls = &parallelToolCalls
+		payload.Tools = make([]responsesTool, 0, len(req.Tools))
+		for _, tool := range req.Tools {
+			parameters := tool.Parameters
+			if len(parameters) == 0 {
+				parameters = map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				}
+			}
+			payload.Tools = append(payload.Tools, responsesTool{
+				Type:        "function",
+				Name:        strings.TrimSpace(tool.Name),
+				Description: strings.TrimSpace(tool.Description),
+				Parameters:  parameters,
+				Strict:      tool.Strict,
+			})
+		}
+	}
 	return payload, nil
 }
 
@@ -516,6 +572,33 @@ func extractResponsesText(parsed responsesResponsePayload) string {
 		}
 	}
 	return strings.TrimSpace(parsed.OutputText)
+}
+
+func extractResponsesToolCalls(parsed responsesResponsePayload) ([]ToolCall, error) {
+	toolCalls := make([]ToolCall, 0)
+	for _, item := range parsed.Output {
+		if item.Type != "function_call" {
+			continue
+		}
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			return nil, fmt.Errorf("openai client: responses function_call missing name")
+		}
+		arguments := map[string]any{}
+		rawArguments := strings.TrimSpace(item.Arguments)
+		if rawArguments != "" {
+			if err := json.Unmarshal([]byte(rawArguments), &arguments); err != nil {
+				return nil, fmt.Errorf("openai client: decode function_call arguments for %s: %w", name, err)
+			}
+		}
+		toolCalls = append(toolCalls, ToolCall{
+			ID:        strings.TrimSpace(item.ID),
+			CallID:    strings.TrimSpace(item.CallID),
+			Name:      name,
+			Arguments: arguments,
+		})
+	}
+	return toolCalls, nil
 }
 
 func parseRetryAfterHeader(raw string) time.Duration {

@@ -136,6 +136,91 @@ func TestChatCompletionUsesResponsesAPIForGPT5(t *testing.T) {
 	}
 }
 
+func TestChatCompletionUsesResponsesAPITools(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("path = %q, want /responses", r.URL.Path)
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		tools, ok := payload["tools"].([]any)
+		if !ok || len(tools) != 1 {
+			t.Fatalf("tools = %#v, want one tool", payload["tools"])
+		}
+		tool, ok := tools[0].(map[string]any)
+		if !ok {
+			t.Fatalf("tool = %#v, want object", tools[0])
+		}
+		if tool["type"] != "function" || tool["name"] != "managed_status" {
+			t.Fatalf("tool = %#v, want managed_status function", tool)
+		}
+		parameters, ok := tool["parameters"].(map[string]any)
+		if !ok {
+			t.Fatalf("parameters = %#v, want object", tool["parameters"])
+		}
+		if parameters["type"] != "object" {
+			t.Fatalf("parameters.type = %#v, want object", parameters["type"])
+		}
+		if payload["parallel_tool_calls"] != false {
+			t.Fatalf("parallel_tool_calls = %#v, want false", payload["parallel_tool_calls"])
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": []map[string]any{{
+				"type":      "function_call",
+				"id":        "fc_123",
+				"call_id":   "call_123",
+				"name":      "managed_status",
+				"arguments": `{}`,
+			}},
+			"usage": map[string]any{
+				"input_tokens":  14,
+				"output_tokens": 2,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL: server.URL,
+		APIKey:  "secret",
+		Model:   "gpt-5.4",
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.ChatCompletion(context.Background(), ChatCompletionRequest{
+		Messages: []Message{
+			{Role: "system", Content: "be concise"},
+			{Role: "user", Content: "hello"},
+		},
+		Tools: []ToolDefinition{{
+			Name:        "managed_status",
+			Description: "show status",
+			Parameters: map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{},
+				"additionalProperties": false,
+			},
+			Strict: true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() error = %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("resp.ToolCalls = %+v, want one function call", resp.ToolCalls)
+	}
+	if resp.ToolCalls[0].Name != "managed_status" {
+		t.Fatalf("resp.ToolCalls[0].Name = %q, want managed_status", resp.ToolCalls[0].Name)
+	}
+}
+
 func TestChatCompletionUsesResponsesAPIPreservesAssistantHistory(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {
@@ -449,6 +534,39 @@ func TestBuildResponsesPayloadRejectsUnknownRole(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported responses message role") {
 		t.Fatalf("error = %q, want unsupported role error", err)
+	}
+}
+
+func TestBuildResponsesPayloadIncludesTools(t *testing.T) {
+	payload, err := buildResponsesPayload("gpt-5.4", ChatCompletionRequest{
+		Messages: []Message{
+			{Role: "system", Content: "be concise"},
+			{Role: "user", Content: "hello"},
+		},
+		Tools: []ToolDefinition{{
+			Name:        "draft_list",
+			Description: "show drafts",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"pending_only": map[string]any{"type": "boolean"},
+				},
+				"additionalProperties": false,
+			},
+			Strict: true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("buildResponsesPayload() error = %v", err)
+	}
+	if len(payload.Tools) != 1 {
+		t.Fatalf("payload.Tools = %+v, want one tool", payload.Tools)
+	}
+	if payload.Tools[0].Name != "draft_list" || payload.Tools[0].Type != "function" {
+		t.Fatalf("payload.Tools[0] = %+v, want draft_list function", payload.Tools[0])
+	}
+	if !payload.Tools[0].Strict {
+		t.Fatalf("payload.Tools[0].Strict = false, want explicit client value true")
 	}
 }
 

@@ -265,6 +265,106 @@ func TestModelAgentRespondRunsToolLoopThenFinal(t *testing.T) {
 	}
 }
 
+func TestModelAgentRespondRunsNativeToolCallThenFinal(t *testing.T) {
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{ToolCalls: []openai.ToolCall{{Name: "managed_status", Arguments: map[string]any{}}}},
+			{Content: `{"type":"final","message":"Managed Status\n--------------\nready"}`},
+		},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}},
+		results: map[string]ToolResult{
+			"managed_status": {Content: "Managed Status\n--------------\nready"},
+		},
+	}
+
+	response, err := agent.Respond("show current status", Context{
+		DefaultAgentID: "codex",
+		Now:            time.Date(2026, 4, 22, 11, 0, 0, 0, time.Local),
+	}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if strings.TrimSpace(response.Final) != "Managed Status\n--------------\nready" {
+		t.Fatalf("response.Final = %q", response.Final)
+	}
+	if len(response.Trace) != 1 || response.Trace[0].Name != "managed_status" || response.Trace[0].Status != "ok" {
+		t.Fatalf("response.Trace = %+v, want one managed_status ok trace", response.Trace)
+	}
+	if len(runtime.calls) != 1 || runtime.calls[0] != "managed_status" {
+		t.Fatalf("tool calls = %+v, want managed_status", runtime.calls)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(client.requests))
+	}
+	if len(client.requests[0].Tools) != 1 || client.requests[0].Tools[0].Name != "managed_status" {
+		t.Fatalf("request tools = %+v, want one managed_status tool schema", client.requests[0].Tools)
+	}
+}
+
+func TestModelAgentRespondIncludesWorkingSetInUserPrompt(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{Content: `{"type":"final","message":"ok"}`},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{tools: []ToolDefinition{{Name: "vault_read", Description: "read note", Arguments: `{"path":"relative/path.md"}`}}}
+
+	_, err := agent.Respond("\u8bfb\u53d6", Context{
+		DefaultAgentID: "codex",
+		WorkingSet: []WorkingSetItem{{
+			Kind:   "vault_path",
+			Path:   "03-\u753b\u50cf/\u4eba\u7269\u753b\u50cf.md",
+			Source: "vault_list",
+		}},
+	}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if len(client.requests) != 1 || len(client.requests[0].Messages) < 2 {
+		t.Fatalf("requests = %+v, want one request with user prompt", client.requests)
+	}
+	userPrompt := client.requests[0].Messages[1].Content
+	for _, want := range []string{
+		"Current working set:",
+		"03-\u753b\u50cf/\u4eba\u7269\u753b\u50cf.md",
+		"resolve it against this working set",
+	} {
+		if !strings.Contains(userPrompt, want) {
+			t.Fatalf("user prompt missing %q:\n%s", want, userPrompt)
+		}
+	}
+}
+func TestModelAgentRespondRejectsMultipleNativeToolCalls(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{
+			ToolCalls: []openai.ToolCall{
+				{Name: "managed_status", Arguments: map[string]any{}},
+				{Name: "draft_list", Arguments: map[string]any{"pending_only": true}},
+			},
+		},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{
+			{Name: "managed_status", Description: "show status"},
+			{Name: "draft_list", Description: "list drafts", Arguments: `{"pending_only":true}`},
+		},
+	}
+
+	_, err := agent.Respond("show status and drafts", Context{DefaultAgentID: "codex"}, runtime)
+	if err == nil {
+		t.Fatal("Respond() error = nil, want multiple tool call error")
+	}
+	if !strings.Contains(err.Error(), "Lore supports one tool call per loop step") {
+		t.Fatalf("error = %q, want one-tool-call guidance", err)
+	}
+	if len(runtime.calls) != 0 {
+		t.Fatalf("runtime.calls = %+v, want no executed tool calls", runtime.calls)
+	}
+}
+
 func TestModelAgentRespondUsesLeadingJSONObjectWhenProviderConcatenatesObjects(t *testing.T) {
 	client := &fakeCompletionClient{
 		responses: []openai.ChatCompletionResponse{
@@ -361,8 +461,8 @@ func TestModelAgentRespondPromptListsGitToolsWhenShellModeIsDisabled(t *testing.
 		"prefer git_* over shell_exec for repository inspection",
 		"local_exec_mode: enabled",
 		"shell_exec_mode: disabled",
-		"- git_status: show git status for the local repo",
-		"- git_diff_summary: summarize git diff for the local repo",
+		"Available tools (use exact names; keep calls minimal):",
+		"managed_status, workspace_read, git_status, git_diff_summary",
 	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
@@ -566,5 +666,34 @@ func TestSelectOperatorModelRejectsNonTextCatalog(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no likely text model") {
 		t.Fatalf("error = %q, want no likely text model", err)
+	}
+}
+
+func TestOpenAIToolDefinitionsInfersParametersFromArgumentExamples(t *testing.T) {
+	definitions := openAIToolDefinitions([]ToolDefinition{{
+		Name:        "context_pack",
+		Description: "assemble context",
+		Arguments:   `{"target_path":"optional/path.md","task":"what you need","limit":6}`,
+	}})
+	if len(definitions) != 1 {
+		t.Fatalf("definitions = %+v, want one tool", definitions)
+	}
+	if definitions[0].Description != "assemble context" {
+		t.Fatalf("definitions[0].Description = %q, want original tool description", definitions[0].Description)
+	}
+	if definitions[0].Strict {
+		t.Fatalf("definitions[0].Strict = true, want operator tools to use provider-compatible strict=false")
+	}
+	properties, ok := definitions[0].Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters = %#v, want object schema", definitions[0].Parameters)
+	}
+	limit, ok := properties["limit"].(map[string]any)
+	if !ok || limit["type"] != "number" {
+		t.Fatalf("limit schema = %#v, want number", properties["limit"])
+	}
+	task, ok := properties["task"].(map[string]any)
+	if !ok || task["type"] != "string" {
+		t.Fatalf("task schema = %#v, want string", properties["task"])
 	}
 }

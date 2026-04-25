@@ -239,10 +239,51 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 	for step := 0; step < maxLoopSteps; step++ {
 		resp, err := a.client.ChatCompletion(context.Background(), openai.ChatCompletionRequest{
 			Messages:    messages,
+			Tools:       openAIToolDefinitions(tools),
 			Temperature: 0,
 		})
 		if err != nil {
 			return Response{}, fmt.Errorf("operator agent: model request failed: %w", err)
+		}
+
+		if len(resp.ToolCalls) > 0 {
+			if len(resp.ToolCalls) > 1 {
+				return Response{}, fmt.Errorf("operator agent: model returned %d tool calls; Lore supports one tool call per loop step", len(resp.ToolCalls))
+			}
+			toolCall := resp.ToolCalls[0]
+			toolName := strings.TrimSpace(toolCall.Name)
+			if toolName == "" {
+				return Response{}, fmt.Errorf("operator agent: tool_call.name is required")
+			}
+			callSignature := toolCallSignature(toolName, toolCall.Arguments)
+			toolHistory = append(toolHistory, callSignature)
+			if hasRepeatedToolLoop(toolHistory, callSignature, repeatedToolCallAbortThreshold) {
+				return Response{}, fmt.Errorf("operator agent: repeated tool loop detected for %s", toolName)
+			}
+			if hasPingPongToolLoop(toolHistory) {
+				return Response{}, fmt.Errorf("operator agent: alternating tool loop detected")
+			}
+
+			toolResult, toolErr := runtime.CallTool(toolName, toolCall.Arguments)
+			toolContent := strings.TrimSpace(toolResult.Content)
+			trace = append(trace, ToolCallTrace{
+				Name:      toolName,
+				Arguments: cloneToolArguments(toolCall.Arguments),
+				Status:    toolTraceStatus(toolName, toolContent, toolErr),
+				Error:     toolTraceError(toolErr),
+			})
+			if isShellConfirmationResult(toolName, toolContent, toolErr) {
+				return Response{Final: toolContent, Trace: append([]ToolCallTrace(nil), trace...)}, nil
+			}
+			if toolErr != nil && toolContent != "" {
+				toolErr = fmt.Errorf("%w\n%s", toolErr, toolContent)
+			}
+			messages = append(messages, openai.Message{Role: "assistant", Content: renderSyntheticToolCall(toolName, toolCall.Arguments)})
+			messages = append(messages, openai.Message{
+				Role:    "user",
+				Content: buildToolResultPrompt(toolName, toolContent, toolErr),
+			})
+			continue
 		}
 
 		envelope, legacyDecision, err := parseLoopResponse(resp.Content, ctx)
@@ -556,17 +597,19 @@ Rules:
 			builder.WriteString("\n")
 		}
 	}
-	builder.WriteString("\n\nAvailable tools:\n")
-	for _, tool := range tools {
-		builder.WriteString("- ")
-		builder.WriteString(tool.Name)
-		builder.WriteString(": ")
-		builder.WriteString(strings.TrimSpace(tool.Description))
-		if args := strings.TrimSpace(tool.Arguments); args != "" {
-			builder.WriteString(" | args: ")
-			builder.WriteString(args)
+	if len(tools) > 0 {
+		names := make([]string, 0, len(tools))
+		for _, tool := range tools {
+			name := strings.TrimSpace(tool.Name)
+			if name == "" {
+				continue
+			}
+			names = append(names, name)
 		}
-		builder.WriteString("\n")
+		if len(names) > 0 {
+			builder.WriteString("\n\nAvailable tools (use exact names; keep calls minimal):\n- ")
+			builder.WriteString(strings.Join(names, ", "))
+		}
 	}
 	builder.WriteString("\nSession context:\n")
 	builder.WriteString("- current_draft_id: ")
@@ -660,7 +703,37 @@ func buildLoopUserPrompt(input string, ctx Context) string {
 		builder.WriteString("\n\nRecent conversation:\n")
 		builder.WriteString(history)
 	}
+	if workingSet := renderWorkingSet(ctx.WorkingSet, 8); workingSet != "" {
+		builder.WriteString("\n\nCurrent working set:\n")
+		builder.WriteString(workingSet)
+		builder.WriteString("\nWhen the user gives a short follow-up, resolve it against this working set before asking for clarification.")
+	}
 	return builder.String()
+}
+
+func renderWorkingSet(items []WorkingSetItem, limit int) string {
+	if len(items) == 0 || limit <= 0 {
+		return ""
+	}
+	start := 0
+	if len(items) > limit {
+		start = len(items) - limit
+	}
+	lines := make([]string, 0, len(items)-start)
+	for _, item := range items[start:] {
+		path := strings.TrimSpace(item.Path)
+		if path == "" {
+			continue
+		}
+		kind := withFallback(strings.TrimSpace(item.Kind), "item")
+		source := strings.TrimSpace(item.Source)
+		if source != "" {
+			lines = append(lines, fmt.Sprintf("- %s: %s (from %s)", kind, path, source))
+		} else {
+			lines = append(lines, fmt.Sprintf("- %s: %s", kind, path))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderHistory(history []ConversationTurn, limit int) string {
@@ -733,6 +806,19 @@ func toolCallSignature(toolName string, arguments map[string]any) string {
 		return toolName
 	}
 	return toolName + ":" + string(data)
+}
+
+func renderSyntheticToolCall(toolName string, arguments map[string]any) string {
+	payload := map[string]any{
+		"type":      "tool_call",
+		"tool":      strings.TrimSpace(toolName),
+		"arguments": cloneToolArguments(arguments),
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return `{"type":"tool_call"}`
+	}
+	return string(data)
 }
 
 func hasRepeatedToolLoop(history []string, next string, threshold int) bool {
