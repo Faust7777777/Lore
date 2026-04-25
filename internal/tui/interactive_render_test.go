@@ -279,3 +279,47 @@ func TestApplySelectionHighlight(t *testing.T) {
 		t.Errorf("selected line should still contain original text, got %q", lines[1])
 	}
 }
+
+func TestRenderSessionDetail(t *testing.T) {
+	snap := WorkbenchSnapshot{
+		Profile:         "local",
+		AgentID:         "codex",
+		SessionID:       "sess-abc-123",
+		TranscriptPath:  "/home/user/.lore/logs/2026-04-25.jsonl",
+		DailyReportPath: "/home/user/.lore/reports/2026-04-25.md",
+		HealthStatus:    "ok",
+		HealthMessage:   "all systems go",
+	}
+	result := renderSessionDetail(snap)
+	if !strings.Contains(result, "sess-abc-123") {
+		t.Errorf("should show full session ID, got: %q", result)
+	}
+	if !strings.Contains(result, "2026-04-25.jsonl") {
+		t.Errorf("should show full transcript path, got: %q", result)
+	}
+	if !strings.Contains(result, "2026-04-25.md") {
+		t.Errorf("should show full report path, got: %q", result)
+	}
+	if !strings.Contains(result, "all systems go") {
+		t.Errorf("should show health message, got: %q", result)
+	}
+}
+
+func TestRenderInteractiveStatusShortensLogPath(t *testing.T) {
+	vm := WorkbenchViewModel{
+		Snapshot: WorkbenchSnapshot{
+			Profile:        "local",
+			Ready:          true,
+			HealthStatus:   "ok",
+			AgentID:        "codex",
+			TranscriptPath: "/very/long/path/to/logs/session-2026-04-25.jsonl",
+		},
+	}
+	result := renderInteractiveStatus(vm)
+	if strings.Contains(result, "/very/long/path") {
+		t.Errorf("status pane should show only filename, not full path, got: %q", result)
+	}
+	if !strings.Contains(result, "session-2026-04-25.jsonl") {
+		t.Errorf("status pane should show the filename, got: %q", result)
+	}
+}

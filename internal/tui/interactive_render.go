@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -164,7 +165,7 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 		builder.WriteString("  Session  " + oneLine(viewModel.Snapshot.SessionID, 20) + "\n")
 	}
 	if viewModel.Snapshot.TranscriptPath != "" {
-		builder.WriteString("  Log      " + oneLine(viewModel.Snapshot.TranscriptPath, 32) + "\n")
+		builder.WriteString("  Log      " + oneLine(filepath.Base(viewModel.Snapshot.TranscriptPath), 32) + "\n")
 	}
 	builder.WriteString("  Day      " + viewModel.Snapshot.Day.Format("2006-01-02") + "\n")
 
@@ -206,6 +207,28 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 func renderApprovalPlaceholder() string {
 	return styleMutedText.Render("No pending actions.") + "\n" +
 		styleMutedText.Render("Drafts go through review before apply.")
+}
+
+func renderSessionDetail(snap WorkbenchSnapshot) string {
+	var b strings.Builder
+	b.WriteString("Session Info\n")
+	b.WriteString("  Profile    " + snap.Profile + "\n")
+	b.WriteString("  Agent      " + snap.AgentID + "\n")
+	if snap.SessionID != "" {
+		b.WriteString("  Session    " + snap.SessionID + "\n")
+	}
+	if snap.TranscriptPath != "" {
+		b.WriteString("  Log        " + snap.TranscriptPath + "\n")
+	}
+	if snap.DailyReportPath != "" {
+		b.WriteString("  Report     " + snap.DailyReportPath + "\n")
+	}
+	b.WriteString("  Day        " + snap.Day.Format("2006-01-02") + "\n")
+	b.WriteString("  Health     " + snap.HealthStatus + "\n")
+	if snap.HealthMessage != "" {
+		b.WriteString("  Message    " + snap.HealthMessage + "\n")
+	}
+	return b.String()
 }
 
 func renderPaneTitle(title string, focused bool, running bool, pendingLine string, spin string) string {

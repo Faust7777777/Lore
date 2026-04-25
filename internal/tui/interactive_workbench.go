@@ -192,7 +192,16 @@ func (m interactiveWorkbenchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		default:
 			switch msg.String() {
-			case "up", "down", "pgup", "pgdown":
+			case "up", "down":
+				if m.input.LineCount() > 1 {
+					var cmd tea.Cmd
+					m.input, cmd = m.input.Update(msg)
+					return m, cmd
+				}
+				var cmd tea.Cmd
+				m.chatViewport, cmd = m.chatViewport.Update(msg)
+				return m, cmd
+			case "pgup", "pgdown":
 				var cmd tea.Cmd
 				m.chatViewport, cmd = m.chatViewport.Update(msg)
 				return m, cmd
@@ -203,6 +212,9 @@ func (m interactiveWorkbenchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				line := strings.TrimSpace(m.input.Value())
 				if line == "" {
 					return m, nil
+				}
+				if handled, model := m.handleLocalCommand(line); handled {
+					return model, nil
 				}
 				m.running = true
 				m.pendingLine = line
@@ -377,6 +389,18 @@ func (m *interactiveWorkbenchModel) applySelectionHighlight(content string) stri
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m *interactiveWorkbenchModel) handleLocalCommand(line string) (bool, tea.Model) {
+	switch strings.ToLower(line) {
+	case "/session":
+		m.input.Reset()
+		m.lastOutput = renderSessionDetail(m.viewModel.Snapshot)
+		m.refreshContent(true)
+		return true, m
+	default:
+		return false, m
+	}
 }
 
 func nextFocus(current interactiveFocus) interactiveFocus {
