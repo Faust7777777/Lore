@@ -370,6 +370,61 @@ func TestRunConsoleResumeIDUsesPreviousHistory(t *testing.T) {
 		t.Fatalf("resumed transcript user_message count = %d, want at least 2: %s", count, string(data))
 	}
 }
+func TestRunConsoleStartsFreshSessionWithoutResume(t *testing.T) {
+	workDir := t.TempDir()
+	configureLLMTestEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := run([]string{"console", "--workdir", workDir, "--once", "show current status"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("first console exit = %d, stderr = %q", code, stderr.String())
+	}
+
+	sessionDir := filepath.Join(workDir, "state", "sessions")
+	firstEntries, err := os.ReadDir(sessionDir)
+	if err != nil {
+		t.Fatalf("ReadDir(sessionDir) error = %v", err)
+	}
+	firstTranscripts := transcriptFiles(firstEntries)
+	if len(firstTranscripts) != 1 {
+		t.Fatalf("first transcript count = %d, want 1: %+v", len(firstTranscripts), firstTranscripts)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"console", "--workdir", workDir, "--once", "show current status"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("second console exit = %d, stderr = %q", code, stderr.String())
+	}
+
+	secondEntries, err := os.ReadDir(sessionDir)
+	if err != nil {
+		t.Fatalf("ReadDir(sessionDir) error = %v", err)
+	}
+	secondTranscripts := transcriptFiles(secondEntries)
+	if len(secondTranscripts) != 2 {
+		t.Fatalf("second transcript count = %d, want 2: %+v", len(secondTranscripts), secondTranscripts)
+	}
+
+	for _, name := range secondTranscripts {
+		data, err := os.ReadFile(filepath.Join(sessionDir, name))
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", name, err)
+		}
+		if count := strings.Count(string(data), "user_message"); count != 1 {
+			t.Fatalf("%s user_message count = %d, want 1: %s", name, count, string(data))
+		}
+	}
+}
+
+func transcriptFiles(entries []os.DirEntry) []string {
+	out := make([]string, 0)
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".jsonl") {
+			out = append(out, entry.Name())
+		}
+	}
+	return out
+}
 func TestRunConsoleOnceWritesLowRiskDiary(t *testing.T) {
 	workDir := t.TempDir()
 	configureLLMTestEnv(t)
@@ -697,7 +752,7 @@ func TestRunDaemonOnceTriggersDraftAfterStablePlanChange(t *testing.T) {
 		t.Fatalf("Bootstrap() error = %v", err)
 	}
 
-	planPath := filepath.Join(runtime.Config.Paths.VaultRoot, "0-排期", "04-执行", "week.md")
+	planPath := filepath.Join(runtime.Config.Paths.VaultRoot, "0-\u6392\u671f", "04-\u6267\u884c", "week.md")
 	writeMainTestPlan(t, runtime, planPath, "# Week\n\n- [ ] initial", time.Now().Add(-2*time.Second))
 
 	var stdout bytes.Buffer
