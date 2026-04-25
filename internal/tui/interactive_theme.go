@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 var (
@@ -93,4 +95,44 @@ func inputPaneStyle(focused bool) lipgloss.Style {
 		return style.BorderForeground(colorBorderFocused)
 	}
 	return style
+}
+
+func wrapText(text string, width int) string {
+	if width <= 0 || text == "" {
+		return text
+	}
+	var builder strings.Builder
+	for i, paragraph := range strings.Split(text, "\n") {
+		if i > 0 {
+			builder.WriteByte('\n')
+		}
+		if strings.TrimSpace(paragraph) == "" {
+			continue
+		}
+		col := 0
+		for _, r := range paragraph {
+			w := runeWidth(r)
+			if col+w > width && col > 0 {
+				builder.WriteByte('\n')
+				col = 0
+			}
+			builder.WriteRune(r)
+			col += w
+		}
+	}
+	return builder.String()
+}
+
+func runeWidth(r rune) int {
+	return runewidth.RuneWidth(r)
+}
+
+func unescapeLiteralNewlines(s string) string {
+	return strings.ReplaceAll(s, `\n`, "\n")
+}
+
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(s string) string {
+	return ansiPattern.ReplaceAllString(s, "")
 }

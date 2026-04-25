@@ -50,7 +50,7 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 	)
 }
 
-func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput string, running bool, pendingLine string) string {
+func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput string, running bool, pendingLine string, wrapWidth int) string {
 	var builder strings.Builder
 
 	turns := viewModel.Conversation.Turns
@@ -58,21 +58,30 @@ func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput stri
 		turns = turns[len(turns)-8:]
 	}
 
+	contentWidth := wrapWidth - 6
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
 	if len(turns) == 0 {
 		builder.WriteString(styleMutedText.Render("Ready. Ask Lore about your vault, drafts, or process sink."))
 		builder.WriteString("\n")
 	} else {
+		prevRole := ""
 		for _, turn := range turns {
 			role := strings.ToLower(strings.TrimSpace(turn.Role))
-			content := strings.TrimSpace(turn.Content)
-			switch role {
-			case "user":
-				builder.WriteString(styleUserLabel.Render("You") + "\n")
-			case "assistant":
-				builder.WriteString(styleAssistantLabel.Render("Lore") + "\n")
-			default:
-				builder.WriteString(styleMutedText.Render(strings.ToUpper(role)) + "\n")
+			content := wrapText(unescapeLiteralNewlines(strings.TrimSpace(turn.Content)), contentWidth)
+			if role != prevRole {
+				switch role {
+				case "user":
+					builder.WriteString(styleUserLabel.Render("You") + "\n")
+				case "assistant":
+					builder.WriteString(styleAssistantLabel.Render("Lore") + "\n")
+				default:
+					builder.WriteString(styleMutedText.Render(strings.ToUpper(role)) + "\n")
+				}
 			}
+			prevRole = role
 			builder.WriteString(indentBlock(content, "  "))
 			builder.WriteString("\n\n")
 		}
@@ -80,7 +89,7 @@ func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput stri
 
 	if running && strings.TrimSpace(pendingLine) != "" {
 		builder.WriteString(styleRunning.Render(glyphFocus+" You") + "\n")
-		builder.WriteString(indentBlock(strings.TrimSpace(pendingLine), "  "))
+		builder.WriteString(indentBlock(wrapText(strings.TrimSpace(pendingLine), contentWidth), "  "))
 		builder.WriteString("\n")
 		builder.WriteString(styleRunning.Render("  "+glyphThinking+" thinking") + "\n\n")
 	}
@@ -117,7 +126,7 @@ func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput stri
 	if strings.TrimSpace(lastOutput) == "" {
 		builder.WriteString(styleMutedText.Render("  No active output.") + "\n")
 	} else {
-		builder.WriteString(indentBlock(strings.TrimSpace(excerpt(lastOutput, 2200)), "  "))
+		builder.WriteString(indentBlock(wrapText(strings.TrimSpace(unescapeLiteralNewlines(lastOutput)), contentWidth), "  "))
 		builder.WriteString("\n")
 	}
 
@@ -212,5 +221,5 @@ func renderInputHeader(focused bool, running bool) string {
 	if focused {
 		label = glyphFocus + " Input"
 	}
-	return focusedTitleStyle.Render(label) + "  " + styleMutedText.Render("Enter send "+glyphSep+" Tab switch "+glyphSep+" Ctrl+C quit")
+	return focusedTitleStyle.Render(label) + "  " + styleMutedText.Render("Enter send "+glyphSep+" Ctrl+J newline "+glyphSep+" Ctrl+C copy "+glyphSep+" Ctrl+Q quit")
 }
