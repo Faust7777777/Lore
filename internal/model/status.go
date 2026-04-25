@@ -33,12 +33,12 @@ type Outcome struct {
 
 var statusPriority = map[Status]int{
 	StatusOK:                  0,
-	StatusAdapterDisconnected: 1,
-	StatusConflict:            2,
+	StatusError:               1,
+	StatusUnsupported:         2,
 	StatusUnauthorized:        3,
-	StatusUnsupported:         4,
-	StatusBlocked:             5,
-	StatusError:               6,
+	StatusConflict:            4,
+	StatusAdapterDisconnected: 5,
+	StatusBlocked:             6,
 }
 
 func NewOutcome(status Status, reasons ...ReasonCode) Outcome {
