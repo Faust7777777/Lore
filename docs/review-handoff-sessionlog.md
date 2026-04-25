@@ -30,7 +30,7 @@ Changed areas:
 
 ## Known Non-P0 Limits
 
-- `sessionlog.Search` currently searches session id/title only. Full transcript search is a future extension.
+- `sessionlog.Search` now searches session id/title and transcript JSONL content. It is a library capability only; transcripts are still not auto-loaded on new sessions.
 - `appendAndIndex` reloads the transcript to refresh the index after each event. This is simple and acceptable for P0, but can be optimized later.
 - `--resume` selection is CLI-level stdin/stdout interaction, not a Bubble Tea picker yet.
 

@@ -160,6 +160,38 @@ func TestToolTraceTruncatesArgumentsAndError(t *testing.T) {
 	}
 }
 
+func TestSearchMatchesTranscriptContent(t *testing.T) {
+	root := t.TempDir()
+	first, err := Start(root, Meta{SessionID: "lore-search-first", StartedAt: time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("Start(first) error = %v", err)
+	}
+	if err := first.RecordUser("open weekly review"); err != nil {
+		t.Fatalf("RecordUser(first) error = %v", err)
+	}
+	if err := first.RecordAssistant("Discussed the unique transcript needle."); err != nil {
+		t.Fatalf("RecordAssistant(first) error = %v", err)
+	}
+
+	second, err := Start(root, Meta{SessionID: "lore-search-second", StartedAt: time.Date(2026, 4, 25, 11, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("Start(second) error = %v", err)
+	}
+	if err := second.RecordUser("other topic"); err != nil {
+		t.Fatalf("RecordUser(second) error = %v", err)
+	}
+	if err := second.RecordAssistant("No matching content here."); err != nil {
+		t.Fatalf("RecordAssistant(second) error = %v", err)
+	}
+
+	matches, err := Search(root, "unique transcript needle", 10)
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(matches) != 1 || matches[0].ID != "lore-search-first" {
+		t.Fatalf("matches = %+v, want lore-search-first only", matches)
+	}
+}
 func TestListRecentLimitAndOrder(t *testing.T) {
 	root := t.TempDir()
 	for i := 0; i < 25; i++ {

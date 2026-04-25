@@ -280,6 +280,7 @@ func ListRecent(rootDir string, limit int) ([]Summary, error) {
 }
 
 func Search(rootDir string, query string, limit int) ([]Summary, error) {
+	rootDir = filepath.Clean(rootDir)
 	query = strings.ToLower(strings.TrimSpace(query))
 	if query == "" {
 		return nil, nil
@@ -290,7 +291,11 @@ func Search(rootDir string, query string, limit int) ([]Summary, error) {
 	}
 	matches := make([]Summary, 0)
 	for _, summary := range recent {
-		if strings.Contains(strings.ToLower(summary.Title), query) || strings.Contains(strings.ToLower(summary.ID), query) {
+		matched := strings.Contains(strings.ToLower(summary.Title), query) || strings.Contains(strings.ToLower(summary.ID), query)
+		if !matched {
+			matched = transcriptContains(rootDir, summary, query)
+		}
+		if matched {
 			matches = append(matches, summary)
 		}
 		if limit > 0 && len(matches) >= limit {
@@ -298,6 +303,18 @@ func Search(rootDir string, query string, limit int) ([]Summary, error) {
 		}
 	}
 	return matches, nil
+}
+
+func transcriptContains(rootDir string, summary Summary, query string) bool {
+	path := filepath.Join(rootDir, summary.ID+".jsonl")
+	if strings.TrimSpace(summary.Path) != "" {
+		path = filepath.Join(rootDir, filepath.FromSlash(summary.Path))
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(string(data)), query)
 }
 
 func NewSessionID(now time.Time) string {
