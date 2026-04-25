@@ -54,6 +54,8 @@ func loadWorkbenchViewModel(version string, runtime console.Runtime, session *co
 		localExec,
 		shellEnabled,
 		lastOutput,
+		session.TranscriptInfo().SessionID,
+		session.TranscriptInfo().Path,
 	), nil
 }
 

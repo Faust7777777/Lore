@@ -160,6 +160,12 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 	}
 	builder.WriteString("  Drafts   " + viewModel.Snapshot.DraftSummary() + "\n")
 	builder.WriteString("  Agent    " + oneLine(viewModel.Snapshot.AgentID, 20) + "\n")
+	if viewModel.Snapshot.SessionID != "" {
+		builder.WriteString("  Session  " + oneLine(viewModel.Snapshot.SessionID, 20) + "\n")
+	}
+	if viewModel.Snapshot.TranscriptPath != "" {
+		builder.WriteString("  Log      " + oneLine(viewModel.Snapshot.TranscriptPath, 32) + "\n")
+	}
 	builder.WriteString("  Day      " + viewModel.Snapshot.Day.Format("2006-01-02") + "\n")
 
 	builder.WriteString("\n" + styleSectionHead.Render("Core Docs") + "\n")

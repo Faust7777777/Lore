@@ -290,6 +290,51 @@ func TestSessionHandleProcessSinkDayUsesAgentDecision(t *testing.T) {
 	}
 }
 
+type recordingRecorder struct {
+	users      []string
+	assistants []string
+	traces     [][]operatoragent.ToolCallTrace
+	worksets   [][]operatoragent.WorkingSetItem
+	errors     []string
+	commands   []string
+}
+
+func (r *recordingRecorder) RecordUser(text string) error {
+	r.users = append(r.users, text)
+	return nil
+}
+
+func (r *recordingRecorder) RecordAssistant(text string) error {
+	r.assistants = append(r.assistants, text)
+	return nil
+}
+
+func (r *recordingRecorder) RecordToolTrace(trace []operatoragent.ToolCallTrace) error {
+	r.traces = append(r.traces, append([]operatoragent.ToolCallTrace(nil), trace...))
+	return nil
+}
+
+func (r *recordingRecorder) RecordWorkingSet(items []operatoragent.WorkingSetItem) error {
+	r.worksets = append(r.worksets, append([]operatoragent.WorkingSetItem(nil), items...))
+	return nil
+}
+
+func (r *recordingRecorder) RecordLocalCommand(command string) error {
+	r.commands = append(r.commands, command)
+	return nil
+}
+
+func (r *recordingRecorder) SessionID() string {
+	return "test-session"
+}
+
+func (r *recordingRecorder) Path() string {
+	return "state/sessions/test-session.jsonl"
+}
+func (r *recordingRecorder) RecordError(message string, recoverable bool) error {
+	r.errors = append(r.errors, message)
+	return nil
+}
 func TestSessionHandleUsesLoopAgentResponseAndStoresHistory(t *testing.T) {
 	agent := &fakeLoopAgent{
 		response: operatoragent.Response{
@@ -330,6 +375,37 @@ func TestSessionHandleUsesLoopAgentResponseAndStoresHistory(t *testing.T) {
 	}
 }
 
+func TestSessionHandleRecordsTranscriptEvents(t *testing.T) {
+	agent := &fakeLoopAgent{
+		response: operatoragent.Response{
+			Final: "Read complete\n",
+			Trace: []operatoragent.ToolCallTrace{{
+				Name:      "vault_read",
+				Arguments: map[string]any{"path": "notes/example.md"},
+				Status:    "ok",
+			}},
+		},
+	}
+	recorder := &recordingRecorder{}
+	session := NewSessionWithAgent("test", agent)
+	session.Recorder = recorder
+
+	if _, err := session.Handle("read example", &fakeRuntime{}); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if len(recorder.users) != 1 || recorder.users[0] != "read example" {
+		t.Fatalf("recorded users = %+v", recorder.users)
+	}
+	if len(recorder.assistants) != 1 || recorder.assistants[0] != "Read complete" {
+		t.Fatalf("recorded assistants = %+v", recorder.assistants)
+	}
+	if len(recorder.traces) != 1 || len(recorder.traces[0]) != 1 || recorder.traces[0][0].Name != "vault_read" {
+		t.Fatalf("recorded traces = %+v", recorder.traces)
+	}
+	if len(recorder.worksets) != 1 || len(recorder.worksets[0]) != 1 || recorder.worksets[0][0].Path != "notes/example.md" {
+		t.Fatalf("recorded worksets = %+v", recorder.worksets)
+	}
+}
 func TestSessionHandleCarriesVaultPathWorkingSetAcrossFollowUp(t *testing.T) {
 	agent := &fakeLoopAgent{
 		responses: []operatoragent.Response{

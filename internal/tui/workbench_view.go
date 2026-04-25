@@ -12,7 +12,7 @@ import (
 )
 
 func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, toolTrace []operatoragent.ToolCallTrace, history []operatoragent.ConversationTurn, localExec bool, shellEnabled bool, lastOutput string) string {
-	viewModel := NewWorkbenchViewModel(version, managed, drafts, processSink, focusedReview, toolTrace, history, localExec, shellEnabled, lastOutput)
+	viewModel := NewWorkbenchViewModel(version, managed, drafts, processSink, focusedReview, toolTrace, history, localExec, shellEnabled, lastOutput, "", "")
 	return RenderWorkbenchViewModel(viewModel)
 }
 

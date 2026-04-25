@@ -35,6 +35,21 @@ type Runtime interface {
 	StateDirPath() string
 }
 
+type TranscriptInfo struct {
+	SessionID string
+	Path      string
+}
+type TranscriptRecorder interface {
+	RecordUser(text string) error
+	RecordAssistant(text string) error
+	RecordToolTrace(trace []operatoragent.ToolCallTrace) error
+	RecordWorkingSet(items []operatoragent.WorkingSetItem) error
+	RecordLocalCommand(command string) error
+	RecordError(message string, recoverable bool) error
+	SessionID() string
+	Path() string
+}
+
 type Session struct {
 	Version              string
 	CurrentDraftID       string
@@ -47,8 +62,8 @@ type Session struct {
 	WorkingSet           []operatoragent.WorkingSetItem
 	Now                  func() time.Time
 	Agent                operatoragent.Agent
+	Recorder             TranscriptRecorder
 }
-
 type pendingShellCommand struct {
 	Command        string
 	TimeoutSeconds int
@@ -82,7 +97,9 @@ func (s *Session) Handle(input string, runtime Runtime) (string, error) {
 			return "", err
 		}
 		s.LastToolTrace = append([]operatoragent.ToolCallTrace(nil), response.Trace...)
+		s.recordToolTrace(s.LastToolTrace)
 		s.rememberToolTargets(response.Trace, response.Final)
+		s.recordWorkingSet()
 		if response.Decision != nil {
 			output, err := s.executeDecision(*response.Decision, runtime)
 			if err != nil {
@@ -249,6 +266,12 @@ func (s *Session) executeDecision(decision operatoragent.Decision, runtime Runti
 	}
 }
 
+func (s *Session) TranscriptInfo() TranscriptInfo {
+	if s == nil || s.Recorder == nil {
+		return TranscriptInfo{}
+	}
+	return TranscriptInfo{SessionID: s.Recorder.SessionID(), Path: s.Recorder.Path()}
+}
 func (s *Session) agentContext() operatoragent.Context {
 	now := time.Now()
 	if s.Now != nil {
@@ -271,6 +294,8 @@ func (s *Session) rememberTurn(input string, output string) {
 		operatoragent.ConversationTurn{Role: "user", Content: strings.TrimSpace(input)},
 		operatoragent.ConversationTurn{Role: "assistant", Content: strings.TrimSpace(output)},
 	)
+	s.recordUser(input)
+	s.recordAssistant(output)
 	if len(s.History) > 20 {
 		s.History = append([]operatoragent.ConversationTurn(nil), s.History[len(s.History)-20:]...)
 	}
@@ -374,6 +399,35 @@ func withDefault(value string, fallback string) string {
 	return fallback
 }
 
+func (s *Session) recordUser(text string) {
+	if s.Recorder != nil && strings.TrimSpace(text) != "" {
+		_ = s.Recorder.RecordUser(text)
+	}
+}
+
+func (s *Session) recordAssistant(text string) {
+	if s.Recorder != nil && strings.TrimSpace(text) != "" {
+		_ = s.Recorder.RecordAssistant(text)
+	}
+}
+
+func (s *Session) recordToolTrace(trace []operatoragent.ToolCallTrace) {
+	if s.Recorder != nil && len(trace) > 0 {
+		_ = s.Recorder.RecordToolTrace(trace)
+	}
+}
+
+func (s *Session) recordWorkingSet() {
+	if s.Recorder != nil && len(s.WorkingSet) > 0 {
+		_ = s.Recorder.RecordWorkingSet(s.WorkingSet)
+	}
+}
+
+func (s *Session) recordError(err error, recoverable bool) {
+	if s.Recorder != nil && err != nil {
+		_ = s.Recorder.RecordError(err.Error(), recoverable)
+	}
+}
 func (s *Session) resolveDraftID(decision operatoragent.Decision, runtime Runtime, preferredState model.DraftState) (string, error) {
 	if decision.DraftID != "" {
 		return decision.DraftID, nil

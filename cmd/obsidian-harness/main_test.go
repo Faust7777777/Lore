@@ -291,6 +291,85 @@ func TestRunConsoleOnceStatus(t *testing.T) {
 	}
 }
 
+func TestRunConsoleOnceWritesSessionTranscript(t *testing.T) {
+	workDir := t.TempDir()
+	configureLLMTestEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"console", "--workdir", workDir, "--once", "show current status"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+
+	sessionDir := filepath.Join(workDir, "state", "sessions")
+	entries, err := os.ReadDir(sessionDir)
+	if err != nil {
+		t.Fatalf("ReadDir(sessionDir) error = %v", err)
+	}
+	foundTranscript := false
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".jsonl") {
+			foundTranscript = true
+			data, err := os.ReadFile(filepath.Join(sessionDir, entry.Name()))
+			if err != nil {
+				t.Fatalf("ReadFile(transcript) error = %v", err)
+			}
+			text := string(data)
+			for _, want := range []string{"session_meta", "user_message", "assistant_message", "session_end"} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("transcript missing %q: %s", want, text)
+				}
+			}
+		}
+	}
+	if !foundTranscript {
+		t.Fatal("expected at least one jsonl transcript")
+	}
+	if _, err := os.Stat(filepath.Join(sessionDir, "index.json")); err != nil {
+		t.Fatalf("index.json missing: %v", err)
+	}
+}
+
+func TestRunConsoleResumeIDUsesPreviousHistory(t *testing.T) {
+	workDir := t.TempDir()
+	configureLLMTestEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := run([]string{"console", "--workdir", workDir, "--once", "show current status"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("initial console exit = %d, stderr = %q", code, stderr.String())
+	}
+
+	sessionDir := filepath.Join(workDir, "state", "sessions")
+	entries, err := os.ReadDir(sessionDir)
+	if err != nil {
+		t.Fatalf("ReadDir(sessionDir) error = %v", err)
+	}
+	var sessionID string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".jsonl") {
+			sessionID = strings.TrimSuffix(entry.Name(), ".jsonl")
+			break
+		}
+	}
+	if sessionID == "" {
+		t.Fatal("missing session transcript")
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"console", "--workdir", workDir, "--resume-id", sessionID, "--once", "show current status"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("resume console exit = %d, stderr = %q", code, stderr.String())
+	}
+	data, err := os.ReadFile(filepath.Join(sessionDir, sessionID+".jsonl"))
+	if err != nil {
+		t.Fatalf("ReadFile(resumed transcript) error = %v", err)
+	}
+	if count := strings.Count(string(data), "user_message"); count < 2 {
+		t.Fatalf("resumed transcript user_message count = %d, want at least 2: %s", count, string(data))
+	}
+}
 func TestRunConsoleOnceWritesLowRiskDiary(t *testing.T) {
 	workDir := t.TempDir()
 	configureLLMTestEnv(t)

@@ -133,6 +133,8 @@ func TestNewWorkbenchViewModelFiltersPendingDraftsAndPreservesConversation(t *te
 		false,
 		false,
 		"world",
+		"session-1",
+		"state/sessions/session-1.jsonl",
 	)
 
 	if got, want := len(viewModel.PendingDrafts), 1; got != want {

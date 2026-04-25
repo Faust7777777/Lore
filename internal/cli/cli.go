@@ -17,6 +17,7 @@ import (
 	"obsidian-harness/internal/mcp"
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/operatoragent"
+	"obsidian-harness/internal/sessionlog"
 	"obsidian-harness/internal/tui"
 )
 
@@ -231,7 +232,7 @@ func runImportCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int 
 }
 
 func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, version string) int {
-	workDir, utterance, localExec, err := parseConsoleFlags(args, stderr)
+	workDir, utterance, localExec, resume, resumeID, err := parseConsoleFlags(args, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -245,6 +246,11 @@ func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 	defer closeRuntime(stderr, runtime, "console")
 	session := console.NewSession(version)
 	session.EnableLocalWorkTools = localExec
+	if err := configureSessionRecorder(session, runtime, resume, resumeID, stdin, stdout, stderr, "console"); err != nil {
+		fmt.Fprintf(stderr, "console: %v\n", err)
+		return 1
+	}
+	defer closeSessionRecorder(session, "console")
 
 	if strings.TrimSpace(utterance) != "" {
 		output, err := session.Handle(utterance, runtime)
@@ -290,7 +296,7 @@ func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 }
 
 func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, version string) int {
-	workDir, utterance, localExec, agentID, day, err := parseTUIFlags(args, stderr)
+	workDir, utterance, localExec, agentID, day, resume, resumeID, err := parseTUIFlags(args, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -306,6 +312,11 @@ func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 	session := console.NewSession(version)
 	session.DefaultAgentID = agentID
 	session.EnableLocalWorkTools = localExec
+	if err := configureSessionRecorder(session, runtime, resume, resumeID, stdin, stdout, stderr, "tui"); err != nil {
+		fmt.Fprintf(stderr, "tui: %v\n", err)
+		return 1
+	}
+	defer closeSessionRecorder(session, "tui")
 	interactive := strings.TrimSpace(utterance) == ""
 	shellEnabled := shellProfileEnabled(localExec)
 
@@ -426,6 +437,80 @@ func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 	}
 }
 
+func sessionLogRoot(runtime *app.Runtime) string {
+	return filepath.Join(runtime.Config.Paths.StateDir, "sessions")
+}
+
+func configureSessionRecorder(session *console.Session, runtime *app.Runtime, resume bool, resumeID string, stdin io.Reader, stdout io.Writer, stderr io.Writer, command string) error {
+	root := sessionLogRoot(runtime)
+	if resumeID == "" && resume {
+		selected, err := chooseRecentSession(root, stdin, stdout)
+		if err != nil {
+			return err
+		}
+		resumeID = selected
+	}
+	if resumeID != "" {
+		recorder, snapshot, err := sessionlog.Resume(root, resumeID)
+		if err != nil {
+			return fmt.Errorf("resume %s: %w", resumeID, err)
+		}
+		session.History = append([]operatoragent.ConversationTurn(nil), snapshot.History...)
+		session.WorkingSet = append([]operatoragent.WorkingSetItem(nil), snapshot.WorkingSet...)
+		session.Recorder = recorder
+		fmt.Fprintf(stderr, "%s resumed session %s\n", command, recorder.SessionID())
+		return nil
+	}
+
+	now := time.Now()
+	recorder, err := sessionlog.Start(root, sessionlog.Meta{
+		AgentID:   "lore",
+		Model:     strings.TrimSpace(os.Getenv("LORE_MODEL")),
+		WorkDir:   runtime.Config.Paths.WorkDir,
+		VaultRoot: runtime.Config.Paths.VaultRoot,
+		StartedAt: now,
+	})
+	if err != nil {
+		return err
+	}
+	session.Recorder = recorder
+	return nil
+}
+
+func closeSessionRecorder(session *console.Session, reason string) {
+	if recorder, ok := session.Recorder.(interface{ Close(string) error }); ok {
+		_ = recorder.Close(reason)
+	}
+}
+
+func chooseRecentSession(root string, stdin io.Reader, stdout io.Writer) (string, error) {
+	recent, err := sessionlog.ListRecent(root, 20)
+	if err != nil {
+		return "", err
+	}
+	if len(recent) == 0 {
+		return "", fmt.Errorf("no previous sessions found")
+	}
+	fmt.Fprintln(stdout, "Resume session")
+	for i, summary := range recent {
+		fmt.Fprintf(stdout, "%d. %s  %s  %s\n", i+1, summary.ID, summary.UpdatedAt.Format("2006-01-02 15:04"), summary.Title)
+	}
+	fmt.Fprint(stdout, "Select session number: ")
+	scanner := bufio.NewScanner(stdin)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("no session selected")
+	}
+	choice := strings.TrimSpace(scanner.Text())
+	for i, summary := range recent {
+		if choice == fmt.Sprintf("%d", i+1) || choice == summary.ID {
+			return summary.ID, nil
+		}
+	}
+	return "", fmt.Errorf("invalid session selection: %s", choice)
+}
 func clearInteractiveTUI(stdout io.Writer) {
 	file, ok := stdout.(*os.File)
 	if !ok {
@@ -779,27 +864,29 @@ func parseAttachCodexJSONLFlags(args []string, stderr io.Writer) (app.ImportCode
 	return parseCodexJSONLFlags("attach-codex-jsonl", args, stderr, true, true)
 }
 
-func parseConsoleFlags(args []string, stderr io.Writer) (string, string, bool, error) {
+func parseConsoleFlags(args []string, stderr io.Writer) (string, string, bool, bool, string, error) {
 	flags := flag.NewFlagSet("console", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
 	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
 	once := flags.String("once", "", "single utterance to execute")
 	localExec := flags.Bool("local-exec", false, "expose local workspace tools in the main agent loop")
+	resume := flags.Bool("resume", false, "choose one of the recent 20 workspace sessions to resume")
+	resumeID := flags.String("resume-id", "", "resume a specific workspace session id")
 	if err := flags.Parse(args); err != nil {
-		return "", "", false, err
+		return "", "", false, false, "", err
 	}
 	if strings.TrimSpace(*workDir) == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
-			return "", "", false, err
+			return "", "", false, false, "", err
 		}
 		*workDir = cwd
 	}
-	return filepath.Clean(*workDir), strings.TrimSpace(*once), *localExec, nil
+	return filepath.Clean(*workDir), strings.TrimSpace(*once), *localExec, *resume, strings.TrimSpace(*resumeID), nil
 }
 
-func parseTUIFlags(args []string, stderr io.Writer) (string, string, bool, string, time.Time, error) {
+func parseTUIFlags(args []string, stderr io.Writer) (string, string, bool, string, time.Time, bool, string, error) {
 	flags := flag.NewFlagSet("tui", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
@@ -808,25 +895,26 @@ func parseTUIFlags(args []string, stderr io.Writer) (string, string, bool, strin
 	localExec := flags.Bool("local-exec", false, "expose local workspace tools in the main agent loop")
 	agentID := flags.String("agent", "codex", "default agent for process-sink panel")
 	dayRaw := flags.String("day", "", "day for process-sink panel (YYYY-MM-DD)")
+	resume := flags.Bool("resume", false, "choose one of the recent 20 workspace sessions to resume")
+	resumeID := flags.String("resume-id", "", "resume a specific workspace session id")
 	if err := flags.Parse(args); err != nil {
-		return "", "", false, "", time.Time{}, err
+		return "", "", false, "", time.Time{}, false, "", err
 	}
 	if strings.TrimSpace(*workDir) == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
-			return "", "", false, "", time.Time{}, err
+			return "", "", false, "", time.Time{}, false, "", err
 		}
 		*workDir = cwd
 	}
 
 	day, err := resolveWorkbenchDay(*dayRaw, time.Now())
 	if err != nil {
-		return "", "", false, "", time.Time{}, fmt.Errorf("tui: invalid --day: %w", err)
+		return "", "", false, "", time.Time{}, false, "", fmt.Errorf("tui: invalid --day: %w", err)
 	}
 
-	return filepath.Clean(*workDir), strings.TrimSpace(*once), *localExec, strings.TrimSpace(*agentID), day, nil
+	return filepath.Clean(*workDir), strings.TrimSpace(*once), *localExec, strings.TrimSpace(*agentID), day, *resume, strings.TrimSpace(*resumeID), nil
 }
-
 func parseDaemonFlags(args []string, stderr io.Writer) (string, time.Duration, time.Duration, bool, *app.ImportCodexJSONLParams, error) {
 	flags := flag.NewFlagSet("daemon run", flag.ContinueOnError)
 	flags.SetOutput(stderr)

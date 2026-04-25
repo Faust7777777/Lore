@@ -45,6 +45,8 @@ type WorkbenchSnapshot struct {
 	AgentID         string
 	Day             time.Time
 	DailyReportPath string
+	SessionID       string
+	TranscriptPath  string
 }
 
 type WorkbenchConversation struct {
@@ -52,7 +54,7 @@ type WorkbenchConversation struct {
 	LastOutput string
 }
 
-func NewWorkbenchViewModel(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, toolTrace []operatoragent.ToolCallTrace, history []operatoragent.ConversationTurn, localExec bool, shellEnabled bool, lastOutput string) WorkbenchViewModel {
+func NewWorkbenchViewModel(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, toolTrace []operatoragent.ToolCallTrace, history []operatoragent.ConversationTurn, localExec bool, shellEnabled bool, lastOutput string, sessionID string, transcriptPath string) WorkbenchViewModel {
 	pendingDrafts := filterDraftsByState(drafts, model.DraftPendingReview)
 	dailyReportPath := "missing"
 	if processSink.Report != nil {
@@ -81,6 +83,8 @@ func NewWorkbenchViewModel(version string, managed model.ManagedStatusView, draf
 			AgentID:         processSink.AgentID,
 			Day:             processSink.Day,
 			DailyReportPath: dailyReportPath,
+			SessionID:       strings.TrimSpace(sessionID),
+			TranscriptPath:  strings.TrimSpace(transcriptPath),
 		},
 		ManagedCore:   append([]model.ManagedCoreStatus(nil), managed.CoreDocs...),
 		PendingDrafts: append([]model.Draft(nil), pendingDrafts...),
