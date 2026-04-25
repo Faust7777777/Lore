@@ -444,6 +444,12 @@ func sessionLogRoot(runtime *app.Runtime) string {
 func configureSessionRecorder(session *console.Session, runtime *app.Runtime, resume bool, resumeID string, stdin io.Reader, stdout io.Writer, stderr io.Writer, command string) error {
 	root := sessionLogRoot(runtime)
 	if resumeID == "" && resume {
+		if !isTerminalReader(stdin) {
+			if err := printRecentSessions(root, stdout); err != nil {
+				return err
+			}
+			return fmt.Errorf("--resume requires an interactive terminal; use --resume-id <id> in scripts")
+		}
 		selected, err := chooseRecentSession(root, stdin, stdout)
 		if err != nil {
 			return err
@@ -484,16 +490,8 @@ func closeSessionRecorder(session *console.Session, reason string) {
 }
 
 func chooseRecentSession(root string, stdin io.Reader, stdout io.Writer) (string, error) {
-	recent, err := sessionlog.ListRecent(root, 20)
-	if err != nil {
+	if err := printRecentSessions(root, stdout); err != nil {
 		return "", err
-	}
-	if len(recent) == 0 {
-		return "", fmt.Errorf("no previous sessions found")
-	}
-	fmt.Fprintln(stdout, "Resume session")
-	for i, summary := range recent {
-		fmt.Fprintf(stdout, "%d. %s  %s  %s\n", i+1, summary.ID, summary.UpdatedAt.Format("2006-01-02 15:04"), summary.Title)
 	}
 	fmt.Fprint(stdout, "Select session number: ")
 	scanner := bufio.NewScanner(stdin)
@@ -504,6 +502,10 @@ func chooseRecentSession(root string, stdin io.Reader, stdout io.Writer) (string
 		return "", fmt.Errorf("no session selected")
 	}
 	choice := strings.TrimSpace(scanner.Text())
+	recent, err := sessionlog.ListRecent(root, 20)
+	if err != nil {
+		return "", err
+	}
 	for i, summary := range recent {
 		if choice == fmt.Sprintf("%d", i+1) || choice == summary.ID {
 			return summary.ID, nil
@@ -511,6 +513,22 @@ func chooseRecentSession(root string, stdin io.Reader, stdout io.Writer) (string
 	}
 	return "", fmt.Errorf("invalid session selection: %s", choice)
 }
+
+func printRecentSessions(root string, stdout io.Writer) error {
+	recent, err := sessionlog.ListRecent(root, 20)
+	if err != nil {
+		return err
+	}
+	if len(recent) == 0 {
+		return fmt.Errorf("no previous sessions found")
+	}
+	fmt.Fprintln(stdout, "Resume session")
+	for i, summary := range recent {
+		fmt.Fprintf(stdout, "%d. %s  %s  %s\n", i+1, summary.ID, summary.UpdatedAt.Format("2006-01-02 15:04"), summary.Title)
+	}
+	return nil
+}
+
 func clearInteractiveTUI(stdout io.Writer) {
 	file, ok := stdout.(*os.File)
 	if !ok {
@@ -526,6 +544,14 @@ func clearInteractiveTUI(stdout io.Writer) {
 	fmt.Fprint(stdout, "\x1b[H\x1b[2J")
 }
 
+func isTerminalReader(reader io.Reader) bool {
+	file, ok := reader.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
 func supportsInteractiveWorkbench(stdin io.Reader, stdout io.Writer) bool {
 	inputFile, ok := stdin.(*os.File)
 	if !ok {
