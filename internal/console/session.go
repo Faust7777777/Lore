@@ -1,6 +1,7 @@
 package console
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ type Runtime interface {
 	VaultRead(relPath string) (model.VaultDocument, error)
 	VaultList(relDir string) ([]model.VaultEntry, error)
 	VaultSearchText(query string, relDir string, limit int) ([]model.SearchHit, error)
+	VaultResolve(query string, relDir string, limit int) (model.VaultResolveResult, error)
 	VaultBacklinks(relPath string, limit int) ([]model.SearchHit, error)
 	DocClassify(relPath string) model.DocClassificationView
 	ContextPack(targetPath string, task string, limit int) (model.ContextPack, error)
@@ -42,6 +44,7 @@ type Session struct {
 	LastInput            string
 	LastToolTrace        []operatoragent.ToolCallTrace
 	History              []operatoragent.ConversationTurn
+	WorkingSet           []operatoragent.WorkingSetItem
 	Now                  func() time.Time
 	Agent                operatoragent.Agent
 }
@@ -79,6 +82,7 @@ func (s *Session) Handle(input string, runtime Runtime) (string, error) {
 			return "", err
 		}
 		s.LastToolTrace = append([]operatoragent.ToolCallTrace(nil), response.Trace...)
+		s.rememberToolTargets(response.Trace, response.Final)
 		if response.Decision != nil {
 			output, err := s.executeDecision(*response.Decision, runtime)
 			if err != nil {
@@ -255,6 +259,7 @@ func (s *Session) agentContext() operatoragent.Context {
 		DefaultAgentID: defaultAgentID(strings.TrimSpace(s.DefaultAgentID)),
 		Now:            now,
 		History:        append([]operatoragent.ConversationTurn(nil), s.History...),
+		WorkingSet:     append([]operatoragent.WorkingSetItem(nil), s.WorkingSet...),
 	}
 }
 
@@ -269,6 +274,104 @@ func (s *Session) rememberTurn(input string, output string) {
 	if len(s.History) > 20 {
 		s.History = append([]operatoragent.ConversationTurn(nil), s.History[len(s.History)-20:]...)
 	}
+}
+
+func (s *Session) rememberToolTargets(trace []operatoragent.ToolCallTrace, final string) {
+	for _, item := range trace {
+		s.rememberToolArgumentPath(item.Name, item.Arguments)
+	}
+	s.rememberPathsFromText(final, "assistant")
+	if len(s.WorkingSet) > 8 {
+		s.WorkingSet = append([]operatoragent.WorkingSetItem(nil), s.WorkingSet[len(s.WorkingSet)-8:]...)
+	}
+}
+
+func (s *Session) rememberToolArgumentPath(toolName string, arguments map[string]any) {
+	for _, key := range []string{"path", "target_path"} {
+		value, _ := arguments[key].(string)
+		if isVaultMarkdownPath(value) {
+			s.rememberWorkingSetItem(operatoragent.WorkingSetItem{Kind: "vault_path", Path: strings.TrimSpace(value), Source: strings.TrimSpace(toolName)})
+		}
+	}
+}
+
+func (s *Session) rememberPathsFromText(value string, source string) {
+	var decoded any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(value)), &decoded); err == nil {
+		s.rememberPathsFromJSON(decoded, source)
+		return
+	}
+	for _, path := range markdownPathsFromText(value) {
+		s.rememberWorkingSetItem(operatoragent.WorkingSetItem{Kind: "vault_path", Path: path, Source: source})
+	}
+}
+
+func (s *Session) rememberPathsFromJSON(value any, source string) {
+	switch typed := value.(type) {
+	case map[string]any:
+		if path, _ := typed["path"].(string); isVaultMarkdownPath(path) {
+			s.rememberWorkingSetItem(operatoragent.WorkingSetItem{Kind: "vault_path", Path: strings.TrimSpace(path), Source: source})
+		}
+		if path, _ := typed["target_path"].(string); isVaultMarkdownPath(path) {
+			s.rememberWorkingSetItem(operatoragent.WorkingSetItem{Kind: "vault_path", Path: strings.TrimSpace(path), Source: source})
+		}
+		for _, child := range typed {
+			s.rememberPathsFromJSON(child, source)
+		}
+	case []any:
+		for _, child := range typed {
+			s.rememberPathsFromJSON(child, source)
+		}
+	}
+}
+
+func (s *Session) rememberWorkingSetItem(item operatoragent.WorkingSetItem) {
+	path := strings.TrimSpace(item.Path)
+	if !isVaultMarkdownPath(path) {
+		return
+	}
+	item.Path = path
+	item.Kind = withDefault(strings.TrimSpace(item.Kind), "vault_path")
+	item.Source = strings.TrimSpace(item.Source)
+
+	filtered := s.WorkingSet[:0]
+	for _, existing := range s.WorkingSet {
+		if !strings.EqualFold(strings.TrimSpace(existing.Path), path) {
+			filtered = append(filtered, existing)
+		}
+	}
+	s.WorkingSet = append(filtered, item)
+}
+
+func markdownPathsFromText(value string) []string {
+	fields := strings.FieldsFunc(value, func(r rune) bool {
+		switch r {
+		case ' ', '\n', '\r', '\t', '`', '"', '\'', '，', '。', '、', '：', ':', '；', ';', '(', ')', '（', '）', '[', ']', '【', '】':
+			return true
+		default:
+			return false
+		}
+	})
+	paths := make([]string, 0)
+	for _, field := range fields {
+		candidate := strings.Trim(strings.TrimSpace(field), ".,!?！？")
+		if isVaultMarkdownPath(candidate) {
+			paths = append(paths, candidate)
+		}
+	}
+	return paths
+}
+
+func isVaultMarkdownPath(value string) bool {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	return value != "" && strings.HasSuffix(strings.ToLower(value), ".md") && !strings.HasPrefix(value, "/") && !strings.Contains(value, ":")
+}
+
+func withDefault(value string, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
 }
 
 func (s *Session) resolveDraftID(decision operatoragent.Decision, runtime Runtime, preferredState model.DraftState) (string, error) {

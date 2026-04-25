@@ -71,6 +71,9 @@ func (f *fakeRuntime) VaultSearchText(query string, relDir string, limit int) ([
 	return []model.SearchHit{{Path: "progress.md", Line: 1, Preview: query}}, nil
 }
 
+func (f *fakeRuntime) VaultResolve(query string, relDir string, limit int) (model.VaultResolveResult, error) {
+	return model.VaultResolveResult{Query: query, Status: "unique", SelectedPath: "progress.md", Matches: []model.VaultResolveMatch{{Path: "progress.md", Score: 1, Reason: "test"}}}, nil
+}
 func (f *fakeRuntime) VaultBacklinks(relPath string, limit int) ([]model.SearchHit, error) {
 	return []model.SearchHit{{Path: "ref.md", Line: 3, Preview: relPath}}, nil
 }
@@ -132,11 +135,12 @@ func (f *fakeAgent) Decide(input string, ctx operatoragent.Context) (operatorage
 }
 
 type fakeLoopAgent struct {
-	response operatoragent.Response
-	err      error
-	inputs   []string
-	contexts []operatoragent.Context
-	tools    [][]operatoragent.ToolDefinition
+	response  operatoragent.Response
+	responses []operatoragent.Response
+	err       error
+	inputs    []string
+	contexts  []operatoragent.Context
+	tools     [][]operatoragent.ToolDefinition
 }
 
 func (f *fakeLoopAgent) Decide(_ string, _ operatoragent.Context) (operatoragent.Decision, error) {
@@ -147,6 +151,11 @@ func (f *fakeLoopAgent) Respond(input string, ctx operatoragent.Context, runtime
 	f.inputs = append(f.inputs, input)
 	f.contexts = append(f.contexts, ctx)
 	f.tools = append(f.tools, runtime.DescribeTools(ctx))
+	if len(f.responses) > 0 {
+		response := f.responses[0]
+		f.responses = f.responses[1:]
+		return response, f.err
+	}
 	return f.response, f.err
 }
 
@@ -318,6 +327,42 @@ func TestSessionHandleUsesLoopAgentResponseAndStoresHistory(t *testing.T) {
 	}
 	if len(session.LastToolTrace) != 1 || session.LastToolTrace[0].Name != "managed_status" {
 		t.Fatalf("last tool trace = %+v, want managed_status", session.LastToolTrace)
+	}
+}
+
+func TestSessionHandleCarriesVaultPathWorkingSetAcrossFollowUp(t *testing.T) {
+	agent := &fakeLoopAgent{
+		responses: []operatoragent.Response{
+			{
+				Final: "03-画像 目录下有人物画像文件：\n- 03-画像/人物画像.md\n",
+				Trace: []operatoragent.ToolCallTrace{{
+					Name:      "vault_list",
+					Arguments: map[string]any{"dir": "03-画像"},
+					Status:    "ok",
+				}},
+			},
+			{Final: "读取完成。"},
+		},
+	}
+	session := NewSessionWithAgent("test", agent)
+	session.Now = func() time.Time { return time.Date(2026, 4, 22, 9, 0, 0, 0, time.Local) }
+	runtime := &fakeRuntime{}
+
+	if _, err := session.Handle("看看人物画像", runtime); err != nil {
+		t.Fatalf("Handle(first) error = %v", err)
+	}
+	if len(session.WorkingSet) != 1 || session.WorkingSet[0].Path != "03-画像/人物画像.md" {
+		t.Fatalf("working set = %+v, want 人物画像 path", session.WorkingSet)
+	}
+
+	if _, err := session.Handle("读取", runtime); err != nil {
+		t.Fatalf("Handle(follow-up) error = %v", err)
+	}
+	if len(agent.contexts) != 2 {
+		t.Fatalf("contexts = %d, want 2", len(agent.contexts))
+	}
+	if len(agent.contexts[1].WorkingSet) != 1 || agent.contexts[1].WorkingSet[0].Path != "03-画像/人物画像.md" {
+		t.Fatalf("follow-up context working set = %+v, want 人物画像 path", agent.contexts[1].WorkingSet)
 	}
 }
 

@@ -31,11 +31,18 @@ type ConversationTurn struct {
 	Content string
 }
 
+type WorkingSetItem struct {
+	Kind   string
+	Path   string
+	Source string
+}
+
 type Context struct {
 	CurrentDraftID string
 	DefaultAgentID string
 	Now            time.Time
 	History        []ConversationTurn
+	WorkingSet     []WorkingSetItem
 }
 
 type Agent interface {
