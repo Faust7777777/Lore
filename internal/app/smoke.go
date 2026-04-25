@@ -2,6 +2,8 @@ package app
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -50,6 +52,10 @@ func (r *Runtime) SmokeP0(now time.Time) (P0SmokeResult, error) {
 		return P0SmokeResult{}, fmt.Errorf("process-sink day: %w", err)
 	}
 
+	resolved, resolveErr := r.Harness.VaultResolve("demo week", "", 5)
+	statePath := filepath.Join(r.Config.Paths.StateDir, "store.db")
+	_, stateErr := os.Stat(statePath)
+
 	auditRecords, err := r.Store.Audit().ListAudit(32)
 	if err != nil {
 		return P0SmokeResult{}, fmt.Errorf("audit list: %w", err)
@@ -88,6 +94,16 @@ func (r *Runtime) SmokeP0(now time.Time) (P0SmokeResult, error) {
 			Name:   "p0b_daily_report_written",
 			OK:     processDay.Report != nil && reportContainsWindowKey(processDay.Report.WindowKeys, p0b.Checkpoint.WindowKey),
 			Detail: p0b.Report.Path,
+		},
+		SmokeCheck{
+			Name:   "vault_resolve_unique",
+			OK:     resolveErr == nil && resolved.Status == "unique" && strings.Contains(filepath.ToSlash(resolved.SelectedPath), "/04-") && strings.HasSuffix(filepath.ToSlash(resolved.SelectedPath), "/demo-week.md"),
+			Detail: fmt.Sprintf("status=%s selected=%s", resolved.Status, resolved.SelectedPath),
+		},
+		SmokeCheck{
+			Name:   "sqlite_state_present",
+			OK:     stateErr == nil,
+			Detail: statePath,
 		},
 		SmokeCheck{
 			Name:   "audit_chain_present",
