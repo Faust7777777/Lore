@@ -425,6 +425,25 @@ func transcriptFiles(entries []os.DirEntry) []string {
 	}
 	return out
 }
+func TestRunSessionsSearchFindsTranscriptContent(t *testing.T) {
+	workDir := t.TempDir()
+	configureLLMTestEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := run([]string{"console", "--workdir", workDir, "--once", "write a diary"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("console exit = %d, stderr = %q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"sessions", "search", "--workdir", workDir, "Diary written"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("sessions search exit = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "lore-") || !strings.Contains(stdout.String(), "write a diary") {
+		t.Fatalf("sessions search output = %q", stdout.String())
+	}
+}
 func TestRunConsoleOnceWritesLowRiskDiary(t *testing.T) {
 	workDir := t.TempDir()
 	configureLLMTestEnv(t)

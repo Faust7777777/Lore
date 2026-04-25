@@ -113,6 +113,8 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 		return RunTUICommand(args[1:], stdin, stdout, stderr, version)
 	case "console":
 		return RunConsoleCommand(args[1:], stdin, stdout, stderr, version)
+	case "sessions":
+		return runSessionsCommand(args[1:], stdout, stderr)
 	case "daemon":
 		return runDaemonCommand(args[1:], stdout, stderr)
 	case "draft":
@@ -174,6 +176,7 @@ Commands:
   demo-p0b [workdir]   Run the checkpoint -> daily report demo chain
   tui                  Lore dashboard + natural language operator loop
   console              Lore natural-language agent loop
+  sessions             List or search explicit local session transcripts
   daemon               Run the vault watcher daemon / one-shot scan
   draft                Review and act on pending drafts
   process-sink         Inspect checkpoint and daily report status
@@ -231,6 +234,65 @@ func runImportCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int 
 	return 0
 }
 
+func runSessionsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "sessions: subcommand is required: list or search")
+		return 1
+	}
+	switch args[0] {
+	case "list":
+		workDir, limit, err := parseSessionsListFlags(args[1:], stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		defer closeRuntime(stderr, runtime, "sessions list")
+		sessions, err := sessionlog.ListRecent(sessionLogRoot(runtime), limit)
+		if err != nil {
+			fmt.Fprintf(stderr, "sessions list: %v\n", err)
+			return 1
+		}
+		renderSessionSummaries(stdout, sessions)
+		return 0
+	case "search":
+		workDir, query, limit, err := parseSessionsSearchFlags(args[1:], stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		defer closeRuntime(stderr, runtime, "sessions search")
+		sessions, err := sessionlog.Search(sessionLogRoot(runtime), query, limit)
+		if err != nil {
+			fmt.Fprintf(stderr, "sessions search: %v\n", err)
+			return 1
+		}
+		renderSessionSummaries(stdout, sessions)
+		return 0
+	default:
+		fmt.Fprintf(stderr, "unknown sessions subcommand: %s\n", args[0])
+		return 1
+	}
+}
+
+func renderSessionSummaries(stdout io.Writer, sessions []sessionlog.Summary) {
+	if len(sessions) == 0 {
+		fmt.Fprintln(stdout, "No sessions found.")
+		return
+	}
+	for _, summary := range sessions {
+		fmt.Fprintf(stdout, "%s\t%s\t%d\t%s\n", summary.ID, summary.UpdatedAt.Format("2006-01-02 15:04"), summary.TurnCount, summary.Title)
+	}
+}
 func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, version string) int {
 	workDir, utterance, localExec, resume, resumeID, err := parseConsoleFlags(args, stderr)
 	if err != nil {
@@ -890,6 +952,52 @@ func parseAttachCodexJSONLFlags(args []string, stderr io.Writer) (app.ImportCode
 	return parseCodexJSONLFlags("attach-codex-jsonl", args, stderr, true, true)
 }
 
+func parseSessionsListFlags(args []string, stderr io.Writer) (string, int, error) {
+	flags := flag.NewFlagSet("sessions list", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	limit := flags.Int("limit", 20, "maximum sessions to show")
+	if err := flags.Parse(args); err != nil {
+		return "", 0, err
+	}
+	resolved, err := defaultWorkDir(*workDir)
+	if err != nil {
+		return "", 0, err
+	}
+	return resolved, *limit, nil
+}
+
+func parseSessionsSearchFlags(args []string, stderr io.Writer) (string, string, int, error) {
+	flags := flag.NewFlagSet("sessions search", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	limit := flags.Int("limit", 20, "maximum sessions to show")
+	if err := flags.Parse(args); err != nil {
+		return "", "", 0, err
+	}
+	query := strings.TrimSpace(strings.Join(flags.Args(), " "))
+	if query == "" {
+		return "", "", 0, fmt.Errorf("sessions search: query is required")
+	}
+	resolved, err := defaultWorkDir(*workDir)
+	if err != nil {
+		return "", "", 0, err
+	}
+	return resolved, query, *limit, nil
+}
+
+func defaultWorkDir(value string) (string, error) {
+	if strings.TrimSpace(value) != "" {
+		return filepath.Clean(value), nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(cwd), nil
+}
 func parseConsoleFlags(args []string, stderr io.Writer) (string, string, bool, bool, string, error) {
 	flags := flag.NewFlagSet("console", flag.ContinueOnError)
 	flags.SetOutput(stderr)
