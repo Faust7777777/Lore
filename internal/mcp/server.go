@@ -159,7 +159,7 @@ func (s *Server) callTool(name string, args map[string]any) (any, error) {
 	case "vault_read":
 		return s.harness.VaultRead(getString(args, "path"))
 	case "vault_list":
-		return s.harness.VaultList(getString(args, "path"))
+		return s.harness.VaultList(getDirArg(args))
 	case "vault_search_text":
 		return s.harness.VaultSearchText(getString(args, "query"), getDirArg(args), getInt(args, "limit", 10))
 	case "vault_resolve":
@@ -169,7 +169,7 @@ func (s *Server) callTool(name string, args map[string]any) (any, error) {
 	case "doc_classify":
 		return s.harness.DocClassify(getString(args, "path")), nil
 	case "context_pack":
-		return s.harness.ContextPack(getString(args, "path"), getString(args, "task"), getInt(args, "limit", 6))
+		return s.harness.ContextPack(getTargetPathArg(args), getString(args, "task"), getInt(args, "limit", 6))
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -198,7 +198,8 @@ func toolDefinitions() []map[string]any {
 		toolDefinition("vault_list", "List files under a vault directory.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path": map[string]any{"type": "string"},
+				"dir":  map[string]any{"type": "string"},
+				"path": map[string]any{"type": "string", "description": "deprecated alias for dir"},
 			},
 		}),
 		toolDefinition("vault_search_text", "Search vault text content.", map[string]any{
@@ -238,9 +239,10 @@ func toolDefinitions() []map[string]any {
 		toolDefinition("context_pack", "Assemble a read-only context pack for a task or document.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path":  map[string]any{"type": "string"},
-				"task":  map[string]any{"type": "string"},
-				"limit": map[string]any{"type": "integer"},
+				"target_path": map[string]any{"type": "string"},
+				"path":        map[string]any{"type": "string", "description": "deprecated alias for target_path"},
+				"task":        map[string]any{"type": "string"},
+				"limit":       map[string]any{"type": "integer"},
 			},
 		}),
 	}
@@ -334,6 +336,13 @@ func getString(args map[string]any, key string) string {
 func getDirArg(args map[string]any) string {
 	if dir := getString(args, "dir"); dir != "" {
 		return dir
+	}
+	return getString(args, "path")
+}
+
+func getTargetPathArg(args map[string]any) string {
+	if targetPath := getString(args, "target_path"); targetPath != "" {
+		return targetPath
 	}
 	return getString(args, "path")
 }

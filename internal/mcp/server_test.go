@@ -11,10 +11,90 @@ import (
 	"time"
 
 	"obsidian-harness/internal/config"
+	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/orchestrator"
 	"obsidian-harness/internal/store/memory"
 	"obsidian-harness/internal/vault"
 )
+
+func TestToolDefinitionsExposeSDKContract(t *testing.T) {
+	tools := toolDefinitionsByName(t)
+	wantTools := []string{
+		"managed_status",
+		"system_doc_get",
+		"vault_read",
+		"vault_list",
+		"vault_search_text",
+		"vault_resolve",
+		"vault_backlinks",
+		"doc_classify",
+		"context_pack",
+	}
+	for _, name := range wantTools {
+		if _, ok := tools[name]; !ok {
+			t.Fatalf("tools/list missing %s", name)
+		}
+	}
+
+	assertToolProperties(t, tools, "vault_list", []string{"dir", "path"})
+	assertDeprecatedAlias(t, tools, "vault_list", "path", "dir")
+	assertToolProperties(t, tools, "context_pack", []string{"target_path", "path", "task", "limit"})
+	assertDeprecatedAlias(t, tools, "context_pack", "path", "target_path")
+	assertToolProperties(t, tools, "vault_search_text", []string{"query", "dir", "path", "limit"})
+	assertDeprecatedAlias(t, tools, "vault_search_text", "path", "dir")
+	assertToolProperties(t, tools, "vault_resolve", []string{"query", "dir", "path", "limit"})
+	assertDeprecatedAlias(t, tools, "vault_resolve", "path", "dir")
+	assertRequired(t, tools, "system_doc_get", []string{"name"})
+	assertRequired(t, tools, "vault_read", []string{"path"})
+	assertRequired(t, tools, "vault_search_text", []string{"query"})
+	assertRequired(t, tools, "vault_resolve", []string{"query"})
+	assertRequired(t, tools, "vault_backlinks", []string{"path"})
+	assertRequired(t, tools, "doc_classify", []string{"path"})
+}
+
+func TestMCPStandardArgsOverrideDeprecatedAliases(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+	h, err := orchestrator.New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+	if _, err := vault.WriteFileAtomic(filepath.Join(cfg.Paths.VaultRoot, "03-notes", "note.md"), []byte("SQL practice"), cfg.Vault.TempSuffix); err != nil {
+		t.Fatalf("WriteFileAtomic(note) error = %v", err)
+	}
+	if _, err := vault.WriteFileAtomic(filepath.Join(cfg.Paths.VaultRoot, "04-other", "other.md"), []byte("Other"), cfg.Vault.TempSuffix); err != nil {
+		t.Fatalf("WriteFileAtomic(other) error = %v", err)
+	}
+
+	server := NewServer(h, "test")
+	listResult, err := server.callTool("vault_list", map[string]any{"dir": "03-notes", "path": "04-other"})
+	if err != nil {
+		t.Fatalf("vault_list callTool() error = %v", err)
+	}
+	entries, ok := listResult.([]model.VaultEntry)
+	if !ok {
+		t.Fatalf("vault_list result type = %T", listResult)
+	}
+	if len(entries) != 1 || entries[0].Path != "03-notes/note.md" {
+		t.Fatalf("vault_list entries = %+v, want dir to override path alias", entries)
+	}
+
+	packResult, err := server.callTool("context_pack", map[string]any{"target_path": "03-notes/note.md", "path": cfg.Vault.ManagedCore.ProgressIndex, "task": "SQL", "limit": 3})
+	if err != nil {
+		t.Fatalf("context_pack callTool() error = %v", err)
+	}
+	pack, ok := packResult.(model.ContextPack)
+	if !ok {
+		t.Fatalf("context_pack result type = %T", packResult)
+	}
+	if pack.TargetPath != "03-notes/note.md" || pack.TargetDoc == nil || pack.TargetDoc.Path != "03-notes/note.md" {
+		t.Fatalf("context_pack = %+v, want target_path to override path alias", pack)
+	}
+}
 
 func TestServerToolsListAndCall(t *testing.T) {
 	workDir := t.TempDir()
@@ -141,4 +221,89 @@ func decodeFrames(t *testing.T, raw []byte) []map[string]any {
 		out = append(out, envelope)
 	}
 	return out
+}
+
+func toolDefinitionsByName(t *testing.T) map[string]map[string]any {
+	t.Helper()
+	out := make(map[string]map[string]any)
+	for _, tool := range toolDefinitions() {
+		name, ok := tool["name"].(string)
+		if !ok || name == "" {
+			t.Fatalf("tool missing string name: %#v", tool)
+		}
+		out[name] = tool
+	}
+	return out
+}
+
+func assertToolProperties(t *testing.T, tools map[string]map[string]any, name string, want []string) {
+	t.Helper()
+	properties := toolProperties(t, tools, name)
+	for _, property := range want {
+		if _, ok := properties[property]; !ok {
+			t.Fatalf("%s missing property %s in %#v", name, property, properties)
+		}
+	}
+}
+
+func assertRequired(t *testing.T, tools map[string]map[string]any, name string, want []string) {
+	t.Helper()
+	tool, ok := tools[name]
+	if !ok {
+		t.Fatalf("missing tool %s", name)
+	}
+	schema, ok := tool["inputSchema"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s inputSchema = %T", name, tool["inputSchema"])
+	}
+	requiredRaw, ok := schema["required"]
+	if !ok {
+		if len(want) == 0 {
+			return
+		}
+		t.Fatalf("%s missing required list", name)
+	}
+	required, ok := requiredRaw.([]string)
+	if !ok {
+		t.Fatalf("%s required = %T", name, requiredRaw)
+	}
+	got := make(map[string]bool, len(required))
+	for _, value := range required {
+		got[value] = true
+	}
+	for _, value := range want {
+		if !got[value] {
+			t.Fatalf("%s required = %#v, want %s", name, required, value)
+		}
+	}
+}
+
+func assertDeprecatedAlias(t *testing.T, tools map[string]map[string]any, name string, alias string, target string) {
+	t.Helper()
+	properties := toolProperties(t, tools, name)
+	property, ok := properties[alias].(map[string]any)
+	if !ok {
+		t.Fatalf("%s alias %s schema = %T", name, alias, properties[alias])
+	}
+	description, _ := property["description"].(string)
+	if !strings.Contains(description, "deprecated") || !strings.Contains(description, target) {
+		t.Fatalf("%s alias %s description = %q, want deprecated alias for %s", name, alias, description, target)
+	}
+}
+
+func toolProperties(t *testing.T, tools map[string]map[string]any, name string) map[string]any {
+	t.Helper()
+	tool, ok := tools[name]
+	if !ok {
+		t.Fatalf("missing tool %s", name)
+	}
+	schema, ok := tool["inputSchema"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s inputSchema = %T", name, tool["inputSchema"])
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s properties = %T", name, schema["properties"])
+	}
+	return properties
 }
