@@ -43,6 +43,45 @@ func TestToolDefinitionsExposeSDKContract(t *testing.T) {
 	}
 }
 
+func TestSDKFacingToolContractSnapshot(t *testing.T) {
+	tools := toolDefinitionsByName(t)
+	snapshot := []struct {
+		name      string
+		props     []string
+		required  []string
+		aliasFor  map[string]string
+		forbidden []string
+	}{
+		{name: "managed_status", props: []string{}},
+		{name: "system_doc_get", props: []string{"name"}, required: []string{"name"}},
+		{name: "vault_read", props: []string{"path"}, required: []string{"path"}},
+		{name: "vault_list", props: []string{"dir", "path"}, aliasFor: map[string]string{"path": "dir"}},
+		{name: "vault_search_text", props: []string{"query", "dir", "path", "limit"}, required: []string{"query"}, aliasFor: map[string]string{"path": "dir"}},
+		{name: "vault_resolve", props: []string{"query", "dir", "path", "limit"}, required: []string{"query"}, aliasFor: map[string]string{"path": "dir"}},
+		{name: "vault_backlinks", props: []string{"path", "limit"}, required: []string{"path"}},
+		{name: "doc_classify", props: []string{"path"}, required: []string{"path"}},
+		{name: "context_pack", props: []string{"target_path", "path", "task", "limit"}, aliasFor: map[string]string{"path": "target_path"}},
+	}
+	if len(tools) != len(snapshot) {
+		t.Fatalf("tool count = %d, want snapshot count %d", len(tools), len(snapshot))
+	}
+	for _, want := range snapshot {
+		if _, ok := tools[want.name]; !ok {
+			t.Fatalf("snapshot tool %s missing from tools/list", want.name)
+		}
+		assertExactToolProperties(t, tools, want.name, want.props)
+		assertRequired(t, tools, want.name, want.required)
+		for alias, target := range want.aliasFor {
+			assertDeprecatedAlias(t, tools, want.name, alias, target)
+		}
+		for _, forbidden := range want.forbidden {
+			if _, ok := toolProperties(t, tools, want.name)[forbidden]; ok {
+				t.Fatalf("%s unexpectedly exposes forbidden property %s", want.name, forbidden)
+			}
+		}
+	}
+}
+
 func TestMCPDeprecatedAliasesRemainSupported(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := config.Default(workDir)
@@ -338,4 +377,13 @@ func toolProperties(t *testing.T, tools map[string]map[string]any, name string) 
 		t.Fatalf("%s properties = %T", name, schema["properties"])
 	}
 	return properties
+}
+
+func assertExactToolProperties(t *testing.T, tools map[string]map[string]any, name string, want []string) {
+	t.Helper()
+	properties := toolProperties(t, tools, name)
+	if len(properties) != len(want) {
+		t.Fatalf("%s property count = %d, want %d: %#v", name, len(properties), len(want), properties)
+	}
+	assertToolProperties(t, tools, name, want)
 }
