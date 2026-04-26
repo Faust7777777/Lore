@@ -19,37 +19,28 @@ import (
 
 func TestToolDefinitionsExposeSDKContract(t *testing.T) {
 	tools := toolDefinitionsByName(t)
-	wantTools := []string{
-		"managed_status",
-		"system_doc_get",
-		"vault_read",
-		"vault_list",
-		"vault_search_text",
-		"vault_resolve",
-		"vault_backlinks",
-		"doc_classify",
-		"context_pack",
+	contracts := toolContracts()
+	if len(tools) != len(contracts) {
+		t.Fatalf("tool count = %d, want %d", len(tools), len(contracts))
 	}
-	for _, name := range wantTools {
-		if _, ok := tools[name]; !ok {
-			t.Fatalf("tools/list missing %s", name)
+	for _, contract := range contracts {
+		tool, ok := tools[contract.Name]
+		if !ok {
+			t.Fatalf("tools/list missing %s", contract.Name)
 		}
+		if tool["description"] != contract.Description {
+			t.Fatalf("%s description = %q, want %q", contract.Name, tool["description"], contract.Description)
+		}
+		wantProperties := make([]string, 0, len(contract.Arguments))
+		for _, argument := range contract.Arguments {
+			wantProperties = append(wantProperties, argument.Name)
+			if argument.DeprecatedAlias != "" {
+				assertDeprecatedAlias(t, tools, contract.Name, argument.Name, argument.DeprecatedAlias)
+			}
+		}
+		assertToolProperties(t, tools, contract.Name, wantProperties)
+		assertRequired(t, tools, contract.Name, contract.Required)
 	}
-
-	assertToolProperties(t, tools, "vault_list", []string{"dir", "path"})
-	assertDeprecatedAlias(t, tools, "vault_list", "path", "dir")
-	assertToolProperties(t, tools, "context_pack", []string{"target_path", "path", "task", "limit"})
-	assertDeprecatedAlias(t, tools, "context_pack", "path", "target_path")
-	assertToolProperties(t, tools, "vault_search_text", []string{"query", "dir", "path", "limit"})
-	assertDeprecatedAlias(t, tools, "vault_search_text", "path", "dir")
-	assertToolProperties(t, tools, "vault_resolve", []string{"query", "dir", "path", "limit"})
-	assertDeprecatedAlias(t, tools, "vault_resolve", "path", "dir")
-	assertRequired(t, tools, "system_doc_get", []string{"name"})
-	assertRequired(t, tools, "vault_read", []string{"path"})
-	assertRequired(t, tools, "vault_search_text", []string{"query"})
-	assertRequired(t, tools, "vault_resolve", []string{"query"})
-	assertRequired(t, tools, "vault_backlinks", []string{"path"})
-	assertRequired(t, tools, "doc_classify", []string{"path"})
 }
 
 func TestMCPDeprecatedAliasesRemainSupported(t *testing.T) {
