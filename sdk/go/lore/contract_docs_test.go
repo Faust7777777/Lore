@@ -62,7 +62,7 @@ func loadREADMEArgumentRows(t *testing.T) map[string]readmeArgumentRow {
 		t.Fatalf("ReadFile(README.md) error = %v", err)
 	}
 	rows := make(map[string]readmeArgumentRow)
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(readmeSection(t, string(data), "## Argument Contract"), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "| `") || strings.Contains(line, "---") {
 			continue
@@ -81,6 +81,19 @@ func loadREADMEArgumentRows(t *testing.T) map[string]readmeArgumentRow {
 		}
 	}
 	return rows
+}
+
+func readmeSection(t *testing.T, content string, heading string) string {
+	t.Helper()
+	start := strings.Index(content, heading)
+	if start < 0 {
+		t.Fatalf("README missing section %q", heading)
+	}
+	section := content[start+len(heading):]
+	if end := strings.Index(section, "\n## "); end >= 0 {
+		section = section[:end]
+	}
+	return section
 }
 
 func standardArgs(tool sdkContractTool) []string {
