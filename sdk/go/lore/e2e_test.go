@@ -24,42 +24,50 @@ func TestSDKEndToEndWithLoreMCP(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		binPath += ".exe"
 	}
-	build := exec.Command(filepath.Join(repoRoot, ".tools", "go", "bin", goExeName()), "build", "-o", binPath, "./cmd/lore")
+
+	buildCtx, buildCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer buildCancel()
+	build := exec.CommandContext(buildCtx, filepath.Join(repoRoot, ".tools", "go", "bin", goExeName()), "build", "-o", binPath, "./cmd/lore")
 	build.Dir = repoRoot
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build lore: %v\n%s", err, string(output))
 	}
-	bootstrap := exec.Command(binPath, "bootstrap", workDir)
+
+	bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer bootstrapCancel()
+	bootstrap := exec.CommandContext(bootstrapCtx, binPath, "bootstrap", workDir)
 	if output, err := bootstrap.CombinedOutput(); err != nil {
 		t.Fatalf("bootstrap lore workdir: %v\n%s", err, string(output))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	client, err := Start(ctx, Options{Command: binPath, WorkDir: workDir})
+	startCtx, startCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	client, err := Start(startCtx, Options{Command: binPath, WorkDir: workDir})
+	startCancel()
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	defer client.Close()
 
-	if err := client.Ping(ctx); err != nil {
+	callCtx, callCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer callCancel()
+	if err := client.Ping(callCtx); err != nil {
 		t.Fatalf("Ping() error = %v", err)
 	}
-	status, err := client.ManagedStatus(ctx)
+	status, err := client.ManagedStatus(callCtx)
 	if err != nil {
 		t.Fatalf("ManagedStatus() error = %v", err)
 	}
 	if !status.Ready {
 		t.Fatalf("ManagedStatus().Ready = false, want true")
 	}
-	resolved, err := client.VaultResolve(ctx, VaultResolveRequest{Query: "progress", Limit: 5})
+	resolved, err := client.VaultResolve(callCtx, VaultResolveRequest{Query: "progress", Limit: 5})
 	if err != nil {
 		t.Fatalf("VaultResolve() error = %v", err)
 	}
 	if resolved.Status == "" {
 		t.Fatalf("VaultResolve().Status is empty: %+v", resolved)
 	}
-	pack, err := client.ContextPack(ctx, ContextPackRequest{Task: "progress", Limit: 3})
+	pack, err := client.ContextPack(callCtx, ContextPackRequest{Task: "progress", Limit: 3})
 	if err != nil {
 		t.Fatalf("ContextPack() error = %v", err)
 	}
