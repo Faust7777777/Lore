@@ -30,6 +30,7 @@ Initial in-repository SDK preview.
   - `DecodeError`
 - Opt-in E2E smoke test gated by `LORE_SDK_E2E=1`.
 - README quickstart, argument contract, error handling notes, and E2E command.
+- SDK-facing MCP tool contract artifact at `docs/contracts/mcp-sdk-tools-v0.json`.
 
 ### Contract
 
@@ -49,6 +50,5 @@ Initial in-repository SDK preview.
 ### Known Limitations
 
 - Public module path is not frozen.
-- No generated contract artifacts for external non-Go SDKs yet.
 - Context cancellation during a call closes the transport to avoid stdio stream corruption; create a new client for later calls.
 - E2E test is opt-in and builds the local `cmd/lore` binary.

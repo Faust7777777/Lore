@@ -116,5 +116,6 @@ Default `go test ./...` and `.\scripts\verify.ps1` skip this E2E test.
 ## Compatibility
 
 - SDK v0 targets the MCP contract documented in `docs/adr-sdk-go-v0.md`.
+- The SDK-facing MCP tool contract artifact is `docs/contracts/mcp-sdk-tools-v0.json`.
 - The MCP server keeps deprecated `path` aliases for compatibility, but SDK methods do not send them.
 - HTTP and WebSocket transports are intentionally out of scope for v0.

@@ -2,15 +2,15 @@
 
 ## Change
 
-The SDK-facing MCP contract snapshot moved from an inline Go literal to a JSON golden file:
+The SDK-facing MCP contract snapshot moved from an inline Go literal to a JSON golden file, now published under `docs/contracts`:
 
-- `internal/mcp/testdata/sdk_tool_contract_snapshot.json`
+- `docs/contracts/mcp-sdk-tools-v0.json`
 - `internal/mcp/server_test.go`
 - `docs/adr-sdk-go-v0.md`
 
 ## Reason
 
-The inline snapshot already protected the external contract, but it was not reusable by future non-Go SDK work. A JSON golden file makes the SDK-facing contract visible as data while keeping the SDK boundary intact.
+The inline snapshot already protected the external contract, but it was not reusable by future non-Go SDK work. A JSON golden file under `docs/contracts` makes the SDK-facing contract visible as data while keeping the SDK boundary intact.
 
 ## What Did Not Change
 

@@ -302,13 +302,13 @@ type sdkToolContractSnapshot struct {
 
 func loadSDKToolContractSnapshot(t *testing.T) []sdkToolContractSnapshot {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", "sdk_tool_contract_snapshot.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "contracts", "mcp-sdk-tools-v0.json"))
 	if err != nil {
-		t.Fatalf("ReadFile(sdk_tool_contract_snapshot.json) error = %v", err)
+		t.Fatalf("ReadFile(mcp-sdk-tools-v0.json) error = %v", err)
 	}
 	var snapshot []sdkToolContractSnapshot
 	if err := json.Unmarshal(data, &snapshot); err != nil {
-		t.Fatalf("json.Unmarshal(sdk_tool_contract_snapshot.json) error = %v", err)
+		t.Fatalf("json.Unmarshal(mcp-sdk-tools-v0.json) error = %v", err)
 	}
 	return snapshot
 }
