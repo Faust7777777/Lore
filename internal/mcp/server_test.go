@@ -52,6 +52,47 @@ func TestToolDefinitionsExposeSDKContract(t *testing.T) {
 	assertRequired(t, tools, "doc_classify", []string{"path"})
 }
 
+func TestMCPDeprecatedAliasesRemainSupported(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+	h, err := orchestrator.New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+	if _, err := vault.WriteFileAtomic(filepath.Join(cfg.Paths.VaultRoot, "03-notes", "note.md"), []byte("SQL practice"), cfg.Vault.TempSuffix); err != nil {
+		t.Fatalf("WriteFileAtomic(note) error = %v", err)
+	}
+
+	server := NewServer(h, "test")
+	listResult, err := server.callTool("vault_list", map[string]any{"path": "03-notes"})
+	if err != nil {
+		t.Fatalf("vault_list alias callTool() error = %v", err)
+	}
+	entries, ok := listResult.([]model.VaultEntry)
+	if !ok {
+		t.Fatalf("vault_list result type = %T", listResult)
+	}
+	if len(entries) != 1 || entries[0].Path != "03-notes/note.md" {
+		t.Fatalf("vault_list alias entries = %+v, want note", entries)
+	}
+
+	packResult, err := server.callTool("context_pack", map[string]any{"path": "03-notes/note.md", "task": "SQL", "limit": 3})
+	if err != nil {
+		t.Fatalf("context_pack alias callTool() error = %v", err)
+	}
+	pack, ok := packResult.(model.ContextPack)
+	if !ok {
+		t.Fatalf("context_pack result type = %T", packResult)
+	}
+	if pack.TargetPath != "03-notes/note.md" || pack.TargetDoc == nil || pack.TargetDoc.Path != "03-notes/note.md" {
+		t.Fatalf("context_pack alias = %+v, want target note", pack)
+	}
+}
+
 func TestMCPStandardArgsOverrideDeprecatedAliases(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := config.Default(workDir)
