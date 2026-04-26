@@ -7,13 +7,25 @@ if (-not (Test-Path $Go)) {
     throw "Go toolchain not found at $Go"
 }
 
+function Invoke-GoTest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments
+    )
+
+    & $Go @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "go $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
+    }
+}
+
 Push-Location $RepoRoot
 try {
-    & $Go test ./... -count=1
+    Invoke-GoTest -Arguments @("test", "./...", "-count=1")
     if (Test-Path (Join-Path $RepoRoot "sdk\go\lore\go.mod")) {
         Push-Location (Join-Path $RepoRoot "sdk\go\lore")
         try {
-            & $Go test ./... -count=1
+            Invoke-GoTest -Arguments @("test", "./...", "-count=1")
         } finally {
             Pop-Location
         }
