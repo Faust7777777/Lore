@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestReadFrame(t *testing.T) {
@@ -129,6 +130,34 @@ func TestCallCanceledWhileReadingClosesTransport(t *testing.T) {
 	err := <-errCh
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Tools() error = %v, want context.Canceled", err)
+	}
+	if _, err := client.Tools(context.Background()); err == nil || !strings.Contains(err.Error(), ErrClosed.Error()) {
+		t.Fatalf("second Tools() error = %v, want closed transport", err)
+	}
+}
+
+func TestCallDeadlineWhileReadingClosesTransport(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	stdout := &blockingReadCloser{ready: make(chan struct{}), unblock: make(chan struct{})}
+	transport := &stdioTransport{
+		stdin:        nopWriteCloser{Writer: io.Discard},
+		stdout:       bufio.NewReader(stdout),
+		stdoutCloser: stdout,
+	}
+	transport.nextID.Store(1)
+	client := &Client{transport: transport}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := client.Tools(ctx)
+		errCh <- err
+	}()
+	<-stdout.ready
+
+	err := <-errCh
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Tools() error = %v, want context.DeadlineExceeded", err)
 	}
 	if _, err := client.Tools(context.Background()); err == nil || !strings.Contains(err.Error(), ErrClosed.Error()) {
 		t.Fatalf("second Tools() error = %v, want closed transport", err)
