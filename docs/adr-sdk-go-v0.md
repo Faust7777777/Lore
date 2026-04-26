@@ -253,4 +253,7 @@ If SDK implementation causes instability:
 ## Open Questions
 
 - Final public module path and semantic version tag strategy.
-- Whether HTTP or WebSocket transport is needed after stdio v0 is validated.
+
+## Deferred Beyond v0
+
+- HTTP or WebSocket transport can be re-evaluated after stdio v0 is validated in real integrations.
