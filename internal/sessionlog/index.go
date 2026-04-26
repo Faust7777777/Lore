@@ -17,7 +17,7 @@ func loadIndex(rootDir string) (Index, error) {
 	rootDir = filepath.Clean(rootDir)
 	data, err := os.ReadFile(indexPath(rootDir))
 	if os.IsNotExist(err) {
-		return Index{Version: 1}, nil
+		return rebuildIndex(rootDir)
 	}
 	if err != nil {
 		return Index{}, err
@@ -28,6 +28,36 @@ func loadIndex(rootDir string) (Index, error) {
 	}
 	if index.Version == 0 {
 		index.Version = 1
+	}
+	return index, nil
+}
+
+func rebuildIndex(rootDir string) (Index, error) {
+	rootDir = filepath.Clean(rootDir)
+	entries, err := os.ReadDir(rootDir)
+	if os.IsNotExist(err) {
+		return Index{Version: 1}, nil
+	}
+	if err != nil {
+		return Index{}, err
+	}
+	index := Index{Version: 1}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		sessionID := strings.TrimSuffix(entry.Name(), ".jsonl")
+		if strings.TrimSpace(sessionID) == "" {
+			continue
+		}
+		snapshot, err := Load(rootDir, sessionID)
+		if err != nil {
+			return Index{}, err
+		}
+		index.Sessions = append(index.Sessions, snapshot.Summary)
+	}
+	if err := saveIndex(rootDir, index); err != nil {
+		return Index{}, err
 	}
 	return index, nil
 }

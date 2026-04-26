@@ -247,6 +247,42 @@ func TestSearchMatchesTranscriptContent(t *testing.T) {
 		t.Fatalf("matches = %+v, want lore-search-first only", matches)
 	}
 }
+
+func TestListRecentRebuildsMissingIndex(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := Start(root, Meta{SessionID: "lore-rebuild-index", StartedAt: time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := recorder.RecordUser("recoverable index"); err != nil {
+		t.Fatalf("RecordUser() error = %v", err)
+	}
+	if err := recorder.RecordAssistant("searchable transcript content"); err != nil {
+		t.Fatalf("RecordAssistant() error = %v", err)
+	}
+	if err := os.Remove(indexPath(root)); err != nil {
+		t.Fatalf("Remove(index.json) error = %v", err)
+	}
+
+	recent, err := ListRecent(root, 20)
+	if err != nil {
+		t.Fatalf("ListRecent() error = %v", err)
+	}
+	if len(recent) != 1 || recent[0].ID != "lore-rebuild-index" || recent[0].TurnCount != 1 {
+		t.Fatalf("recent = %+v, want rebuilt session", recent)
+	}
+	if _, err := os.Stat(indexPath(root)); err != nil {
+		t.Fatalf("rebuilt index missing: %v", err)
+	}
+	matches, err := Search(root, "searchable transcript", 10)
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(matches) != 1 || matches[0].ID != "lore-rebuild-index" {
+		t.Fatalf("matches = %+v, want rebuilt session", matches)
+	}
+}
+
 func TestListRecentLimitAndOrder(t *testing.T) {
 	root := t.TempDir()
 	for i := 0; i < 25; i++ {
