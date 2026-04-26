@@ -90,6 +90,42 @@ func TestResumeAppendsSameTranscript(t *testing.T) {
 	}
 }
 
+func TestResumeRefreshesIndexTurnCount(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := Start(root, Meta{SessionID: "lore-resume-index", StartedAt: time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := recorder.RecordUser("first user"); err != nil {
+		t.Fatalf("RecordUser(first) error = %v", err)
+	}
+	if err := recorder.RecordAssistant("first assistant"); err != nil {
+		t.Fatalf("RecordAssistant(first) error = %v", err)
+	}
+
+	resumed, _, err := Resume(root, "lore-resume-index")
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if err := resumed.RecordUser("second user"); err != nil {
+		t.Fatalf("RecordUser(second) error = %v", err)
+	}
+	if err := resumed.RecordAssistant("second assistant"); err != nil {
+		t.Fatalf("RecordAssistant(second) error = %v", err)
+	}
+
+	recent, err := ListRecent(root, 20)
+	if err != nil {
+		t.Fatalf("ListRecent() error = %v", err)
+	}
+	if len(recent) != 1 {
+		t.Fatalf("recent = %+v, want one session", recent)
+	}
+	if recent[0].ID != "lore-resume-index" || recent[0].TurnCount != 2 {
+		t.Fatalf("recent[0] = %+v, want turn_count 2", recent[0])
+	}
+}
+
 func TestLoadSkipsCorruptedLines(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "lore-corrupt.jsonl")
