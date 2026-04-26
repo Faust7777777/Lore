@@ -58,7 +58,7 @@ The repo exposes both `./cmd/lore` and `./cmd/obsidian-harness`. `lore` is the p
 Use the repo-managed Go toolchain on Windows PowerShell:
 
 ```powershell
-.\.tools\go\bin\go.exe test ./...
+.\scripts\verify.ps1
 .\.tools\go\bin\go.exe run ./cmd/lore smoke p0 --workdir .\tmp\p0-smoke
 .\.tools\go\bin\go.exe run ./cmd/lore tui --workdir .\tmp\p0-smoke --once "show current status"
 ```

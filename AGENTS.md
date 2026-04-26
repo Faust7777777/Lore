@@ -156,8 +156,8 @@ Those files are workspace content, not repository governance files.
 ## Verification
 
 - Run targeted package tests while iterating.
-- Run `go test ./... -count=1` before claiming a cross-cutting change is done,
-  when feasible.
+- Run `.\scripts\verify.ps1` before claiming a cross-cutting change is done,
+  when feasible. This covers the root module and the Go SDK submodule.
 - If a change touches prompt loading, governance, bootstrap, ingest, runtime
   contracts, or TUI shell behavior, full-suite verification is expected.
 
