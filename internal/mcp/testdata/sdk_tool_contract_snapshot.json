@@ -1,0 +1,56 @@
+[
+  {
+    "name": "managed_status",
+    "properties": []
+  },
+  {
+    "name": "system_doc_get",
+    "properties": ["name"],
+    "required": ["name"]
+  },
+  {
+    "name": "vault_read",
+    "properties": ["path"],
+    "required": ["path"]
+  },
+  {
+    "name": "vault_list",
+    "properties": ["dir", "path"],
+    "alias_for": {
+      "path": "dir"
+    }
+  },
+  {
+    "name": "vault_search_text",
+    "properties": ["query", "dir", "path", "limit"],
+    "required": ["query"],
+    "alias_for": {
+      "path": "dir"
+    }
+  },
+  {
+    "name": "vault_resolve",
+    "properties": ["query", "dir", "path", "limit"],
+    "required": ["query"],
+    "alias_for": {
+      "path": "dir"
+    }
+  },
+  {
+    "name": "vault_backlinks",
+    "properties": ["path", "limit"],
+    "required": ["path"]
+  },
+  {
+    "name": "doc_classify",
+    "properties": ["path"],
+    "required": ["path"]
+  },
+  {
+    "name": "context_pack",
+    "properties": ["target_path", "path", "task", "limit"],
+    "alias_for": {
+      "path": "target_path"
+    }
+  }
+]

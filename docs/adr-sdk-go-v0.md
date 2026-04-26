@@ -192,6 +192,13 @@ Each error should be testable with `errors.As` or sentinel classification helper
 - Verify the SDK-facing read-only tool set stays stable.
 - Verify deprecated aliases are advertised only where intentionally supported.
 
+### P1.5: MCP Contract Source of Truth
+
+- Centralize MCP read-only tool contracts in `internal/mcp/tool_contract.go`.
+- Generate `tools/list` schemas from that contract instead of maintaining a separate hand-written map.
+- Keep an SDK-facing JSON snapshot test under `internal/mcp/testdata` so external SDK consumers have a stable contract sample without importing `internal/*`.
+- Keep alias behavior tests separate from schema-generation tests.
+
 ### P1: Stdio Transport
 
 - Implement process startup.
@@ -246,5 +253,5 @@ If SDK implementation causes instability:
 ## Open Questions
 
 - Final public module path and semantic version tag strategy.
-- Whether contract definitions should become a single source of truth shared by MCP server, native tool schema, docs, and SDK tests in P1.5.
+- Whether the SDK-facing MCP contract snapshot should become a published artifact for future non-Go SDKs.
 - Whether HTTP or WebSocket transport is needed after stdio v0 is validated.

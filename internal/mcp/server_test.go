@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -45,38 +46,22 @@ func TestToolDefinitionsExposeSDKContract(t *testing.T) {
 
 func TestSDKFacingToolContractSnapshot(t *testing.T) {
 	tools := toolDefinitionsByName(t)
-	snapshot := []struct {
-		name      string
-		props     []string
-		required  []string
-		aliasFor  map[string]string
-		forbidden []string
-	}{
-		{name: "managed_status", props: []string{}},
-		{name: "system_doc_get", props: []string{"name"}, required: []string{"name"}},
-		{name: "vault_read", props: []string{"path"}, required: []string{"path"}},
-		{name: "vault_list", props: []string{"dir", "path"}, aliasFor: map[string]string{"path": "dir"}},
-		{name: "vault_search_text", props: []string{"query", "dir", "path", "limit"}, required: []string{"query"}, aliasFor: map[string]string{"path": "dir"}},
-		{name: "vault_resolve", props: []string{"query", "dir", "path", "limit"}, required: []string{"query"}, aliasFor: map[string]string{"path": "dir"}},
-		{name: "vault_backlinks", props: []string{"path", "limit"}, required: []string{"path"}},
-		{name: "doc_classify", props: []string{"path"}, required: []string{"path"}},
-		{name: "context_pack", props: []string{"target_path", "path", "task", "limit"}, aliasFor: map[string]string{"path": "target_path"}},
-	}
+	snapshot := loadSDKToolContractSnapshot(t)
 	if len(tools) != len(snapshot) {
 		t.Fatalf("tool count = %d, want snapshot count %d", len(tools), len(snapshot))
 	}
 	for _, want := range snapshot {
-		if _, ok := tools[want.name]; !ok {
-			t.Fatalf("snapshot tool %s missing from tools/list", want.name)
+		if _, ok := tools[want.Name]; !ok {
+			t.Fatalf("snapshot tool %s missing from tools/list", want.Name)
 		}
-		assertExactToolProperties(t, tools, want.name, want.props)
-		assertRequired(t, tools, want.name, want.required)
-		for alias, target := range want.aliasFor {
-			assertDeprecatedAlias(t, tools, want.name, alias, target)
+		assertExactToolProperties(t, tools, want.Name, want.Properties)
+		assertRequired(t, tools, want.Name, want.Required)
+		for alias, target := range want.AliasFor {
+			assertDeprecatedAlias(t, tools, want.Name, alias, target)
 		}
-		for _, forbidden := range want.forbidden {
-			if _, ok := toolProperties(t, tools, want.name)[forbidden]; ok {
-				t.Fatalf("%s unexpectedly exposes forbidden property %s", want.name, forbidden)
+		for _, forbidden := range want.Forbidden {
+			if _, ok := toolProperties(t, tools, want.Name)[forbidden]; ok {
+				t.Fatalf("%s unexpectedly exposes forbidden property %s", want.Name, forbidden)
 			}
 		}
 	}
@@ -305,6 +290,27 @@ func toolDefinitionsByName(t *testing.T) map[string]map[string]any {
 		out[name] = tool
 	}
 	return out
+}
+
+type sdkToolContractSnapshot struct {
+	Name       string            `json:"name"`
+	Properties []string          `json:"properties"`
+	Required   []string          `json:"required,omitempty"`
+	AliasFor   map[string]string `json:"alias_for,omitempty"`
+	Forbidden  []string          `json:"forbidden,omitempty"`
+}
+
+func loadSDKToolContractSnapshot(t *testing.T) []sdkToolContractSnapshot {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "sdk_tool_contract_snapshot.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_tool_contract_snapshot.json) error = %v", err)
+	}
+	var snapshot []sdkToolContractSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatalf("json.Unmarshal(sdk_tool_contract_snapshot.json) error = %v", err)
+	}
+	return snapshot
 }
 
 func assertToolProperties(t *testing.T, tools map[string]map[string]any, name string, want []string) {
