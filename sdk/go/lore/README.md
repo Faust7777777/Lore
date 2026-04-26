@@ -6,7 +6,7 @@ The SDK talks to Lore by starting `lore mcp <workdir>` over stdio JSON-RPC. It d
 
 ## Status
 
-- Version: v0, in-repository module.
+- Version: v0, in-repository module. See `CHANGELOG.md` for the current unreleased preview notes.
 - Transport: stdio only.
 - Surface: read-only MCP tools only.
 - Writable tools, shell execution, TUI behavior, and runtime policy are not part of this SDK.
