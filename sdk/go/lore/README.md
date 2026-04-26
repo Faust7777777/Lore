@@ -23,6 +23,8 @@ Pop-Location
 
 ## Quickstart
 
+The target workdir must already be bootstrapped, for example with `lore bootstrap ./tmp/chat-demo`.
+
 ```go
 ctx := context.Background()
 client, err := lore.Start(ctx, lore.Options{
@@ -67,7 +69,7 @@ A lower-level `CallTool(ctx, name, arguments, out)` is available for read-only f
 
 ## Argument Contract
 
-The SDK only sends standard argument names.
+Typed methods only send standard argument names. The lower-level `CallTool` accepts caller-provided arguments and is responsible for compatibility.
 
 | Tool | SDK args | Deprecated MCP aliases still accepted by server |
 | --- | --- | --- |
