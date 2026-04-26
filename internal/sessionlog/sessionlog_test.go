@@ -283,6 +283,31 @@ func TestListRecentRebuildsMissingIndex(t *testing.T) {
 	}
 }
 
+func TestListRecentRejectsCorruptIndex(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := Start(root, Meta{SessionID: "lore-corrupt-index", StartedAt: time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := recorder.RecordUser("do not hide corrupt index"); err != nil {
+		t.Fatalf("RecordUser() error = %v", err)
+	}
+	if err := os.WriteFile(indexPath(root), []byte(`{"version":`), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.json) error = %v", err)
+	}
+
+	if _, err := ListRecent(root, 20); err == nil {
+		t.Fatal("ListRecent() error = nil, want corrupt index error")
+	}
+	data, err := os.ReadFile(indexPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(index.json) error = %v", err)
+	}
+	if string(data) != `{"version":` {
+		t.Fatalf("index was overwritten: %q", string(data))
+	}
+}
+
 func TestListRecentLimitAndOrder(t *testing.T) {
 	root := t.TempDir()
 	for i := 0; i < 25; i++ {
