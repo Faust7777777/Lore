@@ -15,12 +15,13 @@ import (
 )
 
 type stdioTransport struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Reader
-	mu     sync.Mutex
-	nextID atomic.Int64
-	closed bool
+	cmd          *exec.Cmd
+	stdin        io.WriteCloser
+	stdout       *bufio.Reader
+	stdoutCloser io.Closer
+	mu           sync.Mutex
+	nextID       atomic.Int64
+	closed       bool
 }
 
 type requestEnvelope struct {
@@ -46,7 +47,10 @@ func startStdioTransport(ctx context.Context, opts Options) (*stdioTransport, er
 	if strings.TrimSpace(opts.WorkDir) != "" {
 		args = append(args, opts.WorkDir)
 	}
-	cmd := exec.CommandContext(ctx, command, args...)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(command, args...)
 	cmd.Env = os.Environ()
 	if opts.ClientKey != "" {
 		cmd.Env = append(cmd.Env, "LORE_CLIENT_KEY="+opts.ClientKey)
@@ -64,9 +68,10 @@ func startStdioTransport(ctx context.Context, opts Options) (*stdioTransport, er
 		return nil, &TransportError{Op: "start", Err: err}
 	}
 	transport := &stdioTransport{
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: bufio.NewReader(stdout),
+		cmd:          cmd,
+		stdin:        stdin,
+		stdout:       bufio.NewReader(stdout),
+		stdoutCloser: stdout,
 	}
 	transport.nextID.Store(1)
 	return transport, nil
@@ -80,6 +85,9 @@ func (t *stdioTransport) Call(ctx context.Context, method string, params any) (j
 	defer t.mu.Unlock()
 	if t.closed {
 		return nil, &TransportError{Op: "call", Err: ErrClosed}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	id := t.nextID.Add(1)
 	request := requestEnvelope{
@@ -97,6 +105,9 @@ func (t *stdioTransport) Call(ctx context.Context, method string, params any) (j
 	}
 	response, err := t.readResponse(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			t.closed = true
+		}
 		return nil, err
 	}
 	if response.ID != 0 && response.ID != id {
@@ -119,10 +130,14 @@ func (t *stdioTransport) Close() error {
 	}
 	t.closed = true
 	stdin := t.stdin
+	stdoutCloser := t.stdoutCloser
 	cmd := t.cmd
 	t.mu.Unlock()
 	if stdin != nil {
 		_ = stdin.Close()
+	}
+	if stdoutCloser != nil {
+		_ = stdoutCloser.Close()
 	}
 	if cmd == nil || cmd.Process == nil {
 		return nil
@@ -145,21 +160,44 @@ func (t *stdioTransport) writeFrame(payload []byte) error {
 }
 
 func (t *stdioTransport) readResponse(ctx context.Context) (responseEnvelope, error) {
-	type result struct {
-		response responseEnvelope
-		err      error
+	if err := ctx.Err(); err != nil {
+		return responseEnvelope{}, err
 	}
-	ch := make(chan result, 1)
+	done := make(chan struct{})
 	go func() {
-		response, err := readResponseFrame(t.stdout)
-		ch <- result{response: response, err: err}
+		select {
+		case <-ctx.Done():
+			_ = t.closeAfterCanceledCall()
+		case <-done:
+		}
 	}()
-	select {
-	case <-ctx.Done():
-		return responseEnvelope{}, ctx.Err()
-	case result := <-ch:
-		return result.response, result.err
+	response, err := readResponseFrame(t.stdout)
+	close(done)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return responseEnvelope{}, ctxErr
 	}
+	if err != nil {
+		return responseEnvelope{}, err
+	}
+	return response, nil
+}
+
+func (t *stdioTransport) closeAfterCanceledCall() error {
+	if t == nil {
+		return nil
+	}
+	if t.stdin != nil {
+		_ = t.stdin.Close()
+	}
+	if t.stdoutCloser != nil {
+		_ = t.stdoutCloser.Close()
+	}
+	if t.cmd == nil || t.cmd.Process == nil {
+		return nil
+	}
+	_ = t.cmd.Process.Kill()
+	_, _ = t.cmd.Process.Wait()
+	return nil
 }
 
 func readResponseFrame(reader *bufio.Reader) (responseEnvelope, error) {
