@@ -195,7 +195,7 @@ func Load(rootDir string, sessionID string) (Snapshot, error) {
 	var pendingUser string
 	scanner := bufio.NewScanner(file)
 	buffer := make([]byte, 0, 64*1024)
-	scanner.Buffer(buffer, 1024*1024)
+	scanner.Buffer(buffer, MaxJSONLLineBytes)
 	lineNumber := 0
 	for scanner.Scan() {
 		lineNumber++

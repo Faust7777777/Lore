@@ -21,6 +21,7 @@ const (
 const (
 	DefaultMaxToolArgumentsBytes = 4096
 	DefaultMaxToolErrorBytes     = 2048
+	MaxJSONLLineBytes            = 16 * 1024 * 1024
 )
 
 type Meta struct {

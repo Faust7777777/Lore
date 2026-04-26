@@ -115,6 +115,25 @@ func TestLoadSkipsCorruptedLines(t *testing.T) {
 	}
 }
 
+func TestLoadSupportsLargeJSONLLines(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := Start(root, Meta{SessionID: "lore-large-line", StartedAt: time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	largeReply := strings.Repeat("x", 2*1024*1024)
+	if err := recorder.RecordAssistant(largeReply); err != nil {
+		t.Fatalf("RecordAssistant(large) error = %v", err)
+	}
+	snapshot, err := Load(root, "lore-large-line")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(snapshot.History) != 1 || snapshot.History[0].Content != largeReply {
+		t.Fatalf("history length/content mismatch: len=%d", len(snapshot.History))
+	}
+}
+
 func TestToolTraceTruncatesArgumentsAndError(t *testing.T) {
 	root := t.TempDir()
 	recorder, err := StartWithLimits(root, Meta{SessionID: "lore-truncate", StartedAt: time.Now()}, Limits{MaxToolArgumentsBytes: 20, MaxToolErrorBytes: 8})
