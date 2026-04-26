@@ -156,3 +156,22 @@ func (r *blockingReadCloser) Close() error {
 	}
 	return nil
 }
+
+func TestCancelAfterSuccessfulCallDoesNotCloseTransport(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	responses := frame(`{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}`) + frame(`{"jsonrpc":"2.0","id":3,"result":{"tools":[]}}`)
+	transport := &stdioTransport{
+		stdin:  nopWriteCloser{Writer: io.Discard},
+		stdout: bufio.NewReader(strings.NewReader(responses)),
+	}
+	transport.nextID.Store(1)
+	client := &Client{transport: transport}
+
+	if _, err := client.Tools(ctx); err != nil {
+		t.Fatalf("first Tools() error = %v", err)
+	}
+	cancel()
+	if _, err := client.Tools(context.Background()); err != nil {
+		t.Fatalf("second Tools() error = %v, want transport still usable", err)
+	}
+}

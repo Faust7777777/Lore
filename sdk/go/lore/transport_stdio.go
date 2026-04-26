@@ -163,23 +163,29 @@ func (t *stdioTransport) readResponse(ctx context.Context) (responseEnvelope, er
 	if err := ctx.Err(); err != nil {
 		return responseEnvelope{}, err
 	}
-	done := make(chan struct{})
+	type result struct {
+		response responseEnvelope
+		err      error
+	}
+	ch := make(chan result, 1)
 	go func() {
-		select {
-		case <-ctx.Done():
-			_ = t.closeAfterCanceledCall()
-		case <-done:
-		}
+		response, err := readResponseFrame(t.stdout)
+		ch <- result{response: response, err: err}
 	}()
-	response, err := readResponseFrame(t.stdout)
-	close(done)
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return responseEnvelope{}, ctxErr
+	select {
+	case read := <-ch:
+		if read.err != nil {
+			return responseEnvelope{}, read.err
+		}
+		return read.response, nil
+	case <-ctx.Done():
+		_ = t.closeAfterCanceledCall()
+		read := <-ch
+		if read.err == nil && ctx.Err() == nil {
+			return read.response, nil
+		}
+		return responseEnvelope{}, ctx.Err()
 	}
-	if err != nil {
-		return responseEnvelope{}, err
-	}
-	return response, nil
 }
 
 func (t *stdioTransport) closeAfterCanceledCall() error {
