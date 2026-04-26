@@ -338,13 +338,16 @@ func assertRequired(t *testing.T, tools map[string]map[string]any, name string, 
 	if !ok {
 		t.Fatalf("%s required = %T", name, requiredRaw)
 	}
+	if len(required) != len(want) {
+		t.Fatalf("%s required = %#v, want exactly %#v", name, required, want)
+	}
 	got := make(map[string]bool, len(required))
 	for _, value := range required {
 		got[value] = true
 	}
 	for _, value := range want {
 		if !got[value] {
-			t.Fatalf("%s required = %#v, want %s", name, required, value)
+			t.Fatalf("%s required = %#v, want exactly %#v", name, required, want)
 		}
 	}
 }
