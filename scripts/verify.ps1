@@ -1,3 +1,7 @@
+param(
+    [switch]$E2E
+)
+
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -26,6 +30,19 @@ try {
         Push-Location (Join-Path $RepoRoot "sdk\go\lore")
         try {
             Invoke-GoTest -Arguments @("test", "./...", "-count=1")
+            if ($E2E) {
+                $previousE2E = $env:LORE_SDK_E2E
+                try {
+                    $env:LORE_SDK_E2E = "1"
+                    Invoke-GoTest -Arguments @("test", "./...", "-run", "TestSDKEndToEndWithLoreMCP", "-count=1", "-v")
+                } finally {
+                    if ($null -eq $previousE2E) {
+                        Remove-Item Env:LORE_SDK_E2E -ErrorAction SilentlyContinue
+                    } else {
+                        $env:LORE_SDK_E2E = $previousE2E
+                    }
+                }
+            }
         } finally {
             Pop-Location
         }

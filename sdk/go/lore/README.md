@@ -105,16 +105,13 @@ if errors.As(err, &toolErr) {
 
 ## E2E Smoke
 
-The SDK includes an opt-in end-to-end test that builds the real `lore` CLI and starts `lore mcp <workdir>`:
+The SDK includes an opt-in end-to-end test that builds the real `lore` CLI and starts `lore mcp <workdir>`. From the repository root:
 
 ```powershell
-Push-Location sdk\go\lore
-$env:LORE_SDK_E2E='1'
-..\..\..\.tools\go\bin\go.exe test ./... -run TestSDKEndToEndWithLoreMCP -count=1 -v
-Pop-Location
+.\scripts\verify.ps1 -E2E
 ```
 
-Default `go test ./...` skips this E2E test.
+Default `go test ./...` and `.\scripts\verify.ps1` skip this E2E test.
 
 ## Compatibility
 

@@ -63,6 +63,12 @@ Use the repo-managed Go toolchain on Windows PowerShell:
 .\.tools\go\bin\go.exe run ./cmd/lore tui --workdir .\tmp\p0-smoke --once "show current status"
 ```
 
+Run the opt-in SDK end-to-end smoke with:
+
+```powershell
+.\scripts\verify.ps1 -E2E
+```
+
 `smoke p0` verifies the current P0 chain: managed core bootstrap, managed document draft/apply, checkpoint materialization, daily report write, and audit records.
 It requires a configured model provider via `LORE_LLM_BASE_URL`, `LORE_LLM_API_KEY`, and `LORE_LLM_MODEL` because checkpoint and daily report summarization are model-backed.
 
