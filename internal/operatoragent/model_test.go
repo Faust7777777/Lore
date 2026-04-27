@@ -302,6 +302,16 @@ func TestModelAgentRespondRunsNativeToolCallThenFinal(t *testing.T) {
 	if len(client.requests[0].Tools) != 1 || client.requests[0].Tools[0].Name != "managed_status" {
 		t.Fatalf("request tools = %+v, want one managed_status tool schema", client.requests[0].Tools)
 	}
+	secondMessages := client.requests[1].Messages
+	if len(secondMessages) != 4 {
+		t.Fatalf("second request messages = %+v, want 4 messages", secondMessages)
+	}
+	if secondMessages[2].Role != "assistant" || !strings.Contains(secondMessages[2].Content, `"type":"tool_call"`) || !strings.Contains(secondMessages[2].Content, `"tool":"managed_status"`) {
+		t.Fatalf("synthetic tool call message = %+v", secondMessages[2])
+	}
+	if secondMessages[3].Role != "user" || !strings.Contains(secondMessages[3].Content, "Tool result for managed_status:") || !strings.Contains(secondMessages[3].Content, "Managed Status") {
+		t.Fatalf("tool result message = %+v", secondMessages[3])
+	}
 }
 
 func TestModelAgentRespondIncludesWorkingSetInUserPrompt(t *testing.T) {
