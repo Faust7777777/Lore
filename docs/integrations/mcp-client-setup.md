@@ -5,7 +5,7 @@ Lore exposes its read-only vault surface as a local MCP server. External agents 
 ## Scope
 
 - Transport: stdio only.
-- Command shape: `lore mcp <workdir>`.
+- Command shape: `lore mcp [workdir]`. External client configs should pass an explicit workdir.
 - Protocol methods: `initialize`, `ping`, `tools/list`, `tools/call`.
 - Tool surface: read-only tools only. Lore does not expose shell execution, writable vault mutation, TUI actions, or runtime policy changes through MCP.
 - Contract source: `docs/contracts/mcp-sdk-tools-v0.json`.

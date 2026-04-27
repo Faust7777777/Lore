@@ -8,7 +8,7 @@ This is docs-only. It does not change MCP server behavior, SDK behavior, or TUI 
 
 ## Facts To Verify
 
-- Command shape is `lore mcp <workdir>` from `internal/cli/cli.go`.
+- Command shape is `lore mcp [workdir]` from `internal/cli/cli.go`; the integration guide recommends an explicit workdir for external clients.
 - MCP methods are `initialize`, `ping`, `tools/list`, and `tools/call` from `internal/mcp/server.go`.
 - Process auth uses server-side `LORE_MCP_API_KEY` / `OBSIDIAN_HARNESS_MCP_API_KEY` and client-side `LORE_CLIENT_KEY` / `OBSIDIAN_HARNESS_CLIENT_KEY`.
 - Tool surface is read-only and matches `docs/contracts/mcp-sdk-tools-v0.json`.
