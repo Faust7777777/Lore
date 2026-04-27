@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "lore": {
+      "command": "C:\\path\\to\\lore.exe",
+      "args": ["mcp", "C:\\path\\to\\lore-workdir"],
+      "env": {
+        "LORE_CLIENT_KEY": "same-value-as-LORE_MCP_API_KEY-if-enabled"
+      }
+    }
+  }
+}

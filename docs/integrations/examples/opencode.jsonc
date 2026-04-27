@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "lore": {
+      "type": "local",
+      "command": ["C:\\path\\to\\lore.exe", "mcp", "C:\\path\\to\\lore-workdir"],
+      "enabled": true,
+      "environment": {
+        "LORE_CLIENT_KEY": "same-value-as-LORE_MCP_API_KEY-if-enabled"
+      }
+    }
+  }
+}

@@ -4,6 +4,8 @@
 
 Added `docs/integrations/mcp-client-setup.md` as the first user-facing integration guide for external agents connecting to Lore over MCP.
 
+Follow-up added copyable example configs under `docs/integrations/examples/` and tests in `internal/mcp/client_examples_test.go`.
+
 This is docs-only. It does not change MCP server behavior, SDK behavior, or TUI behavior.
 
 ## Facts To Verify
@@ -16,11 +18,12 @@ This is docs-only. It does not change MCP server behavior, SDK behavior, or TUI 
 
 ## Review Focus
 
-- Check that every concrete client config uses stdio and starts `lore mcp <workdir>`.
+- Check that every concrete client config uses stdio and starts `lore mcp` with an explicit workdir, even though the CLI accepts `lore mcp [workdir]`.
 - Check that the doc does not imply writable tools, shell execution, HTTP/SSE/WS support, MCP resources, or prompts.
 - Check that external-client syntax is framed as client-specific config, while the Lore contract source remains the local artifact.
 - Check that auth wording does not confuse `LORE_MCP_API_KEY` with `LORE_CLIENT_KEY`.
 - Check Windows JSON path escaping and PowerShell examples.
+- Check that example config files stay aligned with the inline snippets and still start `lore mcp <explicit-workdir>`.
 
 ## External Syntax Sources Used
 
@@ -35,6 +38,13 @@ Run:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ".\scripts\verify.ps1"
+```
+
+Targeted:
+
+```powershell
+.\.tools\go\bin\go.exe test ./internal/mcp -run TestExternalClientExamples -count=1 -v
+.\.tools\go\bin\go.exe test ./internal/mcp -run TestOpenCodeExample -count=1 -v
 ```
 
 Optional E2E:

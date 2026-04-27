@@ -50,6 +50,14 @@ Use this shape for clients that accept an `mcpServers` map with stdio process co
 
 If the client already inherits the needed Lore auth environment variables, the `env` block can be omitted.
 
+Copyable example files live under `docs/integrations/examples/`:
+
+- `generic-mcp.json`
+- `claude-desktop-mcp.json`
+- `claude-code-project.mcp.json`
+- `opencode.jsonc`
+- `gemini-cli-settings.json`
+
 ## Claude Desktop
 
 Claude Desktop uses `claude_desktop_config.json` with an `mcpServers` object. The config file is normally opened from Settings -> Developer -> Edit Config.
