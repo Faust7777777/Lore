@@ -55,9 +55,6 @@ func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput stri
 	var builder strings.Builder
 
 	turns := viewModel.Conversation.Turns
-	if len(turns) > 8 {
-		turns = turns[len(turns)-8:]
-	}
 
 	contentWidth := wrapWidth - 6
 	if contentWidth < 1 {

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -57,18 +58,20 @@ func TestRenderInteractiveConversationEmptyState(t *testing.T) {
 	}
 }
 
-func TestRenderInteractiveConversationTruncatesLongHistory(t *testing.T) {
+func TestRenderInteractiveConversationRendersAllTurns(t *testing.T) {
 	turns := make([]operatoragent.ConversationTurn, 12)
 	for i := range turns {
-		turns[i] = operatoragent.ConversationTurn{Role: "user", Content: "msg"}
+		turns[i] = operatoragent.ConversationTurn{Role: "user", Content: fmt.Sprintf("msg-%d", i)}
 	}
 	vm := WorkbenchViewModel{
 		Conversation: WorkbenchConversation{Turns: turns},
 	}
 	result := renderInteractiveConversation(vm, "", false, "", 80)
-	count := strings.Count(result, "You")
-	if count > 8 {
-		t.Errorf("should render at most 8 turns, got %d 'You' labels", count)
+	for i := 0; i < 12; i++ {
+		want := fmt.Sprintf("msg-%d", i)
+		if !strings.Contains(result, want) {
+			t.Errorf("should render all turns, missing %q", want)
+		}
 	}
 }
 
