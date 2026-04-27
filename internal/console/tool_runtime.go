@@ -206,6 +206,9 @@ func (r toolRuntime) CallTool(name string, arguments map[string]any) (operatorag
 		if err != nil {
 			return operatoragent.ToolResult{}, err
 		}
+		if resolved.Status == "unique" && isVaultMarkdownPath(resolved.SelectedPath) {
+			arguments["selected_path"] = resolved.SelectedPath
+		}
 		return jsonToolResult(resolved)
 	case "vault_backlinks":
 		path, err := requiredStringArg(arguments, "path")

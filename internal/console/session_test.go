@@ -406,6 +406,28 @@ func TestSessionHandleRecordsTranscriptEvents(t *testing.T) {
 		t.Fatalf("recorded worksets = %+v", recorder.worksets)
 	}
 }
+
+func TestSessionHandleRemembersVaultResolveSelectedPath(t *testing.T) {
+	agent := &fakeLoopAgent{
+		response: operatoragent.Response{
+			Final: "Resolved the note.",
+			Trace: []operatoragent.ToolCallTrace{{
+				Name:      "vault_resolve",
+				Arguments: map[string]any{"query": "progress", "selected_path": "progress.md"},
+				Status:    "ok",
+			}},
+		},
+	}
+	session := NewSessionWithAgent("test", agent)
+
+	if _, err := session.Handle("open progress", &fakeRuntime{}); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if len(session.WorkingSet) != 1 || session.WorkingSet[0].Path != "progress.md" || session.WorkingSet[0].Source != "vault_resolve" {
+		t.Fatalf("working set = %+v, want vault_resolve selected path", session.WorkingSet)
+	}
+}
+
 func TestSessionHandleCarriesVaultPathWorkingSetAcrossFollowUp(t *testing.T) {
 	agent := &fakeLoopAgent{
 		responses: []operatoragent.Response{

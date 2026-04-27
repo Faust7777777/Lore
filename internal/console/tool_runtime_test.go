@@ -67,6 +67,24 @@ func TestToolRuntimeVaultWriteLowCallsRuntimeWithoutKeywordGate(t *testing.T) {
 	}
 }
 
+func TestToolRuntimeVaultResolveEnrichesUniqueSelectedPath(t *testing.T) {
+	runtime := &fakeRuntime{}
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	tools := newToolRuntime(session, runtime)
+	arguments := map[string]any{"query": "progress", "limit": 5}
+
+	result, err := tools.CallTool("vault_resolve", arguments)
+	if err != nil {
+		t.Fatalf("vault_resolve error = %v", err)
+	}
+	if !strings.Contains(result.Content, `"status": "unique"`) || !strings.Contains(result.Content, `"selected_path": "progress.md"`) {
+		t.Fatalf("vault_resolve result = %q, want unique progress path", result.Content)
+	}
+	if arguments["selected_path"] != "progress.md" {
+		t.Fatalf("selected_path argument = %#v, want progress.md", arguments["selected_path"])
+	}
+}
+
 func TestToolRuntimeWorkspaceWriteBlocksVaultAndState(t *testing.T) {
 	workDir := t.TempDir()
 	runtime := &fakeRuntime{

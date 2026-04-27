@@ -312,7 +312,7 @@ func (s *Session) rememberToolTargets(trace []operatoragent.ToolCallTrace, final
 }
 
 func (s *Session) rememberToolArgumentPath(toolName string, arguments map[string]any) {
-	for _, key := range []string{"path", "target_path"} {
+	for _, key := range []string{"path", "target_path", "selected_path"} {
 		value, _ := arguments[key].(string)
 		if isVaultMarkdownPath(value) {
 			s.rememberWorkingSetItem(operatoragent.WorkingSetItem{Kind: "vault_path", Path: strings.TrimSpace(value), Source: strings.TrimSpace(toolName)})
