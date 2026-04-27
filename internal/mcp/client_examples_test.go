@@ -78,7 +78,8 @@ func readExampleJSON(t *testing.T, path string, out any) {
 
 func assertStdioLoreCommand(t *testing.T, name string, command string, args []string) {
 	t.Helper()
-	if !strings.Contains(strings.ToLower(command), "lore") {
+	commandBase := strings.ToLower(filepath.Base(command))
+	if commandBase != "lore" && commandBase != "lore.exe" {
 		t.Fatalf("%s command = %q, want lore executable", name, command)
 	}
 	if len(args) < 2 {
