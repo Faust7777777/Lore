@@ -23,6 +23,18 @@ function Invoke-GoTest {
     }
 }
 
+function Invoke-PowerShellScript {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    & $Path
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Path failed with exit code $LASTEXITCODE"
+    }
+}
+
 Push-Location $RepoRoot
 try {
     Invoke-GoTest -Arguments @("test", "./...", "-count=1")
@@ -46,6 +58,9 @@ try {
         } finally {
             Pop-Location
         }
+    }
+    if ($E2E) {
+        Invoke-PowerShellScript -Path (Join-Path $RepoRoot "scripts\smoke-mcp-stdio.ps1")
     }
 } finally {
     Pop-Location

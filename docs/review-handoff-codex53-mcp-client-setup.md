@@ -6,7 +6,9 @@ Added `docs/integrations/mcp-client-setup.md` as the first user-facing integrati
 
 Follow-up added copyable example configs under `docs/integrations/examples/` and tests in `internal/mcp/client_examples_test.go`.
 
-This is docs-only. It does not change MCP server behavior, SDK behavior, or TUI behavior.
+This follow-up adds `scripts/smoke-mcp-stdio.ps1`, a raw stdio smoke that sends MCP frames directly to `lore mcp` without the Go SDK.
+
+This does not change MCP server behavior, SDK behavior, or TUI behavior. The only executable changes are verification assets: example-config tests, the raw stdio smoke script, and `verify.ps1 -E2E` wiring.
 
 ## Facts To Verify
 
@@ -14,7 +16,8 @@ This is docs-only. It does not change MCP server behavior, SDK behavior, or TUI 
 - MCP methods are `initialize`, `ping`, `tools/list`, and `tools/call` from `internal/mcp/server.go`.
 - Process auth uses server-side `LORE_MCP_API_KEY` / `OBSIDIAN_HARNESS_MCP_API_KEY` and client-side `LORE_CLIENT_KEY` / `OBSIDIAN_HARNESS_CLIENT_KEY`.
 - Tool surface is read-only and matches `docs/contracts/mcp-sdk-tools-v0.json`.
-- SDK E2E smoke command is `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ".\scripts\verify.ps1 -E2E"`.
+- E2E smoke command is `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ".\scripts\verify.ps1 -E2E"`; it runs the SDK E2E and the raw stdio smoke.
+- Raw MCP stdio smoke command is `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-mcp-stdio.ps1`.
 
 ## Review Focus
 
@@ -24,6 +27,7 @@ This is docs-only. It does not change MCP server behavior, SDK behavior, or TUI 
 - Check that auth wording does not confuse `LORE_MCP_API_KEY` with `LORE_CLIENT_KEY`.
 - Check Windows JSON path escaping and PowerShell examples.
 - Check that example config files stay aligned with the inline snippets and still start `lore mcp <explicit-workdir>`.
+- Check that `scripts/smoke-mcp-stdio.ps1` does not use the SDK path and only exercises MCP protocol frames.
 
 ## External Syntax Sources Used
 
@@ -45,6 +49,8 @@ Targeted:
 ```powershell
 .\.tools\go\bin\go.exe test ./internal/mcp -run TestExternalClientExamples -count=1 -v
 .\.tools\go\bin\go.exe test ./internal/mcp -run TestOpenCodeExample -count=1 -v
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-mcp-stdio.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-mcp-stdio.ps1 -MCPAPIKey smoke-key -ClientKey smoke-key
 ```
 
 Optional E2E:

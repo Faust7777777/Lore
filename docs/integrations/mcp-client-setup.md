@@ -191,10 +191,28 @@ Standard argument names should be preferred:
 
 ## Smoke Tests
 
-Repository-level SDK E2E smoke builds the real CLI, bootstraps a temporary workdir, starts `lore mcp <workdir>`, and exercises `Ping`, `ManagedStatus`, `VaultResolve`, and `ContextPack`:
+Repository-level E2E smoke builds the real CLI and starts `lore mcp <workdir>`. It runs both the Go SDK E2E path and the raw stdio MCP frame smoke:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ".\scripts\verify.ps1 -E2E"
+```
+
+The raw stdio smoke can also be run directly. It sends MCP JSON-RPC frames to `lore mcp` without using the Go SDK:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-mcp-stdio.ps1
+```
+
+Against an existing binary and workdir:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-mcp-stdio.ps1 -Lore C:\path\to\lore.exe -WorkDir C:\path\to\lore-workdir
+```
+
+To include process auth in the smoke:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke-mcp-stdio.ps1 -MCPAPIKey smoke-key -ClientKey smoke-key
 ```
 
 For default verification without E2E:
