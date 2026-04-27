@@ -51,6 +51,7 @@ func TestConfigureSessionRecorderResumeRequiresInteractiveStdin(t *testing.T) {
 	if session.Recorder != nil {
 		t.Fatalf("session.Recorder = %#v, want nil on failed resume", session.Recorder)
 	}
+	assertSessionContextEmpty(t, session)
 }
 
 func TestConfigureSessionRecorderResumeIDWorksNonInteractive(t *testing.T) {
@@ -120,6 +121,7 @@ func TestConfigureSessionRecorderResumeWithNoSessionsIsExplicit(t *testing.T) {
 	if session.Recorder != nil {
 		t.Fatalf("session.Recorder = %#v, want nil on failed resume", session.Recorder)
 	}
+	assertSessionContextEmpty(t, session)
 }
 
 func TestConfigureSessionRecorderResumeIDMissingDoesNotStartFresh(t *testing.T) {
@@ -146,5 +148,16 @@ func TestConfigureSessionRecorderResumeIDMissingDoesNotStartFresh(t *testing.T) 
 	}
 	if session.Recorder != nil {
 		t.Fatalf("session.Recorder = %#v, want nil on failed resume-id", session.Recorder)
+	}
+	assertSessionContextEmpty(t, session)
+}
+
+func assertSessionContextEmpty(t *testing.T, session *console.Session) {
+	t.Helper()
+	if len(session.History) != 0 {
+		t.Fatalf("session.History = %+v, want empty on failed resume", session.History)
+	}
+	if len(session.WorkingSet) != 0 {
+		t.Fatalf("session.WorkingSet = %+v, want empty on failed resume", session.WorkingSet)
 	}
 }
