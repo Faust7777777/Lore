@@ -20,11 +20,13 @@ Changed files:
 - When `vault_resolve` returns `status == "unique"` with a markdown `selected_path`, the console tool runtime enriches the trace arguments with `selected_path`.
 - The session working-set extractor now recognizes `selected_path`.
 - Ambiguous and not_found results do not add working-set paths through this path.
+- Any model-supplied stale `selected_path` argument is cleared before executing `vault_resolve`.
+- Assistant final JSON that looks like a `vault_resolve` result is treated by status: `unique` remembers only `selected_path`, while `ambiguous` and `not_found` do not recurse into candidate `matches`.
 
 ## Verification
 
 ```powershell
-.\.tools\go\bin\go.exe test ./internal/console -run 'Test(ToolRuntimeVaultResolveEnrichesUniqueSelectedPath|SessionHandleRemembersVaultResolveSelectedPath)' -count=1 -v
+.\.tools\go\bin\go.exe test ./internal/console -run 'Test(ToolRuntimeVaultResolve|SessionHandle.*VaultResolve)' -count=1 -v
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ".\scripts\verify.ps1"
 ```
 
@@ -34,4 +36,5 @@ Both passed locally.
 
 - Confirm mutating the tool argument map for trace enrichment is acceptable here.
 - Confirm only unique markdown `selected_path` is remembered.
+- Confirm ambiguous/not_found cannot leak stale `selected_path` or candidate `matches` into WorkingSet.
 - Confirm no SDK/TUI behavior changed.

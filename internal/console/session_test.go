@@ -13,11 +13,12 @@ import (
 )
 
 type fakeRuntime struct {
-	managed     model.ManagedStatusView
-	drafts      []model.Draft
-	review      app.DraftReview
-	processSink app.ProcessSinkDayView
-	writtenNote *model.VaultDocument
+	managed      model.ManagedStatusView
+	drafts       []model.Draft
+	review       app.DraftReview
+	processSink  app.ProcessSinkDayView
+	vaultResolve model.VaultResolveResult
+	writtenNote  *model.VaultDocument
 }
 
 func (f *fakeRuntime) ManagedStatus() (model.ManagedStatusView, error) {
@@ -72,6 +73,9 @@ func (f *fakeRuntime) VaultSearchText(query string, relDir string, limit int) ([
 }
 
 func (f *fakeRuntime) VaultResolve(query string, relDir string, limit int) (model.VaultResolveResult, error) {
+	if f.vaultResolve.Status != "" {
+		return f.vaultResolve, nil
+	}
 	return model.VaultResolveResult{Query: query, Status: "unique", SelectedPath: "progress.md", Matches: []model.VaultResolveMatch{{Path: "progress.md", Score: 1, Reason: "test"}}}, nil
 }
 func (f *fakeRuntime) VaultBacklinks(relPath string, limit int) ([]model.SearchHit, error) {
@@ -425,6 +429,64 @@ func TestSessionHandleRemembersVaultResolveSelectedPath(t *testing.T) {
 	}
 	if len(session.WorkingSet) != 1 || session.WorkingSet[0].Path != "progress.md" || session.WorkingSet[0].Source != "vault_resolve" {
 		t.Fatalf("working set = %+v, want vault_resolve selected path", session.WorkingSet)
+	}
+}
+
+func TestSessionHandleDoesNotRememberNonUniqueVaultResolveMatches(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		final string
+	}{
+		{
+			name:  "ambiguous",
+			final: `{"query":"progress","status":"ambiguous","matches":[{"path":"progress.md","score":0.6},{"path":"project-progress.md","score":0.55}],"reason":"score_below_unique_threshold_or_margin"}`,
+		},
+		{
+			name:  "not_found",
+			final: `{"query":"missing","status":"not_found","reason":"no_path_match"}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			agent := &fakeLoopAgent{
+				response: operatoragent.Response{
+					Final: tt.final,
+					Trace: []operatoragent.ToolCallTrace{{
+						Name:      "vault_resolve",
+						Arguments: map[string]any{"query": "progress"},
+						Status:    "ok",
+					}},
+				},
+			}
+			session := NewSessionWithAgent("test", agent)
+
+			if _, err := session.Handle("resolve progress", &fakeRuntime{}); err != nil {
+				t.Fatalf("Handle() error = %v", err)
+			}
+			if len(session.WorkingSet) != 0 {
+				t.Fatalf("working set = %+v, want empty for non-unique vault_resolve", session.WorkingSet)
+			}
+		})
+	}
+}
+
+func TestSessionHandleRemembersUniqueVaultResolveJSONSelectedPath(t *testing.T) {
+	agent := &fakeLoopAgent{
+		response: operatoragent.Response{
+			Final: `{"query":"progress","status":"unique","selected_path":"progress.md","matches":[{"path":"other.md","score":0.2}]}`,
+			Trace: []operatoragent.ToolCallTrace{{
+				Name:      "vault_resolve",
+				Arguments: map[string]any{"query": "progress"},
+				Status:    "ok",
+			}},
+		},
+	}
+	session := NewSessionWithAgent("test", agent)
+
+	if _, err := session.Handle("resolve progress", &fakeRuntime{}); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if len(session.WorkingSet) != 1 || session.WorkingSet[0].Path != "progress.md" {
+		t.Fatalf("working set = %+v, want unique selected_path only", session.WorkingSet)
 	}
 }
 

@@ -198,6 +198,7 @@ func (r toolRuntime) CallTool(name string, arguments map[string]any) (operatorag
 		if err != nil {
 			return operatoragent.ToolResult{}, err
 		}
+		delete(arguments, "selected_path")
 		resolved, err := r.runtime.VaultResolve(
 			query,
 			stringArg(arguments, "dir", ""),

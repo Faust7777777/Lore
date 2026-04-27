@@ -334,6 +334,9 @@ func (s *Session) rememberPathsFromText(value string, source string) {
 func (s *Session) rememberPathsFromJSON(value any, source string) {
 	switch typed := value.(type) {
 	case map[string]any:
+		if s.rememberVaultResolveJSON(typed, source) {
+			return
+		}
 		if path, _ := typed["path"].(string); isVaultMarkdownPath(path) {
 			s.rememberWorkingSetItem(operatoragent.WorkingSetItem{Kind: "vault_path", Path: strings.TrimSpace(path), Source: source})
 		}
@@ -347,6 +350,31 @@ func (s *Session) rememberPathsFromJSON(value any, source string) {
 		for _, child := range typed {
 			s.rememberPathsFromJSON(child, source)
 		}
+	}
+}
+
+func (s *Session) rememberVaultResolveJSON(value map[string]any, source string) bool {
+	if _, ok := value["query"]; !ok {
+		return false
+	}
+	_, hasMatches := value["matches"]
+	_, hasReason := value["reason"]
+	_, hasSelected := value["selected_path"]
+	if !hasMatches && !hasReason && !hasSelected {
+		return false
+	}
+	status, _ := value["status"].(string)
+	switch strings.TrimSpace(status) {
+	case "unique":
+		path, _ := value["selected_path"].(string)
+		if isVaultMarkdownPath(path) {
+			s.rememberWorkingSetItem(operatoragent.WorkingSetItem{Kind: "vault_path", Path: strings.TrimSpace(path), Source: source})
+		}
+		return true
+	case "ambiguous", "not_found":
+		return true
+	default:
+		return false
 	}
 }
 

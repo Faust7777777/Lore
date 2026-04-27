@@ -85,6 +85,43 @@ func TestToolRuntimeVaultResolveEnrichesUniqueSelectedPath(t *testing.T) {
 	}
 }
 
+func TestToolRuntimeVaultResolveClearsNonUniqueSelectedPath(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		result model.VaultResolveResult
+	}{
+		{
+			name: "ambiguous",
+			result: model.VaultResolveResult{
+				Query:  "progress",
+				Status: "ambiguous",
+				Matches: []model.VaultResolveMatch{
+					{Path: "progress.md", Score: 0.6, Reason: "candidate"},
+					{Path: "project-progress.md", Score: 0.55, Reason: "candidate"},
+				},
+			},
+		},
+		{
+			name:   "not_found",
+			result: model.VaultResolveResult{Query: "progress", Status: "not_found", Reason: "no_path_match"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := &fakeRuntime{vaultResolve: tt.result}
+			session := NewSessionWithAgent("test", &fakeAgent{})
+			tools := newToolRuntime(session, runtime)
+			arguments := map[string]any{"query": "progress", "selected_path": "stale.md"}
+
+			if _, err := tools.CallTool("vault_resolve", arguments); err != nil {
+				t.Fatalf("vault_resolve error = %v", err)
+			}
+			if _, ok := arguments["selected_path"]; ok {
+				t.Fatalf("selected_path argument survived non-unique resolve: %#v", arguments)
+			}
+		})
+	}
+}
+
 func TestToolRuntimeWorkspaceWriteBlocksVaultAndState(t *testing.T) {
 	workDir := t.TempDir()
 	runtime := &fakeRuntime{
