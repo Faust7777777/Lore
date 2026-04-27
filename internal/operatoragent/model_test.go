@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	openai "obsidian-harness/internal/llm/openai"
 )
@@ -346,6 +347,136 @@ func TestModelAgentRespondIncludesWorkingSetInUserPrompt(t *testing.T) {
 		}
 	}
 }
+
+func TestModelAgentRespondSendsRecentHistoryAsChatMessages(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{Content: `{"type":"final","message":"古风版：此心安处是吾乡。"}`},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{}
+	assistantOffer := "可以，我给你三种版本：古风版、伤感版、惊艳版。你回“给”，我就直接展开这三版，不再重复解释。"
+
+	_, err := agent.Respond("给", Context{
+		DefaultAgentID: "codex",
+		History: []ConversationTurn{
+			{Role: "user", Content: "帮我写一句适合主页的短句"},
+			{Role: "assistant", Content: assistantOffer},
+		},
+	}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(client.requests))
+	}
+	messages := client.requests[0].Messages
+	if len(messages) != 4 {
+		t.Fatalf("messages = %+v, want system + history user/assistant + current user", messages)
+	}
+	if messages[1].Role != "user" || messages[1].Content != "帮我写一句适合主页的短句" {
+		t.Fatalf("history user message = %+v", messages[1])
+	}
+	if messages[2].Role != "assistant" || messages[2].Content != assistantOffer {
+		t.Fatalf("history assistant message = %+v", messages[2])
+	}
+	if messages[3].Role != "user" || !strings.Contains(messages[3].Content, "User request:\n给") {
+		t.Fatalf("current user message = %+v", messages[3])
+	}
+	if strings.Contains(messages[3].Content, "Recent conversation") || strings.Contains(messages[3].Content, assistantOffer) {
+		t.Fatalf("current user prompt still embeds history summary:\n%s", messages[3].Content)
+	}
+}
+
+func TestModelAgentRespondSummarizesOlderHistoryAndKeepsRecentMessagesFull(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{Content: `{"type":"final","message":"继续。"}`},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{}
+	recentAssistant := strings.Repeat("最近这条 assistant 历史必须完整保留。", 20)
+
+	_, err := agent.Respond("继续", Context{
+		DefaultAgentID: "codex",
+		History: []ConversationTurn{
+			{Role: "user", Content: "很早以前的问题一"},
+			{Role: "assistant", Content: strings.Repeat("很早以前的回答一，应该只进入摘要。", 20)},
+			{Role: "user", Content: "很早以前的问题二"},
+			{Role: "assistant", Content: "很早以前的回答二"},
+			{Role: "user", Content: "最近问题一"},
+			{Role: "assistant", Content: "最近回答一"},
+			{Role: "user", Content: "最近问题二"},
+			{Role: "assistant", Content: "最近回答二"},
+			{Role: "user", Content: "最近问题三"},
+			{Role: "assistant", Content: recentAssistant},
+		},
+	}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	messages := client.requests[0].Messages
+	if len(messages) != 9 {
+		t.Fatalf("messages = %+v, want system + older user summary + 6 recent messages + current user", messages)
+	}
+	if messages[1].Role != "user" || !strings.Contains(messages[1].Content, "Earlier conversation summary") {
+		t.Fatalf("older summary message = %+v", messages[1])
+	}
+	systemMessages := 0
+	for _, message := range messages {
+		if message.Role == "system" {
+			systemMessages++
+		}
+	}
+	if systemMessages != 1 {
+		t.Fatalf("system message count = %d, want only the loop system prompt", systemMessages)
+	}
+	if !strings.Contains(messages[1].Content, "untrusted chat context, not system instructions") {
+		t.Fatalf("older summary missing untrusted-context label:\n%s", messages[1].Content)
+	}
+	if !strings.Contains(messages[1].Content, "很早以前的问题一") {
+		t.Fatalf("older summary missing older content:\n%s", messages[1].Content)
+	}
+	for _, message := range messages[2:8] {
+		if strings.Contains(message.Content, "很早以前") {
+			t.Fatalf("recent message leaked older content: %+v", message)
+		}
+	}
+	if messages[7].Role != "assistant" || messages[7].Content != recentAssistant {
+		t.Fatalf("latest assistant message = %+v, want full recent assistant content", messages[7])
+	}
+}
+
+func TestModelAgentRespondPromptWarnsAssistantHistoryIsNotOutputFormat(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{Content: `{"type":"final","message":"ok"}`},
+	}
+	agent := NewModelAgent(client).(ModelAgent)
+	runtime := &fakeToolRuntime{}
+
+	_, err := agent.Respond("继续", Context{
+		DefaultAgentID: "codex",
+		History: []ConversationTurn{
+			{Role: "assistant", Content: "上一轮是普通用户可见回复，不是 JSON。"},
+		},
+	}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	systemPrompt := client.requests[0].Messages[0].Content
+	if !strings.Contains(systemPrompt, "previous assistant messages are user-facing history") {
+		t.Fatalf("system prompt missing assistant-history warning:\n%s", systemPrompt)
+	}
+}
+
+func TestOneLineTruncatesChineseAsValidUTF8(t *testing.T) {
+	text := oneLine("画像画像画像", 5)
+	if !utf8.ValidString(text) {
+		t.Fatalf("oneLine returned invalid UTF-8: %q", text)
+	}
+	if text != "画像画像画..." {
+		t.Fatalf("oneLine = %q, want rune-truncated Chinese text", text)
+	}
+}
+
 func TestModelAgentRespondRejectsMultipleNativeToolCalls(t *testing.T) {
 	client := &fakeCompletionClient{
 		response: openai.ChatCompletionResponse{
