@@ -19,7 +19,7 @@ Lore currently has several working pieces, but their product boundaries have sta
 - MCP started as read-only and exposes `initialize`, `ping`, `tools/list`, and `tools/call` over stdio.
 - External agents can connect through MCP. The first proposal-intake path is `persona_update_propose`; low-risk write is still deferred.
 - `agent.md` and `identity.md` both exist as managed core docs, but their intended audiences need to be frozen.
-- `DraftKindPersonaUpdate` exists, but persona update proposal/apply is not implemented end-to-end.
+- `DraftKindPersonaUpdate` now supports proposal intake and local reviewed apply; MCP still cannot approve or apply drafts.
 - The daemon already scans vault changes and can trigger governed drafts for plan/progress flows.
 
 This ADR freezes the v1 architecture direction before adding new tools.
@@ -98,6 +98,8 @@ Forbidden in v1:
 
 The first proposal tool is `persona_update_propose`, not a generic proposal API. It creates a `DraftKindPersonaUpdate` pending review and returns `draft_created`, `draft_id`, `target`, and `review_required: true`. It must not change the persona document by itself. Proposal creation is not persona apply.
 
+Persona apply is local Lore/runtime controlled. After a user-reviewed draft is approved, local apply appends a structured record under `## Applied Persona Updates` in the persona document. It does not attempt freeform field rewriting in v1. MCP must not expose the approve/apply steps.
+
 ## Shell Post-Scan Model
 
 External agents may still have their own shell or file editing capabilities outside Lore. Lore cannot assume every vault change came through MCP.
@@ -131,7 +133,7 @@ CoreContext is not implemented by this ADR; it is a follow-up architecture item.
 2. Update managed templates so `agent.md` becomes an external-first operating manual and `identity.md` remains Lore self identity.
 3. Update external MCP docs to tell external agents to read `system_doc_get("agent")` first and not default to `identity`.
 4. Add MCP L1 `persona_update_propose` after its minimal draft payload is frozen. It may create a pending draft before full persona apply semantics are implemented, but must not claim the persona document has changed.
-5. Freeze persona update apply semantics and then support review/apply.
+5. Support local reviewed persona update apply as append-only structured records.
 6. Add MCP L2 `vault_write_low` only after contract tests and runtime rejection/audit tests are ready.
 7. Add daemon/post-scan tests for low-risk changes and governed-document findings.
 8. Implement CoreContext for local Lore after the document semantics and write levels are stable.
@@ -143,7 +145,7 @@ CoreContext is not implemented by this ADR; it is a follow-up architecture item.
 - L2 low-risk MCP writes pass only through runtime validation and audit.
 - Governed paths remain blocked from MCP direct write.
 - Daemon/post-scan can detect out-of-band governed document changes and does not silently approve them.
-- Persona update proposal creates a draft/review item only; applying it remains a user-reviewed local Lore/runtime action.
+- Persona update proposal creates a draft/review item only; applying it remains a user-reviewed local Lore/runtime action and appends a structured persona update record.
 
 ## Non-Goals
 

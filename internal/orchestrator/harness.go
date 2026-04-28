@@ -548,9 +548,96 @@ func applyDraftPatch(current []byte, draft model.Draft) ([]byte, error) {
 	switch draft.Kind {
 	case model.DraftKindProgressSync:
 		return upsertProgressIndexRow(current, draft.ProposedContent)
+	case model.DraftKindPersonaUpdate:
+		return appendPersonaUpdateRecord(current, draft)
 	default:
 		return nil, ErrUnsupportedDraft
 	}
+}
+
+func appendPersonaUpdateRecord(current []byte, draft model.Draft) ([]byte, error) {
+	var proposal model.PersonaUpdateProposal
+	if err := json.Unmarshal([]byte(draft.ProposedContent), &proposal); err != nil {
+		return nil, ErrInvalidDraftPatch
+	}
+	proposal.Field = strings.TrimSpace(proposal.Field)
+	proposal.CurrentValue = strings.TrimSpace(proposal.CurrentValue)
+	proposal.ProposedValue = strings.TrimSpace(proposal.ProposedValue)
+	proposal.Evidence = strings.TrimSpace(proposal.Evidence)
+	proposal.Reason = strings.TrimSpace(proposal.Reason)
+	proposal.Confidence = strings.TrimSpace(proposal.Confidence)
+	proposal.Source = strings.TrimSpace(proposal.Source)
+	if proposal.Field == "" || proposal.ProposedValue == "" || proposal.Evidence == "" || proposal.Reason == "" || proposal.Confidence == "" || proposal.Source == "" || proposal.ObservedAt.IsZero() {
+		return nil, ErrInvalidDraftPatch
+	}
+
+	text := strings.ReplaceAll(string(current), "\r\n", "\n")
+	text = strings.TrimRight(text, "\n")
+	record := renderPersonaUpdateRecord(proposal, draft.ID)
+	if strings.TrimSpace(text) == "" {
+		return []byte("## Applied Persona Updates\n\n" + record), nil
+	}
+	lines := strings.Split(text, "\n")
+	headerIndex := findMarkdownHeading(lines, "## Applied Persona Updates")
+	if headerIndex < 0 {
+		return []byte(text + "\n\n## Applied Persona Updates\n\n" + record), nil
+	}
+	insertAt := len(lines)
+	for i := headerIndex + 1; i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "## ") {
+			insertAt = i
+			break
+		}
+	}
+	lines = insertLine(lines, insertAt, strings.TrimRight(record, "\n"))
+	return []byte(strings.Join(lines, "\n") + "\n"), nil
+}
+
+func renderPersonaUpdateRecord(proposal model.PersonaUpdateProposal, draftID string) string {
+	var builder strings.Builder
+	builder.WriteString("- field: ")
+	builder.WriteString(markdownInline(proposal.Field))
+	builder.WriteString("\n")
+	if proposal.CurrentValue != "" {
+		builder.WriteString("  current_value: ")
+		builder.WriteString(markdownInline(proposal.CurrentValue))
+		builder.WriteString("\n")
+	}
+	builder.WriteString("  proposed_value: ")
+	builder.WriteString(markdownInline(proposal.ProposedValue))
+	builder.WriteString("\n")
+	builder.WriteString("  evidence: ")
+	builder.WriteString(markdownInline(proposal.Evidence))
+	builder.WriteString("\n")
+	builder.WriteString("  reason: ")
+	builder.WriteString(markdownInline(proposal.Reason))
+	builder.WriteString("\n")
+	builder.WriteString("  confidence: ")
+	builder.WriteString(markdownInline(proposal.Confidence))
+	builder.WriteString("\n")
+	builder.WriteString("  source: ")
+	builder.WriteString(markdownInline(proposal.Source))
+	builder.WriteString("\n")
+	builder.WriteString("  observed_at: ")
+	builder.WriteString(proposal.ObservedAt.UTC().Format(time.RFC3339))
+	builder.WriteString("\n")
+	builder.WriteString("  draft_id: ")
+	builder.WriteString(markdownInline(draftID))
+	builder.WriteString("\n")
+	return builder.String()
+}
+
+func findMarkdownHeading(lines []string, heading string) int {
+	for i, line := range lines {
+		if strings.TrimSpace(line) == heading {
+			return i
+		}
+	}
+	return -1
+}
+
+func markdownInline(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
 
 func renderProgressPatch(relPath string, docClass model.DocClass, at time.Time) string {

@@ -302,6 +302,247 @@ func TestProposePersonaUpdateCreatesPendingDraftWithoutWritingPersona(t *testing
 	}
 }
 
+func TestApplyPersonaUpdateDraftAppendsReviewedRecord(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+	personaAbs := filepath.Join(cfg.Paths.VaultRoot, cfg.Vault.ManagedCore.Persona)
+	before, err := os.ReadFile(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(persona before) error = %v", err)
+	}
+	at := time.Date(2026, 4, 28, 10, 30, 0, 0, time.UTC)
+
+	result, err := h.ProposePersonaUpdate(model.PersonaUpdateProposal{
+		Field:         "education.major",
+		CurrentValue:  "",
+		ProposedValue: "电子商务",
+		Evidence:      "用户说：我是大连理工大学学生，专业电子商务",
+		Reason:        "这是用户长期教育背景事实",
+		Confidence:    "high",
+		Source:        "external_agent",
+		ObservedAt:    at,
+	}, at)
+	if err != nil {
+		t.Fatalf("ProposePersonaUpdate() error = %v", err)
+	}
+	if _, err := h.ApplyDraft(result.DraftID, at.Add(time.Minute)); !errors.Is(err, ErrDraftNotReady) {
+		t.Fatalf("ApplyDraft(pending persona) error = %v, want ErrDraftNotReady", err)
+	}
+	if _, err := h.ApproveDraft(result.DraftID, at.Add(2*time.Minute)); err != nil {
+		t.Fatalf("ApproveDraft(persona) error = %v", err)
+	}
+	applied, err := h.ApplyDraft(result.DraftID, at.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("ApplyDraft(persona) error = %v", err)
+	}
+	if applied.State != model.DraftApplied {
+		t.Fatalf("applied.State = %q, want applied", applied.State)
+	}
+
+	after, err := os.ReadFile(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(persona after) error = %v", err)
+	}
+	got := string(after)
+	if !strings.HasPrefix(got, string(before)) {
+		t.Fatalf("persona apply should append without rewriting existing content:\n%s", got)
+	}
+	for _, want := range []string{
+		"## Applied Persona Updates",
+		"field: education.major",
+		"proposed_value: 电子商务",
+		"evidence: 用户说：我是大连理工大学学生，专业电子商务",
+		"reason: 这是用户长期教育背景事实",
+		"confidence: high",
+		"source: external_agent",
+		"observed_at: 2026-04-28T10:30:00Z",
+		"draft_id: " + result.DraftID,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("persona content missing %q:\n%s", want, got)
+		}
+	}
+
+	records, err := st.Audit().ListAudit(20)
+	if err != nil {
+		t.Fatalf("ListAudit() error = %v", err)
+	}
+	foundAppliedAudit := false
+	for _, record := range records {
+		if record.Kind == model.AuditDraftApplied && record.CorrelationID == result.DraftID && record.Target == cfg.Vault.ManagedCore.Persona {
+			foundAppliedAudit = true
+			break
+		}
+	}
+	if !foundAppliedAudit {
+		t.Fatalf("missing persona draft applied audit for %s in %+v", result.DraftID, records)
+	}
+}
+
+func TestApplyPersonaUpdateDraftDetectsConflict(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+	at := time.Date(2026, 4, 28, 10, 30, 0, 0, time.UTC)
+	result, err := h.ProposePersonaUpdate(model.PersonaUpdateProposal{
+		Field:         "education.major",
+		ProposedValue: "电子商务",
+		Evidence:      "用户说：我是大连理工大学学生，专业电子商务",
+		Reason:        "这是用户长期教育背景事实",
+		Confidence:    "high",
+		Source:        "external_agent",
+		ObservedAt:    at,
+	}, at)
+	if err != nil {
+		t.Fatalf("ProposePersonaUpdate() error = %v", err)
+	}
+	if _, err := h.ApproveDraft(result.DraftID, at.Add(time.Minute)); err != nil {
+		t.Fatalf("ApproveDraft(persona) error = %v", err)
+	}
+	personaAbs := filepath.Join(cfg.Paths.VaultRoot, cfg.Vault.ManagedCore.Persona)
+	if _, err := vault.WriteFileAtomic(personaAbs, []byte("# changed externally"), cfg.Vault.TempSuffix); err != nil {
+		t.Fatalf("WriteFileAtomic(personaAbs) error = %v", err)
+	}
+
+	if _, err := h.ApplyDraft(result.DraftID, at.Add(2*time.Minute)); !errorsIs(err, store.ErrConflict) {
+		t.Fatalf("ApplyDraft(persona) error = %v, want store.ErrConflict", err)
+	}
+	updated, err := st.Drafts().GetDraft(result.DraftID)
+	if err != nil {
+		t.Fatalf("GetDraft() error = %v", err)
+	}
+	if updated.State != model.DraftConflicted {
+		t.Fatalf("updated.State = %q, want conflicted", updated.State)
+	}
+}
+
+func TestApplyPersonaUpdateDraftRejectsInvalidPayload(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+	personaAbs := filepath.Join(cfg.Paths.VaultRoot, cfg.Vault.ManagedCore.Persona)
+	before, err := os.ReadFile(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(persona before) error = %v", err)
+	}
+	_, baseVersion, err := vault.ReadFileWithHash(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFileWithHash(persona) error = %v", err)
+	}
+	at := time.Date(2026, 4, 28, 10, 30, 0, 0, time.UTC)
+	draft := model.Draft{
+		ID:    "draft-invalid-persona",
+		Kind:  model.DraftKindPersonaUpdate,
+		State: model.DraftApproved,
+		Target: model.DocumentRef{
+			Path:        cfg.Vault.ManagedCore.Persona,
+			Class:       model.DocClassPersona,
+			BaseVersion: baseVersion,
+		},
+		Title:           "Invalid persona update",
+		Summary:         "invalid payload",
+		ProposedContent: `{"field": "education.major"}`,
+		CreatedAt:       at,
+		UpdatedAt:       at,
+	}
+	if err := st.Drafts().SaveDraft(draft); err != nil {
+		t.Fatalf("SaveDraft() error = %v", err)
+	}
+
+	if _, err := h.ApplyDraft(draft.ID, at.Add(time.Minute)); !errors.Is(err, ErrInvalidDraftPatch) {
+		t.Fatalf("ApplyDraft(invalid persona) error = %v, want ErrInvalidDraftPatch", err)
+	}
+	after, err := os.ReadFile(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(persona after) error = %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("invalid persona apply changed document:\nbefore=%s\nafter=%s", before, after)
+	}
+	updated, err := st.Drafts().GetDraft(draft.ID)
+	if err != nil {
+		t.Fatalf("GetDraft() error = %v", err)
+	}
+	if updated.State != model.DraftApproved {
+		t.Fatalf("updated.State = %q, want approved after invalid patch", updated.State)
+	}
+}
+
+func TestApplyPersonaUpdateDraftInsertsIntoExistingSection(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+	personaAbs := filepath.Join(cfg.Paths.VaultRoot, cfg.Vault.ManagedCore.Persona)
+	persona := "# 人物画像\n\n## Applied Persona Updates\n\n- field: existing\n  proposed_value: old\n\n## Freeform Notes\n\n- keep this section last\n"
+	if _, err := vault.WriteFileAtomic(personaAbs, []byte(persona), cfg.Vault.TempSuffix); err != nil {
+		t.Fatalf("WriteFileAtomic(persona) error = %v", err)
+	}
+	at := time.Date(2026, 4, 28, 10, 30, 0, 0, time.UTC)
+	result, err := h.ProposePersonaUpdate(model.PersonaUpdateProposal{
+		Field:         "education.major",
+		ProposedValue: "电子商务",
+		Evidence:      "用户说：我是大连理工大学学生，专业电子商务",
+		Reason:        "这是用户长期教育背景事实",
+		Confidence:    "high",
+		Source:        "external_agent",
+		ObservedAt:    at,
+	}, at)
+	if err != nil {
+		t.Fatalf("ProposePersonaUpdate() error = %v", err)
+	}
+	if _, err := h.ApproveDraft(result.DraftID, at.Add(time.Minute)); err != nil {
+		t.Fatalf("ApproveDraft(persona) error = %v", err)
+	}
+	if _, err := h.ApplyDraft(result.DraftID, at.Add(2*time.Minute)); err != nil {
+		t.Fatalf("ApplyDraft(persona) error = %v", err)
+	}
+
+	after, err := os.ReadFile(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(persona after) error = %v", err)
+	}
+	got := string(after)
+	if strings.Count(got, "## Applied Persona Updates") != 1 {
+		t.Fatalf("persona content should keep one Applied Persona Updates heading:\n%s", got)
+	}
+	if strings.Index(got, "proposed_value: 电子商务") > strings.Index(got, "## Freeform Notes") {
+		t.Fatalf("new persona update should be inserted before next section:\n%s", got)
+	}
+}
+
 func TestApplyDraftUpsertsProgressRowInsteadOfAppendingDuplicateBlock(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := config.Default(workDir)

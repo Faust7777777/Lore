@@ -28,7 +28,7 @@ func TestDefaultManagedTemplatesIncludeRuntimeAgentDocs(t *testing.T) {
 		"## Writing Boundaries",
 		"## Persona Update Candidates",
 		"draft -> review -> apply",
-		"Current MCP v0 is read-only",
+		"Current MCP exposes read tools and narrow proposal intake",
 		"persona_update_propose",
 		"Proposal creation is not an apply",
 		"Persona Update Candidate:",
