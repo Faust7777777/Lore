@@ -493,6 +493,223 @@ func TestApplyPersonaUpdateDraftRejectsInvalidPayload(t *testing.T) {
 	}
 }
 
+func TestApplyPersonaUpdateDraftRejectsNonPersonaTarget(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+	noteRel := filepath.Join("03-notes", "forged.md")
+	noteAbs := filepath.Join(cfg.Paths.VaultRoot, noteRel)
+	before := []byte("# forged note\n")
+	if _, err := vault.WriteFileAtomic(noteAbs, before, cfg.Vault.TempSuffix); err != nil {
+		t.Fatalf("WriteFileAtomic(note) error = %v", err)
+	}
+	_, baseVersion, err := vault.ReadFileWithHash(noteAbs)
+	if err != nil {
+		t.Fatalf("ReadFileWithHash(note) error = %v", err)
+	}
+	at := time.Date(2026, 4, 28, 10, 30, 0, 0, time.UTC)
+	payload, err := json.Marshal(model.PersonaUpdateProposal{
+		Field:         "education.major",
+		ProposedValue: "电子商务",
+		Evidence:      "用户说：我是大连理工大学学生，专业电子商务",
+		Reason:        "这是用户长期教育背景事实",
+		Confidence:    "high",
+		Source:        "external_agent",
+		ObservedAt:    at,
+	})
+	if err != nil {
+		t.Fatalf("Marshal(persona proposal) error = %v", err)
+	}
+	draft := model.Draft{
+		ID:    "draft-forged-persona-target",
+		Kind:  model.DraftKindPersonaUpdate,
+		State: model.DraftApproved,
+		Target: model.DocumentRef{
+			Path:        noteRel,
+			Class:       model.DocClassNote,
+			BaseVersion: baseVersion,
+		},
+		Title:           "Forged persona target",
+		Summary:         "must not write note",
+		ProposedContent: string(payload),
+		CreatedAt:       at,
+		UpdatedAt:       at,
+	}
+	if err := st.Drafts().SaveDraft(draft); err != nil {
+		t.Fatalf("SaveDraft() error = %v", err)
+	}
+
+	if _, err := h.ApplyDraft(draft.ID, at.Add(time.Minute)); !errors.Is(err, ErrInvalidDraftPatch) {
+		t.Fatalf("ApplyDraft(forged persona target) error = %v, want ErrInvalidDraftPatch", err)
+	}
+	after, err := os.ReadFile(noteAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(note after) error = %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("forged persona apply changed note:\nbefore=%s\nafter=%s", before, after)
+	}
+	updated, err := st.Drafts().GetDraft(draft.ID)
+	if err != nil {
+		t.Fatalf("GetDraft() error = %v", err)
+	}
+	if updated.State != model.DraftApproved {
+		t.Fatalf("updated.State = %q, want approved after invalid target", updated.State)
+	}
+}
+
+func TestApplyPersonaUpdateDraftRejectsPersonaPathWithWrongClass(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+	personaAbs := filepath.Join(cfg.Paths.VaultRoot, cfg.Vault.ManagedCore.Persona)
+	before, err := os.ReadFile(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(persona before) error = %v", err)
+	}
+	_, baseVersion, err := vault.ReadFileWithHash(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFileWithHash(persona) error = %v", err)
+	}
+	at := time.Date(2026, 4, 28, 10, 30, 0, 0, time.UTC)
+	payload, err := json.Marshal(model.PersonaUpdateProposal{
+		Field:         "education.major",
+		ProposedValue: "电子商务",
+		Evidence:      "用户说：我是大连理工大学学生，专业电子商务",
+		Reason:        "这是用户长期教育背景事实",
+		Confidence:    "high",
+		Source:        "external_agent",
+		ObservedAt:    at,
+	})
+	if err != nil {
+		t.Fatalf("Marshal(persona proposal) error = %v", err)
+	}
+	draft := model.Draft{
+		ID:    "draft-wrong-persona-class",
+		Kind:  model.DraftKindPersonaUpdate,
+		State: model.DraftApproved,
+		Target: model.DocumentRef{
+			Path:        cfg.Vault.ManagedCore.Persona,
+			Class:       model.DocClassNote,
+			BaseVersion: baseVersion,
+		},
+		Title:           "Wrong persona class",
+		Summary:         "must not write persona",
+		ProposedContent: string(payload),
+		CreatedAt:       at,
+		UpdatedAt:       at,
+	}
+	if err := st.Drafts().SaveDraft(draft); err != nil {
+		t.Fatalf("SaveDraft() error = %v", err)
+	}
+
+	if _, err := h.ApplyDraft(draft.ID, at.Add(time.Minute)); !errors.Is(err, ErrInvalidDraftPatch) {
+		t.Fatalf("ApplyDraft(wrong class) error = %v, want ErrInvalidDraftPatch", err)
+	}
+	after, err := os.ReadFile(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(persona after) error = %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("wrong-class persona apply changed persona:\nbefore=%s\nafter=%s", before, after)
+	}
+	updated, err := st.Drafts().GetDraft(draft.ID)
+	if err != nil {
+		t.Fatalf("GetDraft() error = %v", err)
+	}
+	if updated.State != model.DraftApproved {
+		t.Fatalf("updated.State = %q, want approved after invalid target class", updated.State)
+	}
+}
+
+func TestApplyPersonaUpdateDraftRejectsInvalidConfidence(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+	personaAbs := filepath.Join(cfg.Paths.VaultRoot, cfg.Vault.ManagedCore.Persona)
+	before, err := os.ReadFile(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(persona before) error = %v", err)
+	}
+	_, baseVersion, err := vault.ReadFileWithHash(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFileWithHash(persona) error = %v", err)
+	}
+	at := time.Date(2026, 4, 28, 10, 30, 0, 0, time.UTC)
+	payload, err := json.Marshal(model.PersonaUpdateProposal{
+		Field:         "education.major",
+		ProposedValue: "电子商务",
+		Evidence:      "用户说：我是大连理工大学学生，专业电子商务",
+		Reason:        "这是用户长期教育背景事实",
+		Confidence:    "certain",
+		Source:        "external_agent",
+		ObservedAt:    at,
+	})
+	if err != nil {
+		t.Fatalf("Marshal(persona proposal) error = %v", err)
+	}
+	draft := model.Draft{
+		ID:    "draft-invalid-confidence",
+		Kind:  model.DraftKindPersonaUpdate,
+		State: model.DraftApproved,
+		Target: model.DocumentRef{
+			Path:        cfg.Vault.ManagedCore.Persona,
+			Class:       model.DocClassPersona,
+			BaseVersion: baseVersion,
+		},
+		Title:           "Invalid confidence",
+		Summary:         "must not write persona",
+		ProposedContent: string(payload),
+		CreatedAt:       at,
+		UpdatedAt:       at,
+	}
+	if err := st.Drafts().SaveDraft(draft); err != nil {
+		t.Fatalf("SaveDraft() error = %v", err)
+	}
+
+	if _, err := h.ApplyDraft(draft.ID, at.Add(time.Minute)); !errors.Is(err, ErrInvalidDraftPatch) {
+		t.Fatalf("ApplyDraft(invalid confidence) error = %v, want ErrInvalidDraftPatch", err)
+	}
+	after, err := os.ReadFile(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(persona after) error = %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("invalid-confidence persona apply changed persona:\nbefore=%s\nafter=%s", before, after)
+	}
+	updated, err := st.Drafts().GetDraft(draft.ID)
+	if err != nil {
+		t.Fatalf("GetDraft() error = %v", err)
+	}
+	if updated.State != model.DraftApproved {
+		t.Fatalf("updated.State = %q, want approved after invalid confidence", updated.State)
+	}
+}
+
 func TestApplyPersonaUpdateDraftInsertsIntoExistingSection(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := config.Default(workDir)

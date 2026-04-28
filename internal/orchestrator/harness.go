@@ -291,6 +291,9 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 	if draft.State != model.DraftApproved {
 		return model.Draft{}, ErrDraftNotReady
 	}
+	if err := h.validateDraftTarget(draft); err != nil {
+		return model.Draft{}, err
+	}
 
 	targetAbs := filepath.Join(h.cfg.Paths.VaultRoot, draft.Target.Path)
 	current, hash, err := vault.ReadFileWithHash(targetAbs)
@@ -339,6 +342,16 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 		},
 	})
 	return applied, nil
+}
+
+func (h *Harness) validateDraftTarget(draft model.Draft) error {
+	switch draft.Kind {
+	case model.DraftKindPersonaUpdate:
+		if !sameRelPath(draft.Target.Path, h.cfg.Vault.ManagedCore.Persona) || draft.Target.Class != model.DocClassPersona {
+			return ErrInvalidDraftPatch
+		}
+	}
+	return nil
 }
 
 func (h *Harness) WriteLowRiskNote(relPath string, content []byte, overwrite bool, at time.Time) (model.VaultDocument, error) {
@@ -568,6 +581,11 @@ func appendPersonaUpdateRecord(current []byte, draft model.Draft) ([]byte, error
 	proposal.Confidence = strings.TrimSpace(proposal.Confidence)
 	proposal.Source = strings.TrimSpace(proposal.Source)
 	if proposal.Field == "" || proposal.ProposedValue == "" || proposal.Evidence == "" || proposal.Reason == "" || proposal.Confidence == "" || proposal.Source == "" || proposal.ObservedAt.IsZero() {
+		return nil, ErrInvalidDraftPatch
+	}
+	switch proposal.Confidence {
+	case "low", "medium", "high":
+	default:
 		return nil, ErrInvalidDraftPatch
 	}
 
