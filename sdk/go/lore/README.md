@@ -1,6 +1,6 @@
 # Lore Go SDK v0
 
-Experimental Go SDK for the Lore MCP read-only surface.
+Experimental Go SDK for Lore MCP typed read-only methods, with a low-level raw MCP escape hatch.
 
 The SDK talks to Lore by starting `lore mcp <workdir>` over stdio JSON-RPC. It does not import Lore `internal/*` packages and does not bypass runtime governance.
 
@@ -8,8 +8,9 @@ The SDK talks to Lore by starting `lore mcp <workdir>` over stdio JSON-RPC. It d
 
 - Version: v0, in-repository module. See `CHANGELOG.md` for the current unreleased preview notes.
 - Transport: stdio only.
-- Surface: read-only MCP tools only.
-- Writable tools, shell execution, TUI behavior, and runtime policy are not part of this SDK.
+- Surface: typed methods cover read-only MCP tools only.
+- `CallTool` exposes the live raw MCP tool surface and may include proposal-intake tools depending on the Lore server version.
+- Direct vault-write typed methods, shell execution, TUI behavior, draft approve/apply, and runtime policy changes are not part of this SDK.
 
 ## Install
 
@@ -65,7 +66,7 @@ fmt.Println(resolved.Status)
 - `ContextPack(ctx, ContextPackRequest)`
 - `DocClassify(ctx, DocClassifyRequest)`
 
-A lower-level `CallTool(ctx, name, arguments, out)` is available for read-only forward-compatible use.
+A lower-level `CallTool(ctx, name, arguments, out)` is available for raw MCP calls. Unlike the typed methods, it is not restricted to the SDK v0 read-only contract; inspect the live server `tools/list` before calling server-version-specific proposal-intake tools.
 
 ## Argument Contract
 

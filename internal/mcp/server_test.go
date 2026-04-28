@@ -64,6 +64,30 @@ func TestSDKFacingToolContractSnapshot(t *testing.T) {
 	}
 }
 
+func TestMCPV1ExposesOnlyReadAndPersonaProposalTools(t *testing.T) {
+	tools := toolDefinitionsByName(t)
+	allowed := []string{
+		"managed_status",
+		"system_doc_get",
+		"vault_read",
+		"vault_list",
+		"vault_search_text",
+		"vault_resolve",
+		"vault_backlinks",
+		"doc_classify",
+		"context_pack",
+		"persona_update_propose",
+	}
+	if len(tools) != len(allowed) {
+		t.Fatalf("tools/list tool count = %d, want %d allowed tools: %#v", len(tools), len(allowed), toolNames(tools))
+	}
+	for _, name := range allowed {
+		if _, ok := tools[name]; !ok {
+			t.Fatalf("tools/list missing allowed tool %s; got %#v", name, toolNames(tools))
+		}
+	}
+}
+
 func TestProposalToolContract(t *testing.T) {
 	tools := toolDefinitionsByName(t)
 	tool, ok := tools["persona_update_propose"]
@@ -417,6 +441,14 @@ func toolDefinitionsByName(t *testing.T) map[string]map[string]any {
 		out[name] = tool
 	}
 	return out
+}
+
+func toolNames(tools map[string]map[string]any) []string {
+	names := make([]string, 0, len(tools))
+	for name := range tools {
+		names = append(names, name)
+	}
+	return names
 }
 
 type sdkToolContractSnapshot struct {
