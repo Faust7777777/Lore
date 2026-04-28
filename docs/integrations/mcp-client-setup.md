@@ -22,6 +22,8 @@ MCP v0 is read-only. The v1 direction is staged: read + proposal intake first, t
    lore bootstrap C:\path\to\lore-workdir
    ```
 
+   `lore bootstrap` creates missing managed core documents, but it does not overwrite existing `agent.md`, `identity.md`, persona, system, or progress documents. Existing workdirs should be manually or otherwise governed-updated to the current `agent.md` and `identity.md` templates before external agent onboarding.
+
 3. Prefer absolute paths in external client config. Many MCP clients launch servers from their own working directory.
 4. If process auth is enabled, set matching keys:
 
@@ -76,6 +78,8 @@ After connecting, an external agent should first read the workspace operating ma
 `agent.md` is the external-first shared operating manual. It tells external agents how to work through Lore, which documents are governed, and how to hand off changes that require Lore review.
 
 Do not default-read `identity.md` for external onboarding. `identity.md` is Lore's local self identity; an external agent must not adopt it as its own identity.
+
+For existing workdirs, confirm `agent.md` contains the current external-first operating manual. Bootstrapping does not replace an older `agent.md` that already exists.
 
 When task-relevant, use additional read tools:
 

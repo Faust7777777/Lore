@@ -26,6 +26,7 @@ Not changed:
 - `agent.md` is now the external-first shared agent operating manual.
 - `identity.md` remains Lore self identity and is not default onboarding material for external agents.
 - External agents should read `system_doc_get("agent")` first after connecting.
+- Existing workdirs need a manual or governed template update because `lore bootstrap` creates missing core docs but does not overwrite existing ones.
 - MCP v0 remains read-only.
 - MCP v1 direction is staged: read + proposal intake first, low-risk write later.
 - The first L1 proposal tool should be `persona_update_propose`, not generic `proposal_submit`.
@@ -38,6 +39,7 @@ Not changed:
 - Confirm the new `agent.md` template is safe for external agents and does not define Lore self identity.
 - Confirm `identity.md` explicitly says it is for local Lore self identity and not default external onboarding.
 - Confirm the external MCP doc still states current v0 is read-only and does not imply `persona_update_propose` exists yet.
+- Confirm the external MCP doc warns that existing workdirs may still have old `agent.md` / `identity.md` content because bootstrap does not overwrite managed core docs.
 - Confirm the ADR orders `persona_update_propose` before MCP `vault_write_low`.
 - Confirm `vault_write_low` remains L2 direct write and is not described as returning `draft_created`.
 - Confirm no MCP shell, generic workspace write, draft approve/apply, or governed direct write is introduced.
