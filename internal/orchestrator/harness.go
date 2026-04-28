@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -158,6 +159,84 @@ func (h *Harness) ObserveDocumentChange(relPath string, content []byte, at time.
 		},
 	})
 	return draft, nil
+}
+
+func (h *Harness) ProposePersonaUpdate(proposal model.PersonaUpdateProposal, at time.Time) (model.PersonaUpdateProposalResult, error) {
+	proposal.Field = strings.TrimSpace(proposal.Field)
+	proposal.CurrentValue = strings.TrimSpace(proposal.CurrentValue)
+	proposal.ProposedValue = strings.TrimSpace(proposal.ProposedValue)
+	proposal.Evidence = strings.TrimSpace(proposal.Evidence)
+	proposal.Reason = strings.TrimSpace(proposal.Reason)
+	proposal.Confidence = strings.TrimSpace(proposal.Confidence)
+	proposal.Source = strings.TrimSpace(proposal.Source)
+	if proposal.Field == "" || proposal.ProposedValue == "" || proposal.Evidence == "" || proposal.Reason == "" || proposal.Confidence == "" || proposal.Source == "" || proposal.ObservedAt.IsZero() {
+		return model.PersonaUpdateProposalResult{}, fmt.Errorf("orchestrator: persona update proposal requires field, proposed_value, evidence, reason, confidence, source, and observed_at")
+	}
+	switch proposal.Confidence {
+	case "low", "medium", "high":
+	default:
+		return model.PersonaUpdateProposalResult{}, fmt.Errorf("orchestrator: persona update proposal confidence must be low, medium, or high")
+	}
+
+	targetPath := h.cfg.Vault.ManagedCore.Persona
+	targetAbs := filepath.Join(h.cfg.Paths.VaultRoot, targetPath)
+	_, baseVersion, err := vault.ReadFileWithHash(targetAbs)
+	if err != nil {
+		return model.PersonaUpdateProposalResult{}, err
+	}
+	payload, err := json.MarshalIndent(proposal, "", "  ")
+	if err != nil {
+		return model.PersonaUpdateProposalResult{}, err
+	}
+
+	draft := model.Draft{
+		ID:    fmt.Sprintf("draft-%d", at.UnixNano()),
+		Kind:  model.DraftKindPersonaUpdate,
+		State: model.DraftPendingReview,
+		Target: model.DocumentRef{
+			Path:        targetPath,
+			Class:       model.DocClassPersona,
+			BaseVersion: baseVersion,
+		},
+		Title:           "Persona update proposal: " + proposal.Field,
+		Summary:         fmt.Sprintf("Propose persona field %s = %s. Proposal creation is not apply; the persona document is unchanged until reviewed and applied by Lore.", proposal.Field, proposal.ProposedValue),
+		ProposedContent: string(payload),
+		EvidenceRefs:    []string{proposal.Evidence},
+		CreatedAt:       at,
+		UpdatedAt:       at,
+	}
+
+	if err := h.store.Drafts().SaveDraft(draft); err != nil {
+		return model.PersonaUpdateProposalResult{}, err
+	}
+	if err := h.broker.Publish(context.Background(), hruntime.Event{
+		ID:         draft.ID,
+		Type:       hruntime.EventDraftCreated,
+		Source:     "persona_update_propose",
+		OccurredAt: at,
+		Payload:    draft,
+	}); err != nil {
+		return model.PersonaUpdateProposalResult{}, err
+	}
+	h.recordAudit(model.AuditRecord{
+		ID:            auditID("persona-update-proposed", at),
+		Kind:          model.AuditDraftCreated,
+		CorrelationID: draft.ID,
+		Actor:         "external_agent",
+		Target:        draft.Target.Path,
+		OccurredAt:    at,
+		Metadata: map[string]string{
+			"draft_id": draft.ID,
+			"field":    proposal.Field,
+			"source":   proposal.Source,
+		},
+	})
+	return model.PersonaUpdateProposalResult{
+		Status:         "draft_created",
+		DraftID:        draft.ID,
+		Target:         draft.Target.Path,
+		ReviewRequired: true,
+	}, nil
 }
 
 func (h *Harness) ListDrafts() ([]model.Draft, error) {

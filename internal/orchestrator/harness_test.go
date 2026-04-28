@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -218,6 +219,86 @@ func TestBootstrapAndDraftLifecycle(t *testing.T) {
 		if !found {
 			t.Fatalf("missing %s audit record with correlation_id %q in %+v", kind, draft.ID, records)
 		}
+	}
+}
+
+func TestProposePersonaUpdateCreatesPendingDraftWithoutWritingPersona(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+	personaAbs := filepath.Join(cfg.Paths.VaultRoot, cfg.Vault.ManagedCore.Persona)
+	before, err := os.ReadFile(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(persona before) error = %v", err)
+	}
+	at := time.Date(2026, 4, 28, 10, 30, 0, 0, time.UTC)
+
+	result, err := h.ProposePersonaUpdate(model.PersonaUpdateProposal{
+		Field:         "education.major",
+		CurrentValue:  "",
+		ProposedValue: "电子商务",
+		Evidence:      "用户说：我是大连理工大学学生，专业电子商务",
+		Reason:        "这是用户长期教育背景事实",
+		Confidence:    "high",
+		Source:        "external_agent",
+		ObservedAt:    at,
+	}, at)
+	if err != nil {
+		t.Fatalf("ProposePersonaUpdate() error = %v", err)
+	}
+	if result.Status != "draft_created" || result.DraftID == "" || result.Target != cfg.Vault.ManagedCore.Persona || !result.ReviewRequired {
+		t.Fatalf("result = %+v, want draft_created review-required persona target", result)
+	}
+	after, err := os.ReadFile(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(persona after) error = %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("persona document changed on proposal creation:\nbefore=%s\nafter=%s", before, after)
+	}
+
+	draft, err := st.Drafts().GetDraft(result.DraftID)
+	if err != nil {
+		t.Fatalf("GetDraft(%s) error = %v", result.DraftID, err)
+	}
+	if draft.Kind != model.DraftKindPersonaUpdate || draft.State != model.DraftPendingReview {
+		t.Fatalf("draft kind/state = %s/%s, want persona_update/pending_review", draft.Kind, draft.State)
+	}
+	if draft.Target.Path != cfg.Vault.ManagedCore.Persona || draft.Target.Class != model.DocClassPersona || draft.Target.BaseVersion == "" {
+		t.Fatalf("draft target = %+v, want persona target with base version", draft.Target)
+	}
+	if !strings.Contains(draft.Summary, "Proposal creation is not apply") {
+		t.Fatalf("draft summary = %q, want no-apply warning", draft.Summary)
+	}
+	var payload model.PersonaUpdateProposal
+	if err := json.Unmarshal([]byte(draft.ProposedContent), &payload); err != nil {
+		t.Fatalf("decode ProposedContent error = %v\n%s", err, draft.ProposedContent)
+	}
+	if payload.Field != "education.major" || payload.ProposedValue != "电子商务" || payload.Confidence != "high" {
+		t.Fatalf("payload = %+v", payload)
+	}
+
+	records, err := st.Audit().ListAudit(10)
+	if err != nil {
+		t.Fatalf("ListAudit() error = %v", err)
+	}
+	found := false
+	for _, record := range records {
+		if record.Kind == model.AuditDraftCreated && record.CorrelationID == result.DraftID && record.Target == cfg.Vault.ManagedCore.Persona {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("missing draft-created audit record for %s in %+v", result.DraftID, records)
 	}
 }
 

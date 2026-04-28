@@ -16,8 +16,8 @@ Review owners:
 Lore currently has several working pieces, but their product boundaries have started to overlap:
 
 - Local Lore chat can use read tools, governed draft actions, `vault_write_low`, workspace tools, git tools, and optional shell confirmation.
-- MCP is currently read-only and exposes only `initialize`, `ping`, `tools/list`, and `tools/call` over stdio.
-- External agents can connect through MCP, but they only have a read-only path and no proposal or low-risk write path yet.
+- MCP started as read-only and exposes `initialize`, `ping`, `tools/list`, and `tools/call` over stdio.
+- External agents can connect through MCP. The first proposal-intake path is `persona_update_propose`; low-risk write is still deferred.
 - `agent.md` and `identity.md` both exist as managed core docs, but their intended audiences need to be frozen.
 - `DraftKindPersonaUpdate` exists, but persona update proposal/apply is not implemented end-to-end.
 - The daemon already scans vault changes and can trigger governed drafts for plan/progress flows.
@@ -63,7 +63,7 @@ Lore v1 uses four write levels:
 | Level | Name | Meaning | MCP v1 |
 | --- | --- | --- | --- |
 | L0 | Read | Read status, core docs, vault docs, search, resolve, backlinks, context packs | Allowed |
-| L1 | Proposal intake | Submit a proposal that creates a pending draft or review item; no vault write | Planned |
+| L1 | Proposal intake | Submit a proposal that creates a pending draft or review item; no vault write | Allowed for `persona_update_propose` |
 | L2 | Low-risk direct write | Write low-governance markdown notes through runtime validation and audit | Planned for MCP v1 |
 | L3 | Governed apply | Apply approved drafts to managed core, plans, execution docs, and other governed targets | Not exposed through MCP |
 
@@ -83,7 +83,7 @@ L3 remains local Lore/runtime controlled. MCP must not expose approve/apply for 
 Allowed in v1:
 
 - Existing L0 read tools.
-- L1 proposal tools, starting with a narrow `persona_update_propose`.
+- L1 `persona_update_propose`.
 - Later L2 `vault_write_low` for low-governance markdown notes, if the runtime accepts the path and document class.
 
 Forbidden in v1:
@@ -96,7 +96,7 @@ Forbidden in v1:
 - Applying approved drafts through MCP.
 - A generic `proposal_submit` tool before narrower proposal tools prove the model.
 
-The first proposal tool should be `persona_update_propose`, not a generic proposal API. It creates a `DraftKindPersonaUpdate` pending review and returns `draft_created`, `draft_id`, `target`, and `review_required: true`. It must not change the persona document by itself. Proposal creation is not persona apply.
+The first proposal tool is `persona_update_propose`, not a generic proposal API. It creates a `DraftKindPersonaUpdate` pending review and returns `draft_created`, `draft_id`, `target`, and `review_required: true`. It must not change the persona document by itself. Proposal creation is not persona apply.
 
 ## Shell Post-Scan Model
 

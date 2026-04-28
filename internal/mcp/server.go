@@ -9,7 +9,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
+	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/orchestrator"
 )
 
@@ -170,6 +172,21 @@ func (s *Server) callTool(name string, args map[string]any) (any, error) {
 		return s.harness.DocClassify(getString(args, "path")), nil
 	case "context_pack":
 		return s.harness.ContextPack(getTargetPathArg(args), getString(args, "task"), getInt(args, "limit", 6))
+	case "persona_update_propose":
+		observedAt, err := parseObservedAt(getString(args, "observed_at"))
+		if err != nil {
+			return nil, err
+		}
+		return s.harness.ProposePersonaUpdate(model.PersonaUpdateProposal{
+			Field:         getString(args, "field"),
+			CurrentValue:  getString(args, "current_value"),
+			ProposedValue: getString(args, "proposed_value"),
+			Evidence:      getString(args, "evidence"),
+			Reason:        getString(args, "reason"),
+			Confidence:    getString(args, "confidence"),
+			Source:        getString(args, "source"),
+			ObservedAt:    observedAt,
+		}, time.Now())
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -282,6 +299,20 @@ func getInt(args map[string]any, key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func parseObservedAt(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, fmt.Errorf("observed_at is required")
+	}
+	if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+		return parsed, nil
+	}
+	if parsed, err := time.Parse("2006-01-02", raw); err == nil {
+		return parsed, nil
+	}
+	return time.Time{}, fmt.Errorf("observed_at must be RFC3339 or YYYY-MM-DD")
 }
 
 func paramsOrObject(raw json.RawMessage) []byte {

@@ -1,17 +1,17 @@
 # External MCP Client Setup
 
-Lore exposes its read-only vault surface as a local MCP server. External agents can connect to it over stdio and call the same tool contract used by the Go SDK.
+Lore exposes its governed vault surface as a local MCP server. External agents can connect to it over stdio, use read tools, and submit narrow proposal-intake requests for Lore review.
 
 ## Scope
 
 - Transport: stdio only.
 - Command shape: `lore mcp [workdir]`. External client configs should pass an explicit workdir.
 - Protocol methods: `initialize`, `ping`, `tools/list`, `tools/call`.
-- Tool surface: read-only tools only. Lore does not expose shell execution, writable vault mutation, TUI actions, or runtime policy changes through MCP.
-- Contract source: `docs/contracts/mcp-sdk-tools-v0.json`.
-- Go SDK reference: `sdk/go/lore/README.md`.
+- Tool surface: read tools plus proposal intake. Lore does not expose shell execution, writable vault mutation, TUI actions, draft approve/apply, or runtime policy changes through MCP.
+- SDK v0 read-only contract source: `docs/contracts/mcp-sdk-tools-v0.json`.
+- Go SDK v0 reference: `sdk/go/lore/README.md`.
 
-MCP v0 is read-only. The v1 direction is staged: read + proposal intake first, then possible low-risk writing after separate review. Current external clients must not assume writable tools exist.
+The Go SDK v0 typed methods remain read-only. MCP proposal intake is available through `tools/call` for clients that use the raw tool surface. Current external clients must not assume direct vault-write tools exist.
 
 ## Prerequisites
 
@@ -92,9 +92,20 @@ When task-relevant, use additional read tools:
 
 If an external agent observes a stable user profile fact, education fact, long-term preference, or a conflict with the persona document, it must not edit `人物画像.md` directly.
 
-Planned MCP v1 proposal intake will add `persona_update_propose`. That tool will create a pending `persona_update` draft and return `draft_created`, `draft_id`, `target`, and `review_required: true`. Creating a proposal does not update the persona document and does not apply a draft.
+MCP proposal intake includes `persona_update_propose`. That tool creates a pending `persona_update` draft and returns `draft_created`, `draft_id`, `target`, and `review_required: true`. Creating a proposal does not update the persona document and does not apply a draft.
 
-Until that tool exists, or when a client cannot call it, the external agent should include this block in its final response:
+Arguments:
+
+- `field`
+- `current_value` (optional)
+- `proposed_value`
+- `evidence`
+- `reason`
+- `confidence`: `low`, `medium`, or `high`
+- `source`
+- `observed_at`: RFC3339 timestamp or `YYYY-MM-DD`
+
+When a client cannot call `persona_update_propose`, the external agent should include this block in its final response:
 
 ```text
 Persona Update Candidate:
@@ -109,7 +120,7 @@ Persona Update Candidate:
 - action: request_lore_review
 ```
 
-This fallback is a handoff to local Lore, not a write operation.
+Both `persona_update_propose` and this fallback are handoffs to local Lore. They are not persona writes and are not draft apply.
 
 ## Claude Desktop
 
@@ -217,11 +228,11 @@ Gemini CLI reads MCP server definitions from `settings.json` under `mcpServers`.
 }
 ```
 
-Keep `trust` false unless you have reviewed the exact tool surface. Lore is read-only, but the external client still controls whether to ask before tool execution.
+Keep `trust` false unless you have reviewed the exact tool surface. Lore does not expose direct vault-write MCP tools, but it does expose proposal intake, and the external client still controls whether to ask before tool execution.
 
 ## Available Tools
 
-The SDK-facing contract is frozen in `docs/contracts/mcp-sdk-tools-v0.json`.
+The SDK-facing read-only contract is frozen in `docs/contracts/mcp-sdk-tools-v0.json`. Raw MCP `tools/list` also includes proposal-intake tools that are not part of the Go SDK v0 typed read-only methods.
 
 | Tool | Purpose |
 | --- | --- |
@@ -234,6 +245,7 @@ The SDK-facing contract is frozen in `docs/contracts/mcp-sdk-tools-v0.json`.
 | `vault_backlinks` | Find backlinks to a vault document. |
 | `doc_classify` | Classify a vault document by current rules. |
 | `context_pack` | Build a read-only context pack for a task or target document. |
+| `persona_update_propose` | Create a pending persona_update draft for Lore review; does not write or apply the persona document. |
 
 Standard argument names should be preferred:
 
@@ -294,13 +306,13 @@ Confirm the client started the stdio process, then check client-specific MCP log
 
 Tool calls fail with bad arguments
 
-Compare the client's generated arguments against `docs/contracts/mcp-sdk-tools-v0.json`. For SDK-style calls, prefer `dir` and `target_path` over deprecated `path` aliases.
+For SDK-style read calls, compare the client's generated arguments against `docs/contracts/mcp-sdk-tools-v0.json` and prefer `dir` and `target_path` over deprecated `path` aliases. For proposal intake, inspect the live `tools/list` schema from the MCP server.
 
 ## Current Limits
 
 - No HTTP, SSE, or WebSocket transport in v0.
-- No writable MCP tools.
-- No proposal intake tool is exposed yet; use `Persona Update Candidate` text as the fallback.
+- No direct vault-write MCP tools.
+- Proposal intake can create pending drafts only; it cannot apply drafts or update governed documents.
 - No cross-client persistent memory is enabled by MCP. The external agent receives tool results in its own conversation context; Lore does not automatically share that context with other agents.
 - No MCP resources or prompts are exposed yet; tools are the only public surface.
 

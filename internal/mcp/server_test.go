@@ -47,9 +47,6 @@ func TestToolDefinitionsExposeSDKContract(t *testing.T) {
 func TestSDKFacingToolContractSnapshot(t *testing.T) {
 	tools := toolDefinitionsByName(t)
 	snapshot := loadSDKToolContractSnapshot(t)
-	if len(tools) != len(snapshot) {
-		t.Fatalf("tool count = %d, want snapshot count %d", len(tools), len(snapshot))
-	}
 	for _, want := range snapshot {
 		if _, ok := tools[want.Name]; !ok {
 			t.Fatalf("snapshot tool %s missing from tools/list", want.Name)
@@ -64,6 +61,47 @@ func TestSDKFacingToolContractSnapshot(t *testing.T) {
 				t.Fatalf("%s unexpectedly exposes forbidden property %s", want.Name, forbidden)
 			}
 		}
+	}
+}
+
+func TestProposalToolContract(t *testing.T) {
+	tools := toolDefinitionsByName(t)
+	tool, ok := tools["persona_update_propose"]
+	if !ok {
+		t.Fatal("tools/list missing persona_update_propose")
+	}
+	if description, _ := tool["description"].(string); !strings.Contains(description, "pending draft") || !strings.Contains(description, "does not write or apply") {
+		t.Fatalf("persona_update_propose description = %q, want proposal-only boundary", description)
+	}
+	assertExactToolProperties(t, tools, "persona_update_propose", []string{
+		"field",
+		"current_value",
+		"proposed_value",
+		"evidence",
+		"confidence",
+		"reason",
+		"source",
+		"observed_at",
+	})
+	assertRequired(t, tools, "persona_update_propose", []string{
+		"field",
+		"proposed_value",
+		"evidence",
+		"confidence",
+		"reason",
+		"source",
+		"observed_at",
+	})
+	for _, forbidden := range []string{"apply", "approve", "content", "overwrite", "path"} {
+		if _, ok := toolProperties(t, tools, "persona_update_propose")[forbidden]; ok {
+			t.Fatalf("persona_update_propose unexpectedly exposes %s", forbidden)
+		}
+	}
+	if _, ok := tools["vault_write_low"]; ok {
+		t.Fatal("tools/list exposes vault_write_low before L2 is approved")
+	}
+	if _, ok := tools["draft_apply"]; ok {
+		t.Fatal("tools/list exposes draft_apply")
 	}
 }
 
@@ -239,6 +277,95 @@ func TestServerToolsListAndCall(t *testing.T) {
 
 	if _, err := st.Audit().ListAudit(10); err != nil {
 		t.Fatalf("ListAudit() error = %v", err)
+	}
+}
+
+func TestPersonaUpdateProposeCreatesDraftOnly(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+	h, err := orchestrator.New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+	personaAbs := filepath.Join(cfg.Paths.VaultRoot, cfg.Vault.ManagedCore.Persona)
+	before, err := os.ReadFile(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(persona before) error = %v", err)
+	}
+
+	server := NewServer(h, "test")
+	result, err := server.callTool("persona_update_propose", map[string]any{
+		"field":          "education.major",
+		"current_value":  "",
+		"proposed_value": "电子商务",
+		"evidence":       "用户说：我是大连理工大学学生，专业电子商务",
+		"confidence":     "high",
+		"reason":         "这是用户长期教育背景事实",
+		"source":         "external_agent",
+		"observed_at":    "2026-04-28T10:30:00+08:00",
+	})
+	if err != nil {
+		t.Fatalf("persona_update_propose callTool() error = %v", err)
+	}
+	proposalResult, ok := result.(model.PersonaUpdateProposalResult)
+	if !ok {
+		t.Fatalf("result type = %T, want PersonaUpdateProposalResult", result)
+	}
+	if proposalResult.Status != "draft_created" || proposalResult.DraftID == "" || proposalResult.Target != cfg.Vault.ManagedCore.Persona || !proposalResult.ReviewRequired {
+		t.Fatalf("result = %+v, want draft_created review-required persona target", proposalResult)
+	}
+	after, err := os.ReadFile(personaAbs)
+	if err != nil {
+		t.Fatalf("ReadFile(persona after) error = %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("persona document changed on proposal creation")
+	}
+	draft, err := st.Drafts().GetDraft(proposalResult.DraftID)
+	if err != nil {
+		t.Fatalf("GetDraft(%s) error = %v", proposalResult.DraftID, err)
+	}
+	if draft.Kind != model.DraftKindPersonaUpdate || draft.State != model.DraftPendingReview {
+		t.Fatalf("draft kind/state = %s/%s, want persona_update/pending_review", draft.Kind, draft.State)
+	}
+	if !strings.Contains(draft.Summary, "Proposal creation is not apply") || !strings.Contains(draft.Summary, "persona document is unchanged") {
+		t.Fatalf("draft summary missing no-apply warning: %q", draft.Summary)
+	}
+}
+
+func TestPersonaUpdateProposeRejectsInvalidProposal(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+	h, err := orchestrator.New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+
+	server := NewServer(h, "test")
+	if _, err := server.callTool("persona_update_propose", map[string]any{
+		"field":          "education.major",
+		"proposed_value": "电子商务",
+		"evidence":       "用户说：我是大连理工大学学生，专业电子商务",
+		"confidence":     "high",
+		"reason":         "这是用户长期教育背景事实",
+		"source":         "external_agent",
+	}); err == nil || !strings.Contains(err.Error(), "observed_at") {
+		t.Fatalf("persona_update_propose missing observed_at error = %v, want observed_at error", err)
+	}
+	drafts, err := st.Drafts().ListDrafts()
+	if err != nil {
+		t.Fatalf("ListDrafts() error = %v", err)
+	}
+	if len(drafts) != 0 {
+		t.Fatalf("drafts = %+v, want no draft for invalid proposal", drafts)
 	}
 }
 

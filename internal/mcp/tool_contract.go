@@ -89,6 +89,21 @@ func toolContracts() []toolContract {
 				{Name: "limit", Type: "integer"},
 			},
 		},
+		{
+			Name:        "persona_update_propose",
+			Description: "Submit a persona update proposal for Lore review. Creates a pending draft; does not write or apply the persona document.",
+			Arguments: []toolArgument{
+				{Name: "field", Type: "string"},
+				{Name: "current_value", Type: "string"},
+				{Name: "proposed_value", Type: "string"},
+				{Name: "evidence", Type: "string"},
+				{Name: "confidence", Type: "string", Enum: []string{"low", "medium", "high"}},
+				{Name: "reason", Type: "string"},
+				{Name: "source", Type: "string"},
+				{Name: "observed_at", Type: "string"},
+			},
+			Required: []string{"field", "proposed_value", "evidence", "confidence", "reason", "source", "observed_at"},
+		},
 	}
 }
 

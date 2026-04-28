@@ -38,3 +38,21 @@ type Draft struct {
 	CreatedAt       time.Time   `json:"created_at"`
 	UpdatedAt       time.Time   `json:"updated_at"`
 }
+
+type PersonaUpdateProposal struct {
+	Field         string    `json:"field"`
+	CurrentValue  string    `json:"current_value,omitempty"`
+	ProposedValue string    `json:"proposed_value"`
+	Evidence      string    `json:"evidence"`
+	Reason        string    `json:"reason"`
+	Confidence    string    `json:"confidence"`
+	Source        string    `json:"source"`
+	ObservedAt    time.Time `json:"observed_at"`
+}
+
+type PersonaUpdateProposalResult struct {
+	Status         string `json:"status"`
+	DraftID        string `json:"draft_id"`
+	Target         string `json:"target"`
+	ReviewRequired bool   `json:"review_required"`
+}
