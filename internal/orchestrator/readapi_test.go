@@ -48,7 +48,7 @@ func TestManagedStatusAndContextPack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SystemDocGet(agent) error = %v", err)
 	}
-	if !strings.Contains(agentDoc.Content, "Lore Agent Instructions") {
+	if !strings.Contains(agentDoc.Content, "Workspace Agent Operating Manual") {
 		t.Fatalf("agent doc content missing expected heading: %s", agentDoc.Content)
 	}
 

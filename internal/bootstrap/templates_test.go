@@ -19,13 +19,20 @@ func TestDefaultManagedTemplatesIncludeRuntimeAgentDocs(t *testing.T) {
 		t.Fatalf("agent.Ref.Path = %q, want agent.md", agent.Ref.Path)
 	}
 	for _, want := range []string{
-		"# Lore Agent Instructions",
+		"# Workspace Agent Operating Manual",
+		"for external agents working through Lore MCP",
+		"This is not Lore self identity",
+		"system_doc_get(\"agent\")",
 		"## Mission",
 		"## Tool Strategy",
 		"## Writing Boundaries",
+		"## Persona Update Candidates",
 		"draft -> review -> apply",
-		"shell commands always require confirmation before execution",
-		"runtime still enforces path, doc-class, and governance boundaries",
+		"Current MCP v0 is read-only",
+		"persona_update_propose",
+		"Proposal creation is not an apply",
+		"Persona Update Candidate:",
+		"action: request_lore_review",
 	} {
 		if !strings.Contains(agent.Content, want) {
 			t.Fatalf("agent template missing %q:\n%s", want, agent.Content)
@@ -41,6 +48,10 @@ func TestDefaultManagedTemplatesIncludeRuntimeAgentDocs(t *testing.T) {
 	}
 	for _, want := range []string{
 		"# Lore Identity",
+		"## Audience",
+		"local Lore agent's self identity",
+		"External agents should not default-read this file",
+		"External agents should read `agent.md`",
 		"## Core Identity",
 		"## Collaboration Defaults",
 		"## Focus Areas",

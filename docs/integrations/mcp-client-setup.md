@@ -11,6 +11,8 @@ Lore exposes its read-only vault surface as a local MCP server. External agents 
 - Contract source: `docs/contracts/mcp-sdk-tools-v0.json`.
 - Go SDK reference: `sdk/go/lore/README.md`.
 
+MCP v0 is read-only. The v1 direction is staged: read + proposal intake first, then possible low-risk writing after separate review. Current external clients must not assume writable tools exist.
+
 ## Prerequisites
 
 1. Build or locate a `lore` executable that external clients can run.
@@ -57,6 +59,53 @@ Copyable example files live under `docs/integrations/examples/`:
 - `claude-code-project.mcp.json`
 - `opencode.jsonc`
 - `gemini-cli-settings.json`
+
+## External Agent Onboarding
+
+After connecting, an external agent should first read the workspace operating manual:
+
+```json
+{
+  "name": "system_doc_get",
+  "arguments": {
+    "name": "agent"
+  }
+}
+```
+
+`agent.md` is the external-first shared operating manual. It tells external agents how to work through Lore, which documents are governed, and how to hand off changes that require Lore review.
+
+Do not default-read `identity.md` for external onboarding. `identity.md` is Lore's local self identity; an external agent must not adopt it as its own identity.
+
+When task-relevant, use additional read tools:
+
+- `system_doc_get("persona")` for user long-term profile context.
+- `system_doc_get("system")` for workspace governance rules.
+- `system_doc_get("progress")` for managed document status.
+- `context_pack` for a task or target document.
+
+### Persona Update Handoff
+
+If an external agent observes a stable user profile fact, education fact, long-term preference, or a conflict with the persona document, it must not edit `人物画像.md` directly.
+
+Planned MCP v1 proposal intake will add `persona_update_propose`. That tool will create a pending `persona_update` draft and return `draft_created`, `draft_id`, `target`, and `review_required: true`. Creating a proposal does not update the persona document and does not apply a draft.
+
+Until that tool exists, or when a client cannot call it, the external agent should include this block in its final response:
+
+```text
+Persona Update Candidate:
+- field:
+- current_value:
+- proposed_value:
+- evidence:
+- reason:
+- confidence: low|medium|high
+- source: external_agent
+- observed_at:
+- action: request_lore_review
+```
+
+This fallback is a handoff to local Lore, not a write operation.
 
 ## Claude Desktop
 
@@ -247,6 +296,7 @@ Compare the client's generated arguments against `docs/contracts/mcp-sdk-tools-v
 
 - No HTTP, SSE, or WebSocket transport in v0.
 - No writable MCP tools.
+- No proposal intake tool is exposed yet; use `Persona Update Candidate` text as the fallback.
 - No cross-client persistent memory is enabled by MCP. The external agent receives tool results in its own conversation context; Lore does not automatically share that context with other agents.
 - No MCP resources or prompts are exposed yet; tools are the only public surface.
 

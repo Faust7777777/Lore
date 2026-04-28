@@ -30,7 +30,7 @@ Lore v1 uses a graded write model.
 
 MCP v1 evolves from read-only to read + graded write, but it must not expose shell execution and must not let external agents write governed documents directly.
 
-`agent.md` is the external agent operating manual. External agents should read it first after connecting to Lore. It must be safe for non-Lore agents to read and must not make them adopt Lore's self identity.
+`agent.md` is the external-first shared agent operating manual. External agents should read it first after connecting to Lore. Local Lore may also read it as shared workspace rules. It must be safe for non-Lore agents to read and must not make them adopt Lore's self identity.
 
 `identity.md` is Lore self identity. It describes the local Lore agent's name, role, temperament, and collaboration defaults. External agents should not be required to read it by default.
 
@@ -38,7 +38,7 @@ MCP v1 evolves from read-only to read + graded write, but it must not expose she
 
 | Document | v1 role | Default reader |
 | --- | --- | --- |
-| `agent.md` | External agent operating manual and shared workspace rules | External agents and local Lore |
+| `agent.md` | External-first agent operating manual and shared workspace rules | External agents and local Lore |
 | `identity.md` | Lore self identity and collaboration persona | Local Lore |
 | persona doc (`system_doc_get("persona")`) | User long-term profile | Local Lore; external agents only when task-relevant |
 | system doc (`system_doc_get("system")`) | Workspace governance rules | Local Lore; external agents when policy-relevant |
@@ -51,7 +51,8 @@ MCP v1 evolves from read-only to read + graded write, but it must not expose she
 - use `system_doc_get`, `context_pack`, and vault read/search/resolve tools before acting;
 - never directly edit governed documents;
 - submit profile or governance changes through Lore proposal/draft paths;
-- use low-risk writing only for low-governance markdown notes when explicitly allowed.
+- emit a structured `Persona Update Candidate` when proposal tooling is unavailable;
+- use low-risk writing only for low-governance markdown notes when explicitly allowed by a later MCP phase.
 
 `identity.md` should not contain instructions for external agents.
 
@@ -82,8 +83,8 @@ L3 remains local Lore/runtime controlled. MCP must not expose approve/apply for 
 Allowed in v1:
 
 - Existing L0 read tools.
-- L2 `vault_write_low` for low-governance markdown notes, if the runtime accepts the path and document class.
-- Later L1 proposal tools, starting with a narrow `persona_update_propose`.
+- L1 proposal tools, starting with a narrow `persona_update_propose`.
+- Later L2 `vault_write_low` for low-governance markdown notes, if the runtime accepts the path and document class.
 
 Forbidden in v1:
 
@@ -95,7 +96,7 @@ Forbidden in v1:
 - Applying approved drafts through MCP.
 - A generic `proposal_submit` tool before narrower proposal tools prove the model.
 
-The first proposal tool should be `persona_update_propose`, not a generic proposal API. It creates a `DraftKindPersonaUpdate` pending review and returns `draft_id` plus `review_required`. It must not change the persona document by itself.
+The first proposal tool should be `persona_update_propose`, not a generic proposal API. It creates a `DraftKindPersonaUpdate` pending review and returns `draft_created`, `draft_id`, `target`, and `review_required: true`. It must not change the persona document by itself. Proposal creation is not persona apply.
 
 ## Shell Post-Scan Model
 
@@ -127,12 +128,13 @@ CoreContext is not implemented by this ADR; it is a follow-up architecture item.
 ## Implementation Order
 
 1. Freeze this ADR and review it with Codex 5.3.
-2. Update managed templates so `agent.md` becomes an external operating manual and `identity.md` remains Lore self identity.
+2. Update managed templates so `agent.md` becomes an external-first operating manual and `identity.md` remains Lore self identity.
 3. Update external MCP docs to tell external agents to read `system_doc_get("agent")` first and not default to `identity`.
-4. Add MCP L2 `vault_write_low` only after contract tests and runtime rejection tests are ready.
-5. Add daemon/post-scan tests for low-risk changes and governed-document findings.
-6. Design `persona_update_propose` as the first L1 tool after persona draft payload/apply semantics are frozen.
-7. Implement CoreContext for local Lore after the document semantics and write levels are stable.
+4. Add MCP L1 `persona_update_propose` after its minimal draft payload is frozen. It may create a pending draft before full persona apply semantics are implemented, but must not claim the persona document has changed.
+5. Freeze persona update apply semantics and then support review/apply.
+6. Add MCP L2 `vault_write_low` only after contract tests and runtime rejection/audit tests are ready.
+7. Add daemon/post-scan tests for low-risk changes and governed-document findings.
+8. Implement CoreContext for local Lore after the document semantics and write levels are stable.
 
 ## Acceptance Criteria
 
@@ -141,7 +143,7 @@ CoreContext is not implemented by this ADR; it is a follow-up architecture item.
 - L2 low-risk MCP writes pass only through runtime validation and audit.
 - Governed paths remain blocked from MCP direct write.
 - Daemon/post-scan can detect out-of-band governed document changes and does not silently approve them.
-- Persona update proposal creates a draft only; applying it remains a user-reviewed local Lore/runtime action.
+- Persona update proposal creates a draft/review item only; applying it remains a user-reviewed local Lore/runtime action.
 
 ## Non-Goals
 
