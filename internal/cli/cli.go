@@ -119,6 +119,8 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 		return runDaemonCommand(args[1:], stdout, stderr)
 	case "draft":
 		return runDraftCommand(args[1:], stdout, stderr)
+	case "findings":
+		return runFindingsCommand(args[1:], stdout, stderr)
 	case "process-sink":
 		return runProcessSinkCommand(args[1:], stdout, stderr)
 	case "smoke":
@@ -145,6 +147,8 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 		return 0
 	case "import-codex-jsonl":
 		return runImportCodexJSONL(args[1:], stdout, stderr)
+	case "import-external-jsonl":
+		return runImportExternalJSONL(args[1:], stdout, stderr)
 	case "import-codex-appserver":
 		return runImportCodexAppServer(args[1:], stdout, stderr, version)
 	case "sync-codex-jsonl":
@@ -179,11 +183,13 @@ Commands:
   sessions             List or search explicit local session transcripts
   daemon               Run the vault watcher daemon / one-shot scan
   draft                Review and act on pending drafts
+  findings             Inspect and close post-scan governance findings
   process-sink         Inspect checkpoint and daily report status
   smoke                Run verification smoke checks (for example: smoke p0)
   models               List models from the configured LLM endpoint
   mcp [workdir]        Run the read-only MCP server over stdio
   import-codex-jsonl   Import a Codex session JSONL into checkpoints and daily reports
+  import-external-jsonl Import Lore external transcript JSONL into checkpoints and daily reports
   import-codex-appserver Import a Codex app-server thread into checkpoints and daily reports
   sync-codex-jsonl     Sync a Codex session JSONL only when the file changed
   attach-codex-jsonl   Poll a Codex session JSONL and keep syncing it
@@ -226,6 +232,37 @@ func runImportCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int 
 	fmt.Fprintf(
 		stdout,
 		"Codex JSONL imported\n- agent: %s\n- session: %s\n- checkpoints: %d\n- daily reports: %d\n",
+		result.AgentID,
+		result.SessionID,
+		len(result.Checkpoints),
+		len(result.Reports),
+	)
+	return 0
+}
+
+func runImportExternalJSONL(args []string, stdout io.Writer, stderr io.Writer) int {
+	params, workDir, err := parseExternalJSONLFlags("import-external-jsonl", args, stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	runtime, err := app.OpenRuntime(workDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "open runtime: %v\n", err)
+		return 1
+	}
+	defer closeRuntime(stderr, runtime, "import-external-jsonl")
+
+	result, err := runtime.ImportExternalTranscriptJSONL(params, time.Now())
+	if err != nil {
+		fmt.Fprintf(stderr, "import-external-jsonl: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(
+		stdout,
+		"External transcript JSONL imported\n- agent: %s\n- session: %s\n- checkpoints: %d\n- daily reports: %d\n",
 		result.AgentID,
 		result.SessionID,
 		len(result.Checkpoints),
@@ -769,6 +806,101 @@ func runDraftCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 }
 
+func runFindingsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: lore findings <list|resolve|ignore> [flags] [id]")
+		return 1
+	}
+
+	switch args[0] {
+	case "list":
+		workDir, limit, err := parseFindingsListFlags(args[1:], stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		defer closeRuntime(stderr, runtime, "findings list")
+		findings, err := runtime.ListFindings(limit)
+		if err != nil {
+			fmt.Fprintf(stderr, "findings list: %v\n", err)
+			return 1
+		}
+		renderFindingList(stdout, findings)
+		return 0
+	case "resolve", "ignore":
+		workDir, findingID, err := parseFindingActionFlags("findings "+args[0], args[1:], stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		defer closeRuntime(stderr, runtime, "findings "+args[0])
+
+		var finding model.Finding
+		switch args[0] {
+		case "resolve":
+			finding, err = runtime.ResolveFinding(findingID)
+		case "ignore":
+			finding, err = runtime.IgnoreFinding(findingID)
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "findings %s: %v\n", args[0], err)
+			return 1
+		}
+		renderFindingActionResult(stdout, args[0], finding)
+		return 0
+	default:
+		fmt.Fprintf(stderr, "findings: unknown subcommand %q\n", args[0])
+		return 1
+	}
+}
+
+func renderFindingList(stdout io.Writer, findings []model.Finding) {
+	fmt.Fprintln(stdout, "Findings")
+	fmt.Fprintln(stdout, "========")
+	if len(findings) == 0 {
+		fmt.Fprintln(stdout, "No findings.")
+		return
+	}
+	fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", "ID", "STATE", "SEVERITY", "KIND", "TARGET", "TITLE")
+	for _, finding := range findings {
+		fmt.Fprintf(
+			stdout,
+			"%s\t%s\t%s\t%s\t%s\t%s\n",
+			finding.ID,
+			string(finding.State),
+			string(finding.Severity),
+			string(finding.Kind),
+			finding.Target.Path,
+			clipOneLine(finding.Title, 72),
+		)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Next:")
+	fmt.Fprintln(stdout, "  lore findings resolve <id>")
+	fmt.Fprintln(stdout, "  lore findings ignore <id>")
+}
+
+func renderFindingActionResult(stdout io.Writer, action string, finding model.Finding) {
+	fmt.Fprintln(stdout, "Finding Updated")
+	fmt.Fprintln(stdout, "===============")
+	fmt.Fprintf(stdout, "Action: %s\n", action)
+	fmt.Fprintf(stdout, "ID: %s\n", finding.ID)
+	fmt.Fprintf(stdout, "State: %s\n", finding.State)
+	fmt.Fprintf(stdout, "Kind: %s\n", finding.Kind)
+	fmt.Fprintf(stdout, "Target: %s\n", finding.Target.Path)
+	fmt.Fprintf(stdout, "Title: %s\n", finding.Title)
+}
+
 func runDaemonCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "daemon: missing subcommand")
@@ -1005,6 +1137,40 @@ func parseAttachCodexJSONLFlags(args []string, stderr io.Writer) (app.ImportCode
 	return parseCodexJSONLFlags("attach-codex-jsonl", args, stderr, true, true)
 }
 
+func parseExternalJSONLFlags(name string, args []string, stderr io.Writer) (app.ImportExternalTranscriptJSONLParams, string, error) {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	inputPath := flags.String("input", "", "path to external agent transcript JSONL")
+	agentID := flags.String("agent", "", "override external agent id")
+	sessionID := flags.String("session", "", "override external session id")
+	windowSize := flags.Duration("window", 0, "override checkpoint window size, e.g. 30m")
+	skipRollup := flags.Bool("skip-rollup", false, "skip daily rollup after import")
+
+	if err := flags.Parse(args); err != nil {
+		return app.ImportExternalTranscriptJSONLParams{}, "", err
+	}
+	if strings.TrimSpace(*inputPath) == "" {
+		return app.ImportExternalTranscriptJSONLParams{}, "", fmt.Errorf("%s: --input is required", name)
+	}
+	if strings.TrimSpace(*workDir) == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return app.ImportExternalTranscriptJSONLParams{}, "", err
+		}
+		*workDir = cwd
+	}
+
+	return app.ImportExternalTranscriptJSONLParams{
+		InputPath:  *inputPath,
+		AgentID:    *agentID,
+		SessionID:  *sessionID,
+		Window:     *windowSize,
+		SkipRollup: *skipRollup,
+	}, filepath.Clean(*workDir), nil
+}
+
 func parseSessionsListFlags(args []string, stderr io.Writer) (string, int, error) {
 	flags := flag.NewFlagSet("sessions list", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -1186,6 +1352,41 @@ func parseDraftFlags(name string, args []string, stderr io.Writer, requireID boo
 	}
 
 	return filepath.Clean(*workDir), draftID, nil
+}
+
+func parseFindingsListFlags(args []string, stderr io.Writer) (string, int, error) {
+	flags := flag.NewFlagSet("findings list", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	limit := flags.Int("limit", 20, "maximum findings to show")
+	if err := flags.Parse(args); err != nil {
+		return "", 0, err
+	}
+	resolved, err := defaultWorkDir(*workDir)
+	if err != nil {
+		return "", 0, err
+	}
+	return resolved, *limit, nil
+}
+
+func parseFindingActionFlags(name string, args []string, stderr io.Writer) (string, string, error) {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	if err := flags.Parse(args); err != nil {
+		return "", "", err
+	}
+	remaining := flags.Args()
+	if len(remaining) == 0 || strings.TrimSpace(remaining[0]) == "" {
+		return "", "", fmt.Errorf("%s: finding id is required", name)
+	}
+	resolved, err := defaultWorkDir(*workDir)
+	if err != nil {
+		return "", "", err
+	}
+	return resolved, strings.TrimSpace(remaining[0]), nil
 }
 
 func isConsoleExit(value string) bool {

@@ -41,6 +41,10 @@ func (s workbenchRuntimeStub) RequestDraftRevision(id string) (model.Draft, erro
 	return model.Draft{}, nil
 }
 
+func (s workbenchRuntimeStub) SupersedeDraft(id string, update model.DraftSupersedeUpdate) (model.Draft, error) {
+	return model.Draft{}, nil
+}
+
 func (s workbenchRuntimeStub) ApplyDraft(id string) (model.Draft, error) {
 	return model.Draft{}, nil
 }
@@ -82,6 +86,10 @@ func (s workbenchRuntimeStub) ContextPack(targetPath string, task string, limit 
 
 func (s workbenchRuntimeStub) WriteLowRiskNote(relPath string, content string, overwrite bool) (model.VaultDocument, error) {
 	return model.VaultDocument{}, nil
+}
+
+func (s workbenchRuntimeStub) BuildCoreContext(limit int) (model.CoreContext, error) {
+	return model.CoreContext{}, nil
 }
 
 func (s workbenchRuntimeStub) WorkDirPath() string {

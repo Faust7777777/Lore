@@ -602,6 +602,50 @@ func TestRunImportCodexJSONL(t *testing.T) {
 	}
 }
 
+func TestRunImportExternalJSONL(t *testing.T) {
+	workDir := t.TempDir()
+	configureLLMTestEnv(t)
+	transcriptPath := filepath.Join(workDir, "external.jsonl")
+	content := "" +
+		"{\"type\":\"session_meta\",\"agent_id\":\"Claude Code\",\"session_id\":\"class-1\"}\n" +
+		"{\"timestamp\":\"2026-04-22T09:05:00+08:00\",\"role\":\"user\",\"text\":\"summarize the class\"}\n" +
+		"{\"timestamp\":\"2026-04-22T09:35:00+08:00\",\"role\":\"assistant\",\"text\":\"class summary ready\"}\n"
+	if err := os.WriteFile(transcriptPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(transcript) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"import-external-jsonl",
+		"--workdir", workDir,
+		"--input", transcriptPath,
+	}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "External transcript JSONL imported") {
+		t.Fatalf("expected import summary, got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "agent: claude-code") {
+		t.Fatalf("expected external agent summary, got %q", stdout.String())
+	}
+}
+
+func TestRunImportExternalJSONLMissingInput(t *testing.T) {
+	workDir := t.TempDir()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"import-external-jsonl", "--workdir", workDir}, &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "--input is required") {
+		t.Fatalf("expected missing input error, got %q", stderr.String())
+	}
+}
+
 func TestRunImportCodexJSONLMissingInput(t *testing.T) {
 	workDir := t.TempDir()
 	var stdout bytes.Buffer
@@ -751,6 +795,94 @@ func TestRunDraftReject(t *testing.T) {
 	if !strings.Contains(stdout.String(), "rejected") {
 		t.Fatalf("expected rejected output, got %q", stdout.String())
 	}
+}
+
+func TestRunFindingsListAndResolve(t *testing.T) {
+	workDir := t.TempDir()
+	findingID := seedFindingForCLI(t, workDir, "finding-cli-1")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"findings", "list", "--workdir", workDir}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	for _, want := range []string{"Findings", findingID, "open", "out_of_band_vault_write", "03-notes/outside.md"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("findings list output missing %q: %s", want, stdout.String())
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = run([]string{"findings", "resolve", "--workdir", workDir, findingID}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "resolved") {
+		t.Fatalf("expected resolved output, got %q", stdout.String())
+	}
+
+	runtime, err := openRuntimeForCLITest(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	finding, err := runtime.Store.Findings().GetFinding(findingID)
+	if err != nil {
+		t.Fatalf("GetFinding() error = %v", err)
+	}
+	if finding.State != model.FindingResolved {
+		t.Fatalf("finding.State = %q, want resolved", finding.State)
+	}
+	assertFindingStateAudit(t, runtime, findingID, model.FindingResolved)
+}
+
+func TestRunFindingsListShowsFullLongIDAndResolveAcceptsIt(t *testing.T) {
+	workDir := t.TempDir()
+	findingID := "governance_review_needed-03-notes-class-external-agent-generated-very-long-note-title-that-must-remain-copyable-1835347200000000000"
+	seedFindingForCLI(t, workDir, findingID)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"findings", "list", "--workdir", workDir}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), findingID) {
+		t.Fatalf("findings list should include full finding ID %q, got %q", findingID, stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = run([]string{"findings", "resolve", "--workdir", workDir, findingID}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code resolving long ID, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	runtime, err := openRuntimeForCLITest(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	assertFindingStateAudit(t, runtime, findingID, model.FindingResolved)
+}
+
+func TestRunFindingsIgnore(t *testing.T) {
+	workDir := t.TempDir()
+	findingID := seedFindingForCLI(t, workDir, "finding-cli-ignore")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"findings", "ignore", "--workdir", workDir, findingID}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "ignored") {
+		t.Fatalf("expected ignored output, got %q", stdout.String())
+	}
+	runtime, err := openRuntimeForCLITest(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	assertFindingStateAudit(t, runtime, findingID, model.FindingIgnored)
 }
 
 func TestRunProcessSinkDay(t *testing.T) {
@@ -913,6 +1045,51 @@ func seedDraftForCLI(t *testing.T, workDir string, content string) string {
 		t.Fatalf("ObserveDocumentChange() error = %v", err)
 	}
 	return draft.ID
+}
+
+func seedFindingForCLI(t *testing.T, workDir string, id string) string {
+	t.Helper()
+
+	runtime, err := openRuntimeForCLITest(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	now := time.Date(2026, 4, 28, 10, 0, 0, 0, time.UTC)
+	finding := model.Finding{
+		ID:       id,
+		Kind:     model.FindingOutOfBandVaultWrite,
+		State:    model.FindingOpen,
+		Severity: model.FindingSeverityInfo,
+		Target: model.DocumentRef{
+			Path:        "03-notes/outside.md",
+			Class:       model.DocClassNote,
+			BaseVersion: "hash-1",
+		},
+		Title:      "Out-of-band vault note change",
+		Summary:    "Created by CLI test",
+		Source:     "vault_daemon",
+		DetectedAt: now,
+		UpdatedAt:  now,
+	}
+	if err := runtime.Store.Findings().SaveFinding(finding); err != nil {
+		t.Fatalf("SaveFinding() error = %v", err)
+	}
+	return id
+}
+
+func assertFindingStateAudit(t *testing.T, runtime *app.Runtime, findingID string, state model.FindingState) {
+	t.Helper()
+
+	records, err := runtime.Store.Audit().ListAudit(10)
+	if err != nil {
+		t.Fatalf("ListAudit() error = %v", err)
+	}
+	for _, record := range records {
+		if record.Kind == model.AuditFindingStateChange && record.CorrelationID == findingID && record.Metadata["state"] == string(state) {
+			return
+		}
+	}
+	t.Fatalf("finding state-change audit state=%q not found for %s in %+v", state, findingID, records)
 }
 
 func writeMainTestPlan(t *testing.T, runtime *app.Runtime, absPath string, content string, modTime time.Time) {
