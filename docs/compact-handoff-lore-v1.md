@@ -13,7 +13,7 @@ When an external agent writes through Lore, the intended path is:
 ```text
 external agent output
 -> Lore proposal intake
--> Lore review/refine with core context
+-> Lore review/supersede with core context
 -> local/user approve
 -> Lore apply
 -> vault
@@ -31,20 +31,22 @@ Treat this as the newest alignment:
 - External MCP must not expose shell, generic workspace write/edit, draft approve/apply, or governed direct writes.
 - Any `.md` write through Lore should be proposed first and applied by Lore only after review.
 
-The older ADR text still mentions future MCP L2 `vault_write_low`. That is now stale and should be corrected before implementing note writing.
+The ADR and default `agent.md` template should stay aligned with this proposal-only external MCP direction.
 
 ## Read First
 
 Priority documents:
 
 - `docs/adr-lore-v1-architecture.md`
-  Current architecture ADR, but it is partially stale. It still mentions future MCP `vault_write_low`; update this to external proposal-only before continuing.
+  Current architecture ADR. It treats external MCP as read + proposal intake and keeps `vault_write_low` local/internal if retained.
 - `docs/integrations/mcp-client-setup.md`
   External MCP client setup. This is mostly aligned because it says there are no direct vault-write MCP tools.
 - `docs/review-handoff-codex53-persona-proposal-p1.md`
   Handoff for `persona_update_propose`.
 - `docs/review-handoff-codex53-persona-apply-p2.md`
   Handoff for local reviewed persona update apply.
+- `docs/review-handoff-codex53-out-of-band-post-scan.md`
+  Handoff for daemon post-scan handling of out-of-band vault writes.
 - `docs/contracts/mcp-sdk-tools-v0.json`
   SDK-facing read-only contract artifact. It intentionally remains read-only.
 - `sdk/go/lore/README.md`
@@ -60,11 +62,11 @@ Optional background:
 MCP surface:
 
 - `internal/mcp/tool_contract.go`
-  Canonical live MCP tool contracts. Current live tools are read tools plus `persona_update_propose`.
+  Canonical live MCP tool contracts. Current live tools are read tools plus proposal-intake tools such as `persona_update_propose` and `markdown_note_propose`.
 - `internal/mcp/server.go`
-  MCP server. `tools/call` routes `persona_update_propose` to the orchestrator.
+  MCP server. `tools/call` routes proposal-intake tools to the orchestrator.
 - `internal/mcp/server_test.go`
-  Important test: `TestMCPV1ExposesOnlyReadAndPersonaProposalTools` locks MCP to read tools + `persona_update_propose`. This prevents accidental shell/generic write/apply exposure.
+  Important test: `TestMCPV1ExposesOnlyReadAndProposalTools` locks MCP to read tools + narrow proposal intake. This prevents accidental shell/generic write/apply exposure.
 
 Persona proposal and apply:
 
@@ -78,11 +80,11 @@ Persona proposal and apply:
 Managed docs and prompts:
 
 - `internal/bootstrap/templates.go`
-  `agent.md` template is external-first shared operating manual. It still says low-risk writing may be added later; that should be revised to proposal-only for external agents.
+  `agent.md` template is external-first shared operating manual. It should state external MCP has read tools plus narrow proposal intake and no direct vault markdown write.
 - `internal/bootstrap/templates_test.go`
   Locks important `agent.md` / `identity.md` wording.
 - `internal/operatoragent/model.go`
-  Local Lore prompt construction. It preloads `agent.md` and `identity.md`; full CoreContext is not implemented yet.
+  Local Lore prompt construction. It preloads `agent.md` and `identity.md`; CoreContext MVP is injected as user-role vault context, `identity.md` remains outside CoreContext, and the existing working set remains a separate prompt section.
 
 Process sink and external session ingestion:
 
@@ -103,7 +105,15 @@ Local write/runtime:
 Daemon/post-scan:
 
 - `internal/app/daemon.go`
-  Vault watcher/post-scan path. This is the place for out-of-band external file writes to become governance findings later.
+  Vault watcher/post-scan path. It now scans all markdown docs: plan changes still create progress drafts, ordinary note changes create out-of-band audit records and open findings, and managed core/process-sink changes create governance audit records and open review-needed findings.
+- `internal/model/finding.go`
+  Persisted governance finding model for post-scan review visibility.
+- `internal/app/findings.go`
+  Local runtime finding list/resolve/ignore operations. State changes write audit records.
+- `internal/cli/cli.go`
+  Local `lore findings list|resolve|ignore` commands. These are not MCP tools.
+- `internal/store/store.go`
+  Store interface now includes `Findings()`; memory/json/sqlite stores persist findings.
 
 ## Current Completed Work
 
@@ -120,11 +130,20 @@ Recent relevant commits:
 
 Current implemented behavior:
 
+- External MCP can submit `markdown_note_propose` for ordinary markdown note candidates.
+- `markdown_note_propose` creates a pending `DraftKindMarkdownNoteWrite`; it does not write the target note.
+- Local/runtime apply can apply an approved markdown note draft to ordinary markdown notes only, with target/path/base-version validation.
+- Local/runtime supersede can create a revised markdown-note draft and mark the original proposal superseded.
+- CoreContext is now built for local Lore and injected into the operator agent as vault context, not as system instructions.
 - External MCP can read context and submit `persona_update_propose`.
 - `persona_update_propose` creates a pending `DraftKindPersonaUpdate`; it does not write `人物画像.md`.
 - Local/runtime apply can apply an approved persona update by appending a structured record under `## Applied Persona Updates`.
 - Persona apply requires target path to equal configured persona doc and target class to be `persona`.
 - MCP does not expose approve/apply, shell, generic write/edit, or `vault_write_low`.
+- Business smoke covers proposal -> no target write -> review/approve/apply -> note written -> MCP no-direct-write boundary.
+- Daemon post-scan now detects out-of-band ordinary note changes and governed/process-sink changes through audit records plus persisted open findings.
+- Local CLI can inspect and close findings with `lore findings list`, `lore findings resolve <id>`, and `lore findings ignore <id>`.
+- Lore external transcript JSONL import is available through `import-external-jsonl`; it writes process-sink checkpoints/reports through the same 30-minute window pipeline as Codex import.
 
 ## User's Intended Business Workflow
 
@@ -135,45 +154,28 @@ The workflow to preserve:
 2. External agent connects to Lore.
    Lore provides task context through MCP read tools: managed docs, vault search/read/resolve, context packs.
 3. External agent produces class notes, meeting notes, development summaries, or knowledge-base content.
-   If it wants the content written through Lore, it submits a proposal. Lore checks persona, weak points, system rules, current progress, and relevant notes. Lore then refines/reviews the proposal and applies it locally only after approval.
+   If it wants the content written through Lore, it submits a proposal. Lore checks persona, weak points, system rules, current progress, and relevant notes. Lore then creates a revised/superseding draft when needed and applies it locally only after approval.
 4. External agent may bypass Lore and write files directly with its own tools.
-   Lore cannot stop this. It should be handled later by post-scan detection, audit, conflict marking, or draft creation.
+   Lore cannot stop this. Current post-scan detects these changes, audits them, and persists open findings for later review. Future work can add richer conflict markers or automatic draft creation.
 
 ## Current Gaps
 
-The biggest missing feature is ordinary markdown note proposal intake.
+The biggest remaining feature is richer post-scan reconciliation beyond locally visible findings.
 
-Missing:
+Still missing:
 
-- `note_write_propose` or `markdown_note_propose`.
-- Draft kind/model for proposed markdown note writes.
-- Local reviewed apply for note-write drafts.
-- Draft refine/edit path so Lore can modify external-agent proposed content before approval.
-- Strong CoreContext for review/refine, especially persona, weak points, system rules, progress, and pending review state.
-- Post-scan governance findings for out-of-band external shell/file writes.
+- Richer post-scan reconciliation beyond open findings, such as conflict markers or draft creation for governed changes.
+- Incremental attach/sync mode for Lore external transcript JSONL. Current external transcript import is one-shot only.
 
 Potentially stale:
 
-- `docs/adr-lore-v1-architecture.md` still says future MCP L2 `vault_write_low`.
-- `internal/bootstrap/templates.go` still says low-governance note writing may be allowed later.
-- Older review handoff docs may mention external MCP `vault_write_low`; treat them as historical.
+- Older review handoff docs may mention external MCP `vault_write_low`; treat them as historical unless they were updated in the proposal-only pass.
 
 ## Recommended Next Steps
 
-1. Update architecture docs and templates.
-   Remove external MCP `vault_write_low` from v1 direction. State that external agents submit write proposals and Lore applies after review.
-2. Design `note_write_propose`.
-   Keep it narrow. Do not add generic `proposal_submit`.
-3. Implement note proposal creation.
-   Input should include target path or title, markdown content, evidence/source, reason, and observed/task context.
-4. Implement note draft apply.
-   Approved note drafts can write ordinary markdown notes only. Reject managed core docs, persona, progress, agent, identity, plans/execution docs, process-sink outputs, hidden paths, non-markdown files, and path traversal.
-5. Implement draft refine/edit.
-   Lore needs a way to modify proposed content after reading core context and before approval.
-6. Implement CoreContext for review/refine.
-   Lore should not rely on the model to remember to read persona/system/progress/weakness. Review flows need these summaries injected or explicitly loaded.
-7. Implement post-scan governance for out-of-band writes.
-   Treat external direct writes as findings, not as approved Lore writes.
+1. Run full verification and hand the feature line to Codex 5.3 for boundary review.
+2. Decide whether locally visible open findings are sufficient for v1, or whether conflict markers/draft creation are needed before release.
+3. If needed, add external transcript attach/sync after the one-shot Lore JSONL schema is reviewed.
 
 ## Roles
 
@@ -194,7 +196,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ".\scripts\verify.ps1
 Targeted checks for this line:
 
 ```powershell
-.\.tools\go\bin\go.exe test ./internal/mcp -run TestMCPV1ExposesOnlyReadAndPersonaProposalTools -count=1 -v
+.\.tools\go\bin\go.exe test ./internal/mcp -run TestMCPV1ExposesOnlyReadAndProposalTools -count=1 -v
 .\.tools\go\bin\go.exe test ./internal/orchestrator -run TestApplyPersonaUpdateDraft -count=1 -v
 ```
 
@@ -206,4 +208,4 @@ Before editing, run:
 git status --short
 ```
 
-At the time this handoff was written, the worktree was clean after `9d20045`.
+At the time this handoff was updated, the worktree contains the v1 external-agent governance feature line. Do not treat it as a single small diff.

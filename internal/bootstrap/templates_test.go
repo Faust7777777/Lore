@@ -27,15 +27,27 @@ func TestDefaultManagedTemplatesIncludeRuntimeAgentDocs(t *testing.T) {
 		"## Tool Strategy",
 		"## Writing Boundaries",
 		"## Persona Update Candidates",
+		"## Markdown Note Candidates",
 		"draft -> review -> apply",
 		"Current MCP exposes read tools and narrow proposal intake",
+		"External agents must submit durable markdown write requests",
+		"direct vault markdown write",
 		"persona_update_propose",
 		"Proposal creation is not an apply",
 		"Persona Update Candidate:",
+		"Markdown Note Candidate:",
 		"action: request_lore_review",
 	} {
 		if !strings.Contains(agent.Content, want) {
 			t.Fatalf("agent template missing %q:\n%s", want, agent.Content)
+		}
+	}
+	for _, forbidden := range []string{
+		"Low-risk writing may be added later",
+		"Low-governance note writing may be allowed later",
+	} {
+		if strings.Contains(agent.Content, forbidden) {
+			t.Fatalf("agent template contains forbidden external direct-write wording %q:\n%s", forbidden, agent.Content)
 		}
 	}
 

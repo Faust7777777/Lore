@@ -170,7 +170,7 @@ Important boundary:
 Current implementation status:
 
 - Codex JSONL and Codex app-server are supported.
-- Generic external-agent transcript format is not yet supported.
+- Lore external transcript JSONL has a one-shot import path through `lore import-external-jsonl`; incremental attach/sync remains future work.
 
 Future extension:
 
@@ -1733,7 +1733,7 @@ Codex 5.3 review should block if any of these are true:
 
 Non-blocking but should be tracked:
 
-- external transcript support is still Codex-specific.
+- Lore external transcript support is one-shot only; attach/sync remains Codex-specific.
 - note routing is initially target-path-required.
 - no advanced dedupe/classification.
 - no vector retrieval.
@@ -1906,7 +1906,7 @@ Questions that can remain open after MVP:
 
 1. Should weakness live in persona doc or a dedicated doc?
    - Recommendation: start with persona `## Weaknesses`; later split if needed.
-2. Should generic external transcript import be done before or after markdown proposals?
+2. Should Lore external transcript import be done before or after markdown proposals?
    - Recommendation: after markdown proposals.
 
 ## 15. Final Architecture Summary
