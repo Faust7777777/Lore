@@ -26,7 +26,7 @@ Primary surfaces today:
 
 - local runtime and daemon
 - CLI and TUI shells
-- read-only MCP surface
+- MCP intake surface (read + proposal-only; no direct write/apply/shell)
 - managed vault governance
 - process-sink ingest and rollup
 - external agent context and session ingest
@@ -37,7 +37,7 @@ directed.
 ## Architecture Rules
 
 - Keep governance, approval, and writeback enforcement in runtime code.
-- Keep MCP read-only.
+- Keep MCP read + proposal-only; no direct write/apply/shell.
 - Keep process-sink writes internal to the harness.
 - Managed docs and plan/execution docs stay on `draft -> review -> apply`.
 - Low-governance direct writes must still go through runtime checks.

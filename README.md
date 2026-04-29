@@ -11,7 +11,7 @@ Key product constraints already baked into the scaffold:
 
 - Managed mode requires five core documents: `00-系统/系统说明.md`, `0-排期/00-系统/文档进度总表.md`, `03-画像/人物画像.md`, `agent.md`, and `identity.md`
 - External agents do not write vault content directly
-- P0 exposes a read-only MCP subset for context access
+- P0 exposes a read + proposal-intake MCP surface (context reads and proposal tools; no direct write/apply/shell)
 - P0 includes manual `import-codex-jsonl` and `import-codex-appserver` paths for Codex sessions
 - P0 includes `sync-codex-jsonl` and `attach-codex-jsonl` for local JSONL-based incremental attach mode with watcher-first wakeups
 - `process-sink` writes are internal Harness writes with audit

@@ -188,7 +188,7 @@ Commands:
   process-sink         Inspect checkpoint and daily report status
   smoke                Run verification smoke checks (for example: smoke p0)
   models               List models from the configured LLM endpoint
-  mcp [workdir]        Run the read-only MCP server over stdio
+  mcp [workdir]        Run the MCP intake server over stdio (read + proposal, no direct write)
   import-codex-jsonl   Import a Codex session JSONL into checkpoints and daily reports
   import-external-jsonl Import Lore external transcript JSONL into checkpoints and daily reports
   import-codex-appserver Import a Codex app-server thread into checkpoints and daily reports
