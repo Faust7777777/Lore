@@ -28,8 +28,24 @@ type DemoP0BResult struct {
 	Report     model.DailyReport
 }
 
+// OpenRuntime initializes the Lore runtime using the default layered config
+// loader. It reads ~/.lore/config.json and <workDir>/.lore/config.json on top
+// of the built-in defaults. Production callers should use this entrypoint.
+//
+// Tests that must isolate themselves from the developer's real
+// ~/.lore/config.json should call OpenRuntimeWithConfigOptions with explicit
+// override paths, or use the helpers in internal/config/configtest.
 func OpenRuntime(workDir string) (*Runtime, error) {
-	cfg, diagnostics, err := config.Load(workDir)
+	return OpenRuntimeWithConfigOptions(workDir, config.LoadOptions{})
+}
+
+// OpenRuntimeWithConfigOptions initializes the Lore runtime with explicit
+// configuration loader options. This entrypoint exists so tests and
+// embedders can disable user-global / workspace layer files by pointing
+// the override paths at absent locations, avoiding pollution from the
+// developer's real configuration.
+func OpenRuntimeWithConfigOptions(workDir string, opts config.LoadOptions) (*Runtime, error) {
+	cfg, diagnostics, err := config.LoadWithOptions(workDir, opts)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}

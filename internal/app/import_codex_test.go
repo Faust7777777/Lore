@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"obsidian-harness/internal/adapter/codexjsonl"
+	"obsidian-harness/internal/config/configtest"
 	"obsidian-harness/internal/model"
 )
 
@@ -890,7 +891,7 @@ func readFile(t *testing.T, path string) string {
 
 func openRuntimeWithFakeProcessSinkSummarizer(t *testing.T, workDir string) (*Runtime, error) {
 	t.Helper()
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
 	if err != nil {
 		return nil, err
 	}

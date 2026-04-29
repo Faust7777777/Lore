@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"obsidian-harness/internal/app"
+	"obsidian-harness/internal/config/configtest"
 	"obsidian-harness/internal/sessionlog"
 )
 
 func TestSessionsListEmptyState(t *testing.T) {
+	configtest.IsolateHome(t)
 	workDir := t.TempDir()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -30,6 +32,7 @@ func TestSessionsListEmptyState(t *testing.T) {
 }
 
 func TestSessionsSearchEmptyState(t *testing.T) {
+	configtest.IsolateHome(t)
 	workDir := t.TempDir()
 	createCLISession(t, workDir, "lore-search-empty", "alpha topic", "beta answer")
 	var stdout bytes.Buffer
@@ -48,6 +51,7 @@ func TestSessionsSearchEmptyState(t *testing.T) {
 }
 
 func TestSessionsShowMissingTranscriptFails(t *testing.T) {
+	configtest.IsolateHome(t)
 	workDir := t.TempDir()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -65,6 +69,7 @@ func TestSessionsShowMissingTranscriptFails(t *testing.T) {
 }
 
 func TestSessionsCommandsRejectCorruptIndex(t *testing.T) {
+	configtest.IsolateHome(t)
 	workDir := t.TempDir()
 	root := createCLISession(t, workDir, "lore-corrupt-index-cli", "topic", "answer")
 	if err := os.WriteFile(filepath.Join(root, "index.json"), []byte(`{"version":`), 0o644); err != nil {
@@ -97,6 +102,7 @@ func TestSessionsCommandsRejectCorruptIndex(t *testing.T) {
 }
 
 func TestSessionsShowIsReadOnly(t *testing.T) {
+	configtest.IsolateHome(t)
 	workDir := t.TempDir()
 	root := createCLISession(t, workDir, "lore-show-readonly", "show me", "shown")
 	indexPath := filepath.Join(root, "index.json")
@@ -125,7 +131,7 @@ func TestSessionsShowIsReadOnly(t *testing.T) {
 
 func createCLISession(t *testing.T, workDir string, sessionID string, user string, assistant string) string {
 	t.Helper()
-	runtime, err := app.OpenRuntime(workDir)
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}

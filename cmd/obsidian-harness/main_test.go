@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"obsidian-harness/internal/app"
+	"obsidian-harness/internal/config/configtest"
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/vault"
 )
 
 func clearOperatorEnv(t *testing.T) {
 	t.Helper()
+	configtest.IsolateHome(t)
 	for _, key := range []string{
 		"OBSIDIAN_HARNESS_LLM_BASE_URL",
 		"OBSIDIAN_HARNESS_LLM_API_KEY",
@@ -162,6 +164,7 @@ func configureLLMTestEnv(t *testing.T) {
 }
 
 func TestRunDefaultsToStatus(t *testing.T) {
+	configtest.IsolateHome(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -178,6 +181,7 @@ func TestRunDefaultsToStatus(t *testing.T) {
 }
 
 func TestRunVersion(t *testing.T) {
+	configtest.IsolateHome(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -191,6 +195,7 @@ func TestRunVersion(t *testing.T) {
 }
 
 func TestRunStatusUsesProvidedWorkDir(t *testing.T) {
+	configtest.IsolateHome(t)
 	workDir := t.TempDir()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -205,6 +210,7 @@ func TestRunStatusUsesProvidedWorkDir(t *testing.T) {
 }
 
 func TestRunBootstrap(t *testing.T) {
+	configtest.IsolateHome(t)
 	workDir := t.TempDir()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -222,6 +228,7 @@ func TestRunBootstrap(t *testing.T) {
 }
 
 func TestRunDemoP0A(t *testing.T) {
+	configtest.IsolateHome(t)
 	workDir := t.TempDir()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -1128,7 +1135,7 @@ func seedProcessSinkForCLI(t *testing.T, workDir string) {
 func openRuntimeForCLITest(t *testing.T, workDir string) (*app.Runtime, error) {
 	t.Helper()
 
-	runtime, err := app.OpenRuntime(workDir)
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
 	if err != nil {
 		return nil, err
 	}

@@ -7,13 +7,14 @@ import (
 	"time"
 
 	"obsidian-harness/internal/app"
+	"obsidian-harness/internal/config/configtest"
 	"obsidian-harness/internal/console"
 	"obsidian-harness/internal/sessionlog"
 )
 
 func TestConfigureSessionRecorderResumeRequiresInteractiveStdin(t *testing.T) {
 	workDir := t.TempDir()
-	runtime, err := app.OpenRuntime(workDir)
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -56,7 +57,7 @@ func TestConfigureSessionRecorderResumeRequiresInteractiveStdin(t *testing.T) {
 
 func TestConfigureSessionRecorderResumeIDWorksNonInteractive(t *testing.T) {
 	workDir := t.TempDir()
-	runtime, err := app.OpenRuntime(workDir)
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -98,7 +99,7 @@ func TestConfigureSessionRecorderResumeIDWorksNonInteractive(t *testing.T) {
 
 func TestConfigureSessionRecorderResumeWithNoSessionsIsExplicit(t *testing.T) {
 	workDir := t.TempDir()
-	runtime, err := app.OpenRuntime(workDir)
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
@@ -126,7 +127,7 @@ func TestConfigureSessionRecorderResumeWithNoSessionsIsExplicit(t *testing.T) {
 
 func TestConfigureSessionRecorderResumeIDMissingDoesNotStartFresh(t *testing.T) {
 	workDir := t.TempDir()
-	runtime, err := app.OpenRuntime(workDir)
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}

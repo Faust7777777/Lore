@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"obsidian-harness/internal/adapter/codexappserver"
+	"obsidian-harness/internal/config/configtest"
 )
 
 type fakeCodexAppServerProcess struct {
@@ -116,6 +117,7 @@ func TestParseCodexAppServerFlagsRequiresCommandAfterSeparator(t *testing.T) {
 
 func configureLLMTestEnv(t *testing.T) {
 	t.Helper()
+	configtest.IsolateHome(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
