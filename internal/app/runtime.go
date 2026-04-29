@@ -16,6 +16,7 @@ import (
 
 type Runtime struct {
 	Config                   config.Config
+	ConfigDiagnostics        []config.LoadDiagnostic
 	Harness                  *orchestrator.Harness
 	Store                    store.StateStore
 	ProcessSinkSummarizer    ProcessSinkSummarizer
@@ -28,7 +29,10 @@ type DemoP0BResult struct {
 }
 
 func OpenRuntime(workDir string) (*Runtime, error) {
-	cfg := config.Default(workDir)
+	cfg, diagnostics, err := config.Load(workDir)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
 	statePath := filepath.Join(cfg.Paths.StateDir, "store.db")
 	legacyStatePath := filepath.Join(cfg.Paths.StateDir, "store.json")
 	st, err := sqlitestore.OpenWithJSONMigration(statePath, legacyStatePath)
@@ -45,6 +49,7 @@ func OpenRuntime(workDir string) (*Runtime, error) {
 	processSinkSummarizer, processSinkErr := defaultProcessSinkSummarizer()
 	return &Runtime{
 		Config:                   cfg,
+		ConfigDiagnostics:        diagnostics,
 		Harness:                  h,
 		Store:                    st,
 		ProcessSinkSummarizer:    processSinkSummarizer,
