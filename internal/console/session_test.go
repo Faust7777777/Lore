@@ -19,6 +19,8 @@ type fakeRuntime struct {
 	processSink  app.ProcessSinkDayView
 	vaultResolve model.VaultResolveResult
 	writtenNote  *model.VaultDocument
+	supersede    *model.DraftSupersedeUpdate
+	coreContext  model.CoreContext
 }
 
 func (f *fakeRuntime) ManagedStatus() (model.ManagedStatusView, error) {
@@ -44,6 +46,11 @@ func (f *fakeRuntime) RejectDraft(id string) (model.Draft, error) {
 
 func (f *fakeRuntime) RequestDraftRevision(id string) (model.Draft, error) {
 	return model.Draft{ID: id, State: model.DraftRevisionRequested, Target: model.DocumentRef{Path: "progress.md"}, Title: "revision"}, nil
+}
+
+func (f *fakeRuntime) SupersedeDraft(id string, update model.DraftSupersedeUpdate) (model.Draft, error) {
+	f.supersede = &update
+	return model.Draft{ID: id + "-revised", State: model.DraftPendingReview, Target: model.DocumentRef{Path: "03-notes/class/ecommerce.md"}, Title: "revised", Supersedes: id}, nil
 }
 
 func (f *fakeRuntime) ApplyDraft(id string) (model.Draft, error) {
@@ -98,6 +105,10 @@ func (f *fakeRuntime) WriteLowRiskNote(relPath string, content string, overwrite
 	doc := model.VaultDocument{Path: relPath, DocClass: model.DocClassNote, Content: content, BaseVersion: "hash"}
 	f.writtenNote = &doc
 	return doc, nil
+}
+
+func (f *fakeRuntime) BuildCoreContext(limit int) (model.CoreContext, error) {
+	return f.coreContext, nil
 }
 
 func (f *fakeRuntime) WorkDirPath() string {
@@ -236,6 +247,10 @@ func TestSessionHandleDraftFlowUsesFocusedDraft(t *testing.T) {
 			},
 			BaseVersionMatches: true,
 		},
+		coreContext: model.CoreContext{
+			PersonaSummary:  "Major: E-commerce",
+			WeaknessSummary: "Needs structured review",
+		},
 	}
 
 	reviewView, err := session.Handle("review something", runtime)
@@ -255,6 +270,9 @@ func TestSessionHandleDraftFlowUsesFocusedDraft(t *testing.T) {
 	}
 	if len(agent.contexts) < 2 || agent.contexts[1].CurrentDraftID != "draft-1" {
 		t.Fatalf("second agent context = %+v, want CurrentDraftID draft-1", agent.contexts)
+	}
+	if agent.contexts[0].CoreContext.PersonaSummary != "Major: E-commerce" || agent.contexts[0].CoreContext.WeaknessSummary == "" {
+		t.Fatalf("first agent core context = %+v, want runtime-built context", agent.contexts[0].CoreContext)
 	}
 }
 

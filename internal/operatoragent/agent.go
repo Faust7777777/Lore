@@ -1,6 +1,10 @@
 package operatoragent
 
-import "time"
+import (
+	"time"
+
+	"obsidian-harness/internal/model"
+)
 
 type Action string
 
@@ -43,6 +47,7 @@ type Context struct {
 	Now            time.Time
 	History        []ConversationTurn
 	WorkingSet     []WorkingSetItem
+	CoreContext    model.CoreContext
 }
 
 type Agent interface {

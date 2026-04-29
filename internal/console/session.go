@@ -19,6 +19,7 @@ type Runtime interface {
 	ApproveDraft(id string) (model.Draft, error)
 	RejectDraft(id string) (model.Draft, error)
 	RequestDraftRevision(id string) (model.Draft, error)
+	SupersedeDraft(id string, update model.DraftSupersedeUpdate) (model.Draft, error)
 	ApplyDraft(id string) (model.Draft, error)
 	ProcessSinkDay(agentID string, day time.Time) (app.ProcessSinkDayView, error)
 	SystemDocGet(name string) (model.VaultDocument, error)
@@ -30,6 +31,7 @@ type Runtime interface {
 	DocClassify(relPath string) model.DocClassificationView
 	ContextPack(targetPath string, task string, limit int) (model.ContextPack, error)
 	WriteLowRiskNote(relPath string, content string, overwrite bool) (model.VaultDocument, error)
+	BuildCoreContext(limit int) (model.CoreContext, error)
 	WorkDirPath() string
 	VaultRootPath() string
 	StateDirPath() string
@@ -92,7 +94,7 @@ func (s *Session) Handle(input string, runtime Runtime) (string, error) {
 		return output, err
 	}
 	if loopAgent, ok := s.Agent.(operatoragent.LoopAgent); ok {
-		response, err := loopAgent.Respond(input, s.agentContext(), newToolRuntime(s, runtime))
+		response, err := loopAgent.Respond(input, s.agentContext(runtime), newToolRuntime(s, runtime))
 		if err != nil {
 			return "", err
 		}
@@ -119,7 +121,7 @@ func (s *Session) Handle(input string, runtime Runtime) (string, error) {
 		return output + "\n", nil
 	}
 
-	decision, err := s.Agent.Decide(input, s.agentContext())
+	decision, err := s.Agent.Decide(input, s.agentContext(runtime))
 	if err != nil {
 		return "", err
 	}
@@ -272,10 +274,18 @@ func (s *Session) TranscriptInfo() TranscriptInfo {
 	}
 	return TranscriptInfo{SessionID: s.Recorder.SessionID(), Path: s.Recorder.Path()}
 }
-func (s *Session) agentContext() operatoragent.Context {
+func (s *Session) agentContext(runtime Runtime) operatoragent.Context {
 	now := time.Now()
 	if s.Now != nil {
 		now = s.Now()
+	}
+	coreContext := model.CoreContext{}
+	if runtime != nil {
+		if built, err := runtime.BuildCoreContext(6); err == nil {
+			coreContext = built
+		} else {
+			coreContext.Notes = []string{"core context could not be loaded: " + err.Error()}
+		}
 	}
 	return operatoragent.Context{
 		CurrentDraftID: strings.TrimSpace(s.CurrentDraftID),
@@ -283,6 +293,7 @@ func (s *Session) agentContext() operatoragent.Context {
 		Now:            now,
 		History:        append([]operatoragent.ConversationTurn(nil), s.History...),
 		WorkingSet:     append([]operatoragent.WorkingSetItem(nil), s.WorkingSet...),
+		CoreContext:    coreContext,
 	}
 }
 
