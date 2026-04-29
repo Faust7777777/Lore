@@ -48,6 +48,7 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 			return 1
 		}
 		fmt.Fprint(stdout, tui.RenderManagedStatus(version, managed))
+		fmt.Fprint(stdout, tui.RenderConfigLayers(runtime.ConfigDiagnostics))
 		return 0
 	case "bootstrap":
 		workDir, err := resolveWorkDir(args[1:])
@@ -552,7 +553,7 @@ func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 				fmt.Fprintf(stderr, "tui: %v\n", err)
 				return 1
 			}
-			lastOutput = tui.RenderManagedStatus(version, managed)
+			lastOutput = tui.RenderManagedStatus(version, managed) + tui.RenderConfigLayers(runtime.ConfigDiagnostics)
 			if err := render(lastOutput); err != nil {
 				fmt.Fprintf(stderr, "tui: %v\n", err)
 				return 1

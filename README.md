@@ -25,7 +25,7 @@ Key product constraints already baked into the scaffold:
 
 - `cmd/lore`: preferred Lore CLI entrypoint
 - `cmd/obsidian-harness`: legacy-compatible CLI entrypoint retained during rename
-- `internal/config`: runtime and vault configuration
+- `internal/config`: runtime and vault configuration with a layered loader (defaults + user-global + workspace overrides)
 - `internal/model`: shared domain/runtime types
 - `internal/runtime`: event bus, health, audit services
 - `internal/store`: storage interfaces plus in-memory, JSON legacy, and SQLite stores
@@ -34,6 +34,45 @@ Key product constraints already baked into the scaffold:
 - `internal/vault`: atomic vault I/O, version hashing, and markdown attachment reference parsing
 - `internal/bootstrap`: default managed-mode scaffold templates
 - `internal/tui`: text fallback and Bubble Tea interactive workbench
+
+## Configuration Layers
+
+Lore loads configuration from these layers in increasing precedence:
+
+1. Built-in defaults from `config.Default(workDir)`.
+2. User-global overrides at `~/.lore/config.json` (skipped silently if absent).
+3. Workspace overrides at `<workDir>/.lore/config.json` (skipped silently if absent).
+
+Each layer's JSON file may set any subset of fields. Fields it does not mention keep the lower layer's value.
+
+Example user-global override:
+
+```json
+{
+  "runtime": {
+    "proactive_mode": "quiet"
+  }
+}
+```
+
+Example workspace override:
+
+```json
+{
+  "vault": {
+    "managed_core": {
+      "agent_doc": "runtime/agent.md"
+    }
+  }
+}
+```
+
+Limitations:
+
+- Duration fields (e.g. `vault.debounce_window`, `process_sink.checkpoint_every`) currently must be expressed as nanoseconds in JSON (for example `500000000` for 500ms). String forms such as `"500ms"` are not yet supported.
+- `paths.work_dir` is derived from the runtime invocation; setting it from a layer file is allowed but unusual.
+
+Run `lore status [workdir]` to see which layer files were loaded, missing, or errored.
 
 ## Current Commands
 
