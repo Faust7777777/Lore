@@ -15,6 +15,7 @@ type Store struct {
 	checkpoints map[string]model.CheckpointDoc
 	reports     map[string]model.DailyReport
 	audit       []model.AuditRecord
+	findings    map[string]model.Finding
 	usage       []model.UsageRecord
 	cursors     map[string]string
 }
@@ -24,6 +25,7 @@ func New() *Store {
 		drafts:      make(map[string]model.Draft),
 		checkpoints: make(map[string]model.CheckpointDoc),
 		reports:     make(map[string]model.DailyReport),
+		findings:    make(map[string]model.Finding),
 		cursors:     make(map[string]string),
 	}
 }
@@ -37,6 +39,10 @@ func (s *Store) ProcessSink() store.ProcessSinkStore {
 }
 
 func (s *Store) Audit() store.AuditStore {
+	return s
+}
+
+func (s *Store) Findings() store.FindingStore {
 	return s
 }
 
@@ -91,6 +97,31 @@ func (s *Store) UpdateDraftState(id string, state model.DraftState, updatedAt ti
 	draft.UpdatedAt = updatedAt
 	s.drafts[id] = draft
 	return draft, nil
+}
+
+func (s *Store) SupersedeDraft(oldID string, newDraft model.Draft, updatedAt time.Time) (model.Draft, model.Draft, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if oldID == "" || newDraft.ID == "" {
+		return model.Draft{}, model.Draft{}, store.ErrInvalidKey
+	}
+	if oldID == newDraft.ID {
+		return model.Draft{}, model.Draft{}, store.ErrConflict
+	}
+	oldDraft, ok := s.drafts[oldID]
+	if !ok {
+		return model.Draft{}, model.Draft{}, store.ErrNotFound
+	}
+	if _, exists := s.drafts[newDraft.ID]; exists {
+		return model.Draft{}, model.Draft{}, store.ErrConflict
+	}
+
+	oldDraft.State = model.DraftSuperseded
+	oldDraft.UpdatedAt = updatedAt
+	s.drafts[oldID] = oldDraft
+	s.drafts[newDraft.ID] = newDraft
+	return oldDraft, newDraft, nil
 }
 
 func (s *Store) SaveCheckpoint(doc model.CheckpointDoc) error {
@@ -169,6 +200,65 @@ func (s *Store) ListAudit(limit int) ([]model.AuditRecord, error) {
 	}
 	start := len(s.audit) - limit
 	return append([]model.AuditRecord(nil), s.audit[start:]...), nil
+}
+
+func (s *Store) SaveFinding(finding model.Finding) error {
+	if finding.ID == "" {
+		return store.ErrInvalidKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.findings[finding.ID] = finding
+	return nil
+}
+
+func (s *Store) GetFinding(id string) (model.Finding, error) {
+	if id == "" {
+		return model.Finding{}, store.ErrInvalidKey
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	finding, ok := s.findings[id]
+	if !ok {
+		return model.Finding{}, store.ErrNotFound
+	}
+	return finding, nil
+}
+
+func (s *Store) ListFindings(limit int) ([]model.Finding, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	findings := make([]model.Finding, 0, len(s.findings))
+	for _, finding := range s.findings {
+		findings = append(findings, finding)
+	}
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].UpdatedAt.Equal(findings[j].UpdatedAt) {
+			return findings[i].ID < findings[j].ID
+		}
+		return findings[i].UpdatedAt.After(findings[j].UpdatedAt)
+	})
+	if limit > 0 && limit < len(findings) {
+		findings = findings[:limit]
+	}
+	return findings, nil
+}
+
+func (s *Store) UpdateFindingState(id string, state model.FindingState, updatedAt time.Time) (model.Finding, error) {
+	if id == "" {
+		return model.Finding{}, store.ErrInvalidKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	finding, ok := s.findings[id]
+	if !ok {
+		return model.Finding{}, store.ErrNotFound
+	}
+	finding.State = state
+	finding.UpdatedAt = updatedAt
+	s.findings[id] = finding
+	return finding, nil
 }
 
 func (s *Store) AppendUsage(record model.UsageRecord) error {

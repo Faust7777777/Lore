@@ -104,6 +104,25 @@ func toolContracts() []toolContract {
 			},
 			Required: []string{"field", "proposed_value", "evidence", "confidence", "reason", "source", "observed_at"},
 		},
+		{
+			Name:        "markdown_note_propose",
+			Description: "Submit an ordinary markdown note proposal for Lore review. Creates a pending draft; does not write the note and does not apply any draft.",
+			Arguments: []toolArgument{
+				{Name: "target_path", Type: "string"},
+				{Name: "title", Type: "string"},
+				{Name: "content", Type: "string"},
+				{Name: "source_kind", Type: "string", Enum: []string{"class", "meeting", "development", "conversation", "research", "other"}},
+				{Name: "evidence", Type: "string"},
+				{Name: "reason", Type: "string"},
+				{Name: "source", Type: "string"},
+				{Name: "observed_at", Type: "string"},
+				{Name: "task_context", Type: "string"},
+				{Name: "course", Type: "string"},
+				{Name: "topic", Type: "string"},
+				{Name: "dedupe_key", Type: "string"},
+			},
+			Required: []string{"target_path", "title", "content", "source_kind", "evidence", "reason", "source", "observed_at"},
+		},
 	}
 }
 

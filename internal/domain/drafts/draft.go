@@ -175,6 +175,8 @@ func CanTransition(from State, to State) bool {
 		return to == StateApproved || to == StateRejected || to == StateRevision || to == StateExpired || to == StateSuperseded
 	case StateApproved:
 		return to == StateApplied || to == StateConflicted || to == StateExpired || to == StateSuperseded
+	case StateRevision:
+		return to == StateSuperseded || to == StateExpired
 	default:
 		return false
 	}

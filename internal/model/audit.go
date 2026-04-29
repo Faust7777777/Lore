@@ -8,14 +8,17 @@ import (
 type AuditKind string
 
 const (
-	AuditDraftCreated      AuditKind = "draft_created"
-	AuditDraftStateChange  AuditKind = "draft_state_change"
-	AuditDraftApplied      AuditKind = "draft_applied"
-	AuditCheckpointWrite   AuditKind = "checkpoint_write"
-	AuditDailyRollup       AuditKind = "daily_rollup"
-	AuditMCPRead           AuditKind = "mcp_read"
-	AuditLowRiskVaultWrite AuditKind = "low_risk_vault_write"
-	AuditRuntimeHealth     AuditKind = "runtime_health"
+	AuditDraftCreated        AuditKind = "draft_created"
+	AuditDraftStateChange    AuditKind = "draft_state_change"
+	AuditDraftApplied        AuditKind = "draft_applied"
+	AuditCheckpointWrite     AuditKind = "checkpoint_write"
+	AuditDailyRollup         AuditKind = "daily_rollup"
+	AuditMCPRead             AuditKind = "mcp_read"
+	AuditLowRiskVaultWrite   AuditKind = "low_risk_vault_write"
+	AuditOutOfBandVaultWrite AuditKind = "out_of_band_vault_write"
+	AuditGovernanceFinding   AuditKind = "governance_finding"
+	AuditFindingStateChange  AuditKind = "finding_state_change"
+	AuditRuntimeHealth       AuditKind = "runtime_health"
 )
 
 type AuditResultStatus string

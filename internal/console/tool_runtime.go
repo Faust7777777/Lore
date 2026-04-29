@@ -39,6 +39,7 @@ func (r toolRuntime) DescribeTools(_ operatoragent.Context) []operatoragent.Tool
 		{Name: "draft_approve", Description: "Approve a draft. Prefer use_focused_draft=true after reviewing.", Arguments: `{"draft_id":"optional","use_focused_draft":true}`},
 		{Name: "draft_reject", Description: "Reject a draft.", Arguments: `{"draft_id":"optional","use_focused_draft":true}`},
 		{Name: "draft_request_revision", Description: "Request revision on a draft.", Arguments: `{"draft_id":"optional","use_focused_draft":true}`},
+		{Name: "draft_supersede", Description: "Local Lore only, not MCP: create a revised pending markdown-note draft and mark the original as superseded.", Arguments: `{"draft_id":"optional","use_focused_draft":true,"target_path":"optional/path.md","content":"...","reason":"...","summary":"optional"}`},
 		{Name: "draft_apply", Description: "Apply an approved draft to the vault.", Arguments: `{"draft_id":"optional","use_focused_draft":true}`},
 		{Name: "process_sink_day", Description: "Render checkpoint and daily report status for one agent day.", Arguments: `{"agent_id":"codex","day":"YYYY-MM-DD"}`},
 		{Name: "system_doc_get", Description: "Read a managed core document by name or alias. Aliases: persona=\\u4eba\\u7269\\u753b\\u50cf/\\u753b\\u50cf, progress=\\u8fdb\\u5ea6\\u603b\\u8868, system=\\u7cfb\\u7edf\\u8bf4\\u660e, agent=agent.md, identity=identity.md.", Arguments: `{"name":"system|progress|persona|agent|identity"}`},
@@ -132,6 +133,30 @@ func (r toolRuntime) CallTool(name string, arguments map[string]any) (operatorag
 		}
 		r.session.CurrentDraftID = draft.ID
 		return operatoragent.ToolResult{Content: tui.RenderDraftActionResult("request-revision", draft)}, nil
+	case "draft_supersede":
+		draftID, err := r.session.resolveDraftID(r.draftDecision(arguments), r.runtime, model.DraftPendingReview)
+		if err != nil {
+			return operatoragent.ToolResult{}, err
+		}
+		content, ok := rawStringArg(arguments, "content")
+		if !ok || strings.TrimSpace(content) == "" {
+			return operatoragent.ToolResult{}, fmt.Errorf("missing required argument content")
+		}
+		reason, err := requiredStringArg(arguments, "reason")
+		if err != nil {
+			return operatoragent.ToolResult{}, err
+		}
+		draft, err := r.runtime.SupersedeDraft(draftID, model.DraftSupersedeUpdate{
+			TargetPath:      stringArg(arguments, "target_path", ""),
+			ProposedContent: content,
+			Summary:         stringArg(arguments, "summary", ""),
+			Reason:          reason,
+		})
+		if err != nil {
+			return operatoragent.ToolResult{}, err
+		}
+		r.session.CurrentDraftID = draft.ID
+		return operatoragent.ToolResult{Content: tui.RenderDraftActionResult("supersede", draft)}, nil
 	case "draft_apply":
 		draftID, err := r.session.resolveDraftID(r.draftDecision(arguments), r.runtime, model.DraftApproved)
 		if err != nil {

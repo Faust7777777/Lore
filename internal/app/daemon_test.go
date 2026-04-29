@@ -10,9 +10,11 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fsnotify/fsnotify"
 
+	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/vault"
 )
 
@@ -110,6 +112,259 @@ func TestRuntimeScanVaultChangesWaitsForDebounceBeforeCreatingDraft(t *testing.T
 	}
 }
 
+func TestRuntimeScanVaultChangesAuditsOutOfBandOrdinaryNote(t *testing.T) {
+	workDir := t.TempDir()
+	runtime, err := openRuntimeForTest(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	runtime.Config.Vault.DebounceWindow = 500 * time.Millisecond
+
+	now := time.Date(2026, 4, 28, 9, 0, 0, 0, time.Local)
+	if _, err := runtime.Bootstrap(now); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	relPath := filepath.Join("03-notes", "class", "ecommerce.md")
+	absPath := filepath.Join(runtime.Config.Paths.VaultRoot, relPath)
+	writeTestPlan(t, runtime, absPath, "# E-commerce\n\nInitial note.", now.Add(-time.Second))
+	if _, err := runtime.ScanVaultChanges(now); err != nil {
+		t.Fatalf("ScanVaultChanges(prime) error = %v", err)
+	}
+
+	secondNow := now.Add(5 * time.Second)
+	writeTestPlan(t, runtime, absPath, "# E-commerce\n\nChanged outside Lore.", secondNow.Add(-time.Second))
+	result, err := runtime.ScanVaultChanges(secondNow)
+	if err != nil {
+		t.Fatalf("ScanVaultChanges(changed) error = %v", err)
+	}
+	if result.OutOfBandNotes != 1 {
+		t.Fatalf("result.OutOfBandNotes = %d, want 1", result.OutOfBandNotes)
+	}
+	if result.TriggeredDrafts != 0 {
+		t.Fatalf("result.TriggeredDrafts = %d, want 0 for ordinary note audit", result.TriggeredDrafts)
+	}
+	assertNoDrafts(t, runtime)
+	assertAuditRecord(t, runtime, model.AuditOutOfBandVaultWrite, "03-notes/class/ecommerce.md", map[string]string{
+		"doc_class": "note",
+		"action":    "audit_only",
+	})
+	assertFinding(t, runtime, model.FindingOutOfBandVaultWrite, "03-notes/class/ecommerce.md", model.DocClassNote, model.FindingSeverityInfo, map[string]string{
+		"action": "audit_only",
+	})
+}
+
+func TestRuntimeScanVaultChangesAuditsGovernedCoreOutOfBandChange(t *testing.T) {
+	workDir := t.TempDir()
+	runtime, err := openRuntimeForTest(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	runtime.Config.Vault.DebounceWindow = 500 * time.Millisecond
+
+	now := time.Date(2026, 4, 28, 10, 0, 0, 0, time.Local)
+	if _, err := runtime.Bootstrap(now); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if _, err := runtime.ScanVaultChanges(now); err != nil {
+		t.Fatalf("ScanVaultChanges(prime) error = %v", err)
+	}
+
+	secondNow := now.Add(5 * time.Second)
+	absPath := filepath.Join(runtime.Config.Paths.VaultRoot, runtime.Config.Vault.ManagedCore.Persona)
+	writeTestPlan(t, runtime, absPath, "# Persona\n\nChanged outside Lore.", secondNow.Add(-time.Second))
+	result, err := runtime.ScanVaultChanges(secondNow)
+	if err != nil {
+		t.Fatalf("ScanVaultChanges(changed) error = %v", err)
+	}
+	if result.GovernanceFindings != 1 {
+		t.Fatalf("result.GovernanceFindings = %d, want 1", result.GovernanceFindings)
+	}
+	if result.TriggeredDrafts != 0 {
+		t.Fatalf("result.TriggeredDrafts = %d, want 0 for governed finding", result.TriggeredDrafts)
+	}
+	assertNoDrafts(t, runtime)
+	assertAuditRecord(t, runtime, model.AuditGovernanceFinding, vault.NormalizeRelativePath(runtime.Config.Vault.ManagedCore.Persona), map[string]string{
+		"doc_class": "persona",
+		"action":    "review_required",
+	})
+	assertFinding(t, runtime, model.FindingGovernanceReviewNeeded, vault.NormalizeRelativePath(runtime.Config.Vault.ManagedCore.Persona), model.DocClassPersona, model.FindingSeverityWarning, map[string]string{
+		"action": "review_required",
+	})
+}
+
+func TestRuntimeScanVaultChangesAuditsProcessSinkOutOfBandChange(t *testing.T) {
+	workDir := t.TempDir()
+	runtime, err := openRuntimeForTest(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	runtime.Config.Vault.DebounceWindow = 500 * time.Millisecond
+
+	now := time.Date(2026, 4, 28, 11, 0, 0, 0, time.Local)
+	if _, err := runtime.Bootstrap(now); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	processSinkRelDir, err := filepath.Rel(runtime.Config.Paths.VaultRoot, runtime.Config.Paths.ProcessSinkDir)
+	if err != nil {
+		t.Fatalf("Rel(process sink) error = %v", err)
+	}
+	relPath := filepath.Join(processSinkRelDir, "codex", "2026-04-28.md")
+	absPath := filepath.Join(runtime.Config.Paths.VaultRoot, relPath)
+	writeTestPlan(t, runtime, absPath, "# Codex checkpoint\n\nInitial.", now.Add(-time.Second))
+	if _, err := runtime.ScanVaultChanges(now); err != nil {
+		t.Fatalf("ScanVaultChanges(prime) error = %v", err)
+	}
+
+	secondNow := now.Add(5 * time.Second)
+	writeTestPlan(t, runtime, absPath, "# Codex checkpoint\n\nChanged outside Lore.", secondNow.Add(-time.Second))
+	result, err := runtime.ScanVaultChanges(secondNow)
+	if err != nil {
+		t.Fatalf("ScanVaultChanges(changed) error = %v", err)
+	}
+	if result.GovernanceFindings != 1 {
+		t.Fatalf("result.GovernanceFindings = %d, want 1", result.GovernanceFindings)
+	}
+	if result.OutOfBandNotes != 0 {
+		t.Fatalf("result.OutOfBandNotes = %d, want 0 for process-sink", result.OutOfBandNotes)
+	}
+	assertNoDrafts(t, runtime)
+	assertAuditRecord(t, runtime, model.AuditGovernanceFinding, vault.NormalizeRelativePath(relPath), map[string]string{
+		"doc_class": "checkpoint",
+		"action":    "review_required",
+	})
+	assertFinding(t, runtime, model.FindingGovernanceReviewNeeded, vault.NormalizeRelativePath(relPath), model.DocClassCheckpoint, model.FindingSeverityWarning, map[string]string{
+		"action": "review_required",
+	})
+}
+
+func TestRuntimeScanVaultChangesAuditsNewOutOfBandOrdinaryNoteAfterBaseline(t *testing.T) {
+	workDir := t.TempDir()
+	runtime, err := openRuntimeForTest(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	runtime.Config.Vault.DebounceWindow = 500 * time.Millisecond
+
+	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.Local)
+	if _, err := runtime.Bootstrap(now); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if _, err := runtime.ScanVaultChanges(now); err != nil {
+		t.Fatalf("ScanVaultChanges(baseline) error = %v", err)
+	}
+
+	secondNow := now.Add(5 * time.Second)
+	relPath := filepath.Join("03-notes", "class", "new-note.md")
+	absPath := filepath.Join(runtime.Config.Paths.VaultRoot, relPath)
+	writeTestPlan(t, runtime, absPath, "# New Note\n\nCreated outside Lore.", secondNow.Add(-time.Second))
+	result, err := runtime.ScanVaultChanges(secondNow)
+	if err != nil {
+		t.Fatalf("ScanVaultChanges(new note) error = %v", err)
+	}
+	if result.Primed != 0 {
+		t.Fatalf("result.Primed = %d, want 0 for new file after baseline", result.Primed)
+	}
+	if result.OutOfBandNotes != 1 {
+		t.Fatalf("result.OutOfBandNotes = %d, want 1", result.OutOfBandNotes)
+	}
+	assertNoDrafts(t, runtime)
+	assertAuditRecord(t, runtime, model.AuditOutOfBandVaultWrite, "03-notes/class/new-note.md", map[string]string{
+		"doc_class": "note",
+		"action":    "audit_only",
+	})
+	assertFinding(t, runtime, model.FindingOutOfBandVaultWrite, "03-notes/class/new-note.md", model.DocClassNote, model.FindingSeverityInfo, map[string]string{
+		"action": "audit_only",
+	})
+}
+
+func TestRuntimeScanVaultChangesAuditsRecreatedGovernedCoreAfterBaseline(t *testing.T) {
+	workDir := t.TempDir()
+	runtime, err := openRuntimeForTest(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	runtime.Config.Vault.DebounceWindow = 500 * time.Millisecond
+
+	now := time.Date(2026, 4, 28, 13, 0, 0, 0, time.Local)
+	if _, err := runtime.Bootstrap(now); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if err := os.Remove(filepath.Join(runtime.Config.Paths.VaultRoot, runtime.Config.Vault.ManagedCore.Persona)); err != nil {
+		t.Fatalf("Remove(persona) error = %v", err)
+	}
+	if _, err := runtime.ScanVaultChanges(now); err != nil {
+		t.Fatalf("ScanVaultChanges(baseline) error = %v", err)
+	}
+
+	secondNow := now.Add(5 * time.Second)
+	absPath := filepath.Join(runtime.Config.Paths.VaultRoot, runtime.Config.Vault.ManagedCore.Persona)
+	writeTestPlan(t, runtime, absPath, "# Persona\n\nRecreated outside Lore.", secondNow.Add(-time.Second))
+	result, err := runtime.ScanVaultChanges(secondNow)
+	if err != nil {
+		t.Fatalf("ScanVaultChanges(new core) error = %v", err)
+	}
+	if result.Primed != 0 {
+		t.Fatalf("result.Primed = %d, want 0 for new governed file after baseline", result.Primed)
+	}
+	if result.GovernanceFindings != 1 {
+		t.Fatalf("result.GovernanceFindings = %d, want 1", result.GovernanceFindings)
+	}
+	assertNoDrafts(t, runtime)
+	assertAuditRecord(t, runtime, model.AuditGovernanceFinding, vault.NormalizeRelativePath(runtime.Config.Vault.ManagedCore.Persona), map[string]string{
+		"doc_class": "persona",
+		"action":    "review_required",
+	})
+	assertFinding(t, runtime, model.FindingGovernanceReviewNeeded, vault.NormalizeRelativePath(runtime.Config.Vault.ManagedCore.Persona), model.DocClassPersona, model.FindingSeverityWarning, map[string]string{
+		"action": "review_required",
+	})
+}
+
+func TestRuntimeScanVaultChangesAuditsNewProcessSinkAfterBaseline(t *testing.T) {
+	workDir := t.TempDir()
+	runtime, err := openRuntimeForTest(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	runtime.Config.Vault.DebounceWindow = 500 * time.Millisecond
+
+	now := time.Date(2026, 4, 28, 14, 0, 0, 0, time.Local)
+	if _, err := runtime.Bootstrap(now); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if _, err := runtime.ScanVaultChanges(now); err != nil {
+		t.Fatalf("ScanVaultChanges(baseline) error = %v", err)
+	}
+
+	secondNow := now.Add(5 * time.Second)
+	processSinkRelDir, err := filepath.Rel(runtime.Config.Paths.VaultRoot, runtime.Config.Paths.ProcessSinkDir)
+	if err != nil {
+		t.Fatalf("Rel(process sink) error = %v", err)
+	}
+	relPath := filepath.Join(processSinkRelDir, "external", "2026-04-28.md")
+	absPath := filepath.Join(runtime.Config.Paths.VaultRoot, relPath)
+	writeTestPlan(t, runtime, absPath, "# External checkpoint\n\nCreated outside Lore.", secondNow.Add(-time.Second))
+	result, err := runtime.ScanVaultChanges(secondNow)
+	if err != nil {
+		t.Fatalf("ScanVaultChanges(new process-sink) error = %v", err)
+	}
+	if result.Primed != 0 {
+		t.Fatalf("result.Primed = %d, want 0 for new process-sink file after baseline", result.Primed)
+	}
+	if result.GovernanceFindings != 1 {
+		t.Fatalf("result.GovernanceFindings = %d, want 1", result.GovernanceFindings)
+	}
+	assertNoDrafts(t, runtime)
+	assertAuditRecord(t, runtime, model.AuditGovernanceFinding, vault.NormalizeRelativePath(relPath), map[string]string{
+		"doc_class": "checkpoint",
+		"action":    "review_required",
+	})
+	assertFinding(t, runtime, model.FindingGovernanceReviewNeeded, vault.NormalizeRelativePath(relPath), model.DocClassCheckpoint, model.FindingSeverityWarning, map[string]string{
+		"action": "review_required",
+	})
+}
+
 func writeTestPlan(t *testing.T, runtime *Runtime, absPath string, content string, modTime time.Time) {
 	t.Helper()
 
@@ -118,6 +373,84 @@ func writeTestPlan(t *testing.T, runtime *Runtime, absPath string, content strin
 	}
 	if err := os.Chtimes(absPath, modTime, modTime); err != nil {
 		t.Fatalf("Chtimes(%s) error = %v", absPath, err)
+	}
+}
+
+func assertNoDrafts(t *testing.T, runtime *Runtime) {
+	t.Helper()
+
+	drafts, err := runtime.ListDrafts()
+	if err != nil {
+		t.Fatalf("ListDrafts() error = %v", err)
+	}
+	if len(drafts) != 0 {
+		t.Fatalf("len(drafts) = %d, want 0", len(drafts))
+	}
+}
+
+func assertAuditRecord(t *testing.T, runtime *Runtime, kind model.AuditKind, target string, metadata map[string]string) {
+	t.Helper()
+
+	records, err := runtime.Store.Audit().ListAudit(64)
+	if err != nil {
+		t.Fatalf("ListAudit() error = %v", err)
+	}
+	for _, record := range records {
+		if record.Kind != kind || record.Target != target {
+			continue
+		}
+		matches := true
+		for key, want := range metadata {
+			if record.Metadata[key] != want {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return
+		}
+	}
+	t.Fatalf("audit record kind=%q target=%q metadata=%v not found in %+v", kind, target, metadata, records)
+}
+
+func assertFinding(t *testing.T, runtime *Runtime, kind model.FindingKind, target string, docClass model.DocClass, severity model.FindingSeverity, metadata map[string]string) {
+	t.Helper()
+
+	findings, err := runtime.ListFindings(64)
+	if err != nil {
+		t.Fatalf("ListFindings() error = %v", err)
+	}
+	for _, finding := range findings {
+		if finding.Kind != kind || finding.Target.Path != target || finding.Target.Class != docClass || finding.Severity != severity {
+			continue
+		}
+		if finding.State != model.FindingOpen {
+			t.Fatalf("finding.State = %q, want open for %+v", finding.State, finding)
+		}
+		if finding.AuditID == "" {
+			t.Fatalf("finding.AuditID is empty for %+v", finding)
+		}
+		matches := true
+		for key, want := range metadata {
+			if finding.Metadata[key] != want {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return
+		}
+	}
+	t.Fatalf("finding kind=%q target=%q class=%q metadata=%v not found in %+v", kind, target, docClass, metadata, findings)
+}
+
+func TestDaemonScanAuditIDPreservesUTF8WhenTruncatingTarget(t *testing.T) {
+	target := strings.Repeat("界", 27) + ".md"
+
+	id := daemonScanAuditID(model.AuditOutOfBandVaultWrite, target, time.Date(2026, 4, 28, 15, 0, 0, 0, time.UTC))
+
+	if !utf8.ValidString(id) {
+		t.Fatalf("daemonScanAuditID() produced invalid UTF-8: %q", id)
 	}
 }
 
@@ -130,6 +463,7 @@ func TestVaultDaemonScanSummaryIncludesDraftIDs(t *testing.T) {
 		Pending:         0,
 		TriggeredDrafts: 1,
 		DraftIDs:        []string{"draft-1"},
+		FindingIDs:      []string{"finding-1"},
 	})
 
 	text := output.String()
@@ -138,6 +472,7 @@ func TestVaultDaemonScanSummaryIncludesDraftIDs(t *testing.T) {
 		"scanned plan docs: 2",
 		"triggered drafts: 1",
 		"draft ids: draft-1",
+		"finding ids: finding-1",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("expected summary to contain %q, got %q", expected, text)

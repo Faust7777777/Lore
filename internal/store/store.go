@@ -18,6 +18,7 @@ type DraftStore interface {
 	GetDraft(id string) (model.Draft, error)
 	ListDrafts() ([]model.Draft, error)
 	UpdateDraftState(id string, state model.DraftState, updatedAt time.Time) (model.Draft, error)
+	SupersedeDraft(oldID string, newDraft model.Draft, updatedAt time.Time) (model.Draft, model.Draft, error)
 }
 
 type ProcessSinkStore interface {
@@ -31,6 +32,13 @@ type ProcessSinkStore interface {
 type AuditStore interface {
 	AppendAudit(record model.AuditRecord) error
 	ListAudit(limit int) ([]model.AuditRecord, error)
+}
+
+type FindingStore interface {
+	SaveFinding(finding model.Finding) error
+	GetFinding(id string) (model.Finding, error)
+	ListFindings(limit int) ([]model.Finding, error)
+	UpdateFindingState(id string, state model.FindingState, updatedAt time.Time) (model.Finding, error)
 }
 
 type UsageStore interface {
@@ -47,6 +55,7 @@ type StateStore interface {
 	Drafts() DraftStore
 	ProcessSink() ProcessSinkStore
 	Audit() AuditStore
+	Findings() FindingStore
 	Usage() UsageStore
 	Cursors() CursorStore
 }

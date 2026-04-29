@@ -104,6 +104,8 @@ func TestValidateTransitionCoversAllDraftTerminalStates(t *testing.T) {
 		{StateApproved, StateConflicted},
 		{StateApproved, StateExpired},
 		{StateApproved, StateSuperseded},
+		{StateRevision, StateSuperseded},
+		{StateRevision, StateExpired},
 	}
 
 	for _, transition := range validTransitions {

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -64,7 +65,7 @@ func TestSDKFacingToolContractSnapshot(t *testing.T) {
 	}
 }
 
-func TestMCPV1ExposesOnlyReadAndPersonaProposalTools(t *testing.T) {
+func TestMCPV1ExposesOnlyReadAndProposalTools(t *testing.T) {
 	tools := toolDefinitionsByName(t)
 	allowed := []string{
 		"managed_status",
@@ -77,6 +78,7 @@ func TestMCPV1ExposesOnlyReadAndPersonaProposalTools(t *testing.T) {
 		"doc_classify",
 		"context_pack",
 		"persona_update_propose",
+		"markdown_note_propose",
 	}
 	if len(tools) != len(allowed) {
 		t.Fatalf("tools/list tool count = %d, want %d allowed tools: %#v", len(tools), len(allowed), toolNames(tools))
@@ -84,6 +86,28 @@ func TestMCPV1ExposesOnlyReadAndPersonaProposalTools(t *testing.T) {
 	for _, name := range allowed {
 		if _, ok := tools[name]; !ok {
 			t.Fatalf("tools/list missing allowed tool %s; got %#v", name, toolNames(tools))
+		}
+	}
+}
+
+func TestExternalMCPDoesNotExposeDirectWrites(t *testing.T) {
+	tools := toolDefinitionsByName(t)
+	for _, name := range []string{
+		"vault_write_low",
+		"workspace_write",
+		"workspace_edit",
+		"shell_exec",
+		"shell_run",
+		"draft_apply",
+		"draft_approve",
+		"draft_supersede",
+		"draft_refine",
+		"proposal_submit",
+		"note_write",
+		"markdown_note_write",
+	} {
+		if _, ok := tools[name]; ok {
+			t.Fatalf("external MCP exposes forbidden write/apply tool %s", name)
 		}
 	}
 }
@@ -122,10 +146,54 @@ func TestProposalToolContract(t *testing.T) {
 		}
 	}
 	if _, ok := tools["vault_write_low"]; ok {
-		t.Fatal("tools/list exposes vault_write_low before L2 is approved")
+		t.Fatal("tools/list exposes vault_write_low through external MCP")
 	}
 	if _, ok := tools["draft_apply"]; ok {
 		t.Fatal("tools/list exposes draft_apply")
+	}
+}
+
+func TestMarkdownNoteProposalToolContract(t *testing.T) {
+	tools := toolDefinitionsByName(t)
+	tool, ok := tools["markdown_note_propose"]
+	if !ok {
+		t.Fatal("tools/list missing markdown_note_propose")
+	}
+	description, _ := tool["description"].(string)
+	for _, want := range []string{"pending draft", "does not write", "does not apply"} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("markdown_note_propose description = %q, want %q", description, want)
+		}
+	}
+	assertExactToolProperties(t, tools, "markdown_note_propose", []string{
+		"target_path",
+		"title",
+		"content",
+		"source_kind",
+		"evidence",
+		"reason",
+		"source",
+		"observed_at",
+		"task_context",
+		"course",
+		"topic",
+		"dedupe_key",
+	})
+	assertRequired(t, tools, "markdown_note_propose", []string{
+		"target_path",
+		"title",
+		"content",
+		"source_kind",
+		"evidence",
+		"reason",
+		"source",
+		"observed_at",
+	})
+	assertEnum(t, tools, "markdown_note_propose", "source_kind", []string{"class", "meeting", "development", "conversation", "research", "other"})
+	for _, forbidden := range []string{"overwrite", "apply", "approve", "shell", "tags", "related_paths"} {
+		if _, ok := toolProperties(t, tools, "markdown_note_propose")[forbidden]; ok {
+			t.Fatalf("markdown_note_propose unexpectedly exposes %s", forbidden)
+		}
 	}
 }
 
@@ -361,6 +429,93 @@ func TestPersonaUpdateProposeCreatesDraftOnly(t *testing.T) {
 	}
 }
 
+func TestMarkdownNoteProposeCreatesDraftOnly(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+	h, err := orchestrator.New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+
+	target := "03-notes/inbox/ecommerce-platforms.md"
+	server := NewServer(h, "test")
+	result, err := server.callTool("markdown_note_propose", map[string]any{
+		"target_path":  target,
+		"title":        "E-commerce Platforms",
+		"content":      "# E-commerce Platforms\n\n- Marketplaces coordinate buyers and sellers.",
+		"source_kind":  "class",
+		"evidence":     "class transcript discussed marketplace coordination",
+		"reason":       "durable class note for later review",
+		"source":       "external_agent",
+		"observed_at":  "2026-04-28T10:30:00+08:00",
+		"task_context": "class note extraction",
+		"course":       "E-commerce",
+		"topic":        "platforms",
+		"dedupe_key":   "ecommerce-platforms-2026-04-28",
+	})
+	if err != nil {
+		t.Fatalf("markdown_note_propose callTool() error = %v", err)
+	}
+	proposalResult, ok := result.(model.MarkdownNoteProposalResult)
+	if !ok {
+		t.Fatalf("result type = %T, want MarkdownNoteProposalResult", result)
+	}
+	if proposalResult.Status != "draft_created" || proposalResult.DraftID == "" || proposalResult.Target != target || !proposalResult.ReviewRequired {
+		t.Fatalf("result = %+v, want draft_created review-required note target", proposalResult)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Paths.VaultRoot, filepath.FromSlash(target))); !os.IsNotExist(err) {
+		t.Fatalf("target note exists after proposal creation: %v", err)
+	}
+	draft, err := st.Drafts().GetDraft(proposalResult.DraftID)
+	if err != nil {
+		t.Fatalf("GetDraft(%s) error = %v", proposalResult.DraftID, err)
+	}
+	if draft.Kind != model.DraftKindMarkdownNoteWrite || draft.State != model.DraftPendingReview {
+		t.Fatalf("draft kind/state = %s/%s, want markdown_note_write/pending_review", draft.Kind, draft.State)
+	}
+	if draft.Target.BaseVersion != model.DraftBaseVersionNewFile {
+		t.Fatalf("BaseVersion = %q, want new", draft.Target.BaseVersion)
+	}
+}
+
+func TestMarkdownNoteProposeRejectsInvalidProposal(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+	h, err := orchestrator.New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := h.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault() error = %v", err)
+	}
+
+	server := NewServer(h, "test")
+	if _, err := server.callTool("markdown_note_propose", map[string]any{
+		"target_path": "../escape.md",
+		"title":       "E-commerce Platforms",
+		"content":     "# E-commerce Platforms",
+		"source_kind": "class",
+		"evidence":    "class transcript",
+		"reason":      "durable note",
+		"source":      "external_agent",
+		"observed_at": "2026-04-28T10:30:00+08:00",
+	}); err == nil {
+		t.Fatal("markdown_note_propose invalid target error = nil, want error")
+	}
+	drafts, err := st.Drafts().ListDrafts()
+	if err != nil {
+		t.Fatalf("ListDrafts() error = %v", err)
+	}
+	if len(drafts) != 0 {
+		t.Fatalf("drafts = %+v, want no draft for invalid proposal", drafts)
+	}
+}
+
 func TestPersonaUpdateProposeRejectsInvalidProposal(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := config.Default(workDir)
@@ -401,6 +556,13 @@ func TestServerAuthFailure(t *testing.T) {
 	err := server.Serve(context.Background(), strings.NewReader(""), &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "authentication failed") {
 		t.Fatalf("Serve() error = %v, want auth failure", err)
+	}
+}
+
+func TestReadMessageRejectsOversizedFrameBeforeBodyRead(t *testing.T) {
+	payload := fmt.Sprintf("Content-Length: %d\r\n\r\n", maxFrameContentLength+1)
+	if _, err := readMessage(bufio.NewReader(strings.NewReader(payload))); err == nil || !strings.Contains(err.Error(), "content length exceeds") {
+		t.Fatalf("readMessage(oversized) error = %v, want content length exceeds", err)
 	}
 }
 
@@ -527,6 +689,26 @@ func assertDeprecatedAlias(t *testing.T, tools map[string]map[string]any, name s
 	description, _ := property["description"].(string)
 	if !strings.Contains(description, "deprecated") || !strings.Contains(description, target) {
 		t.Fatalf("%s alias %s description = %q, want deprecated alias for %s", name, alias, description, target)
+	}
+}
+
+func assertEnum(t *testing.T, tools map[string]map[string]any, name string, propertyName string, want []string) {
+	t.Helper()
+	property, ok := toolProperties(t, tools, name)[propertyName].(map[string]any)
+	if !ok {
+		t.Fatalf("%s property %s schema = %T", name, propertyName, toolProperties(t, tools, name)[propertyName])
+	}
+	raw, ok := property["enum"].([]string)
+	if !ok {
+		t.Fatalf("%s property %s enum = %T", name, propertyName, property["enum"])
+	}
+	if len(raw) != len(want) {
+		t.Fatalf("%s property %s enum = %#v, want %#v", name, propertyName, raw, want)
+	}
+	for i := range want {
+		if raw[i] != want[i] {
+			t.Fatalf("%s property %s enum = %#v, want %#v", name, propertyName, raw, want)
+		}
 	}
 }
 

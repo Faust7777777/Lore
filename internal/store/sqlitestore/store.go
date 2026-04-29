@@ -3,6 +3,7 @@ package sqlitestore
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ type legacyJSONState struct {
 	Checkpoints map[string]model.CheckpointDoc `json:"checkpoints"`
 	Reports     map[string]model.DailyReport   `json:"reports"`
 	Audit       []model.AuditRecord            `json:"audit"`
+	Findings    map[string]model.Finding       `json:"findings"`
 	Usage       []model.UsageRecord            `json:"usage"`
 	Cursors     map[string]string              `json:"cursors"`
 }
@@ -86,6 +88,10 @@ func (s *Store) Audit() store.AuditStore {
 	return s
 }
 
+func (s *Store) Findings() store.FindingStore {
+	return s
+}
+
 func (s *Store) Usage() store.UsageStore {
 	return s
 }
@@ -144,6 +150,49 @@ func (s *Store) UpdateDraftState(id string, state model.DraftState, updatedAt ti
 		return model.Draft{}, err
 	}
 	return draft, nil
+}
+
+func (s *Store) SupersedeDraft(oldID string, newDraft model.Draft, updatedAt time.Time) (model.Draft, model.Draft, error) {
+	if strings.TrimSpace(oldID) == "" || strings.TrimSpace(newDraft.ID) == "" {
+		return model.Draft{}, model.Draft{}, store.ErrInvalidKey
+	}
+	if oldID == newDraft.ID {
+		return model.Draft{}, model.Draft{}, store.ErrConflict
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return model.Draft{}, model.Draft{}, err
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	oldDraft, err := getDraftTx(tx, oldID)
+	if err != nil {
+		return model.Draft{}, model.Draft{}, err
+	}
+	if _, err := getDraftTx(tx, newDraft.ID); err == nil {
+		return model.Draft{}, model.Draft{}, store.ErrConflict
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return model.Draft{}, model.Draft{}, err
+	}
+
+	oldDraft.State = model.DraftSuperseded
+	oldDraft.UpdatedAt = updatedAt
+	if err := saveDraftTx(tx, oldDraft); err != nil {
+		return model.Draft{}, model.Draft{}, err
+	}
+	if err := saveDraftTx(tx, newDraft); err != nil {
+		return model.Draft{}, model.Draft{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Draft{}, model.Draft{}, err
+	}
+	tx = nil
+	return oldDraft, newDraft, nil
 }
 
 func (s *Store) SaveCheckpoint(doc model.CheckpointDoc) error {
@@ -261,6 +310,73 @@ func (s *Store) ListAudit(limit int) ([]model.AuditRecord, error) {
 	return decodePayloadRows[model.AuditRecord](rows)
 }
 
+func (s *Store) SaveFinding(finding model.Finding) error {
+	if strings.TrimSpace(finding.ID) == "" {
+		return store.ErrInvalidKey
+	}
+	payload, err := marshalPayload(finding)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO findings (id, state, updated_at, detected_at, payload)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		   state = excluded.state,
+		   updated_at = excluded.updated_at,
+		   detected_at = excluded.detected_at,
+		   payload = excluded.payload`,
+		finding.ID,
+		string(finding.State),
+		timeString(finding.UpdatedAt),
+		timeString(finding.DetectedAt),
+		payload,
+	)
+	return err
+}
+
+func (s *Store) GetFinding(id string) (model.Finding, error) {
+	if strings.TrimSpace(id) == "" {
+		return model.Finding{}, store.ErrInvalidKey
+	}
+	var payload string
+	err := s.db.QueryRow(`SELECT payload FROM findings WHERE id = ?`, id).Scan(&payload)
+	if err != nil {
+		return model.Finding{}, mapSQLError(err)
+	}
+	return unmarshalPayload[model.Finding](payload)
+}
+
+func (s *Store) ListFindings(limit int) ([]model.Finding, error) {
+	query := `SELECT payload FROM findings ORDER BY updated_at DESC, id ASC`
+	args := []any{}
+	if limit > 0 {
+		query = `SELECT payload FROM findings ORDER BY updated_at DESC, id ASC LIMIT ?`
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return decodePayloadRows[model.Finding](rows)
+}
+
+func (s *Store) UpdateFindingState(id string, state model.FindingState, updatedAt time.Time) (model.Finding, error) {
+	finding, err := s.GetFinding(id)
+	if err != nil {
+		return model.Finding{}, err
+	}
+	finding.State = state
+	finding.UpdatedAt = updatedAt
+	if err := s.SaveFinding(finding); err != nil {
+		return model.Finding{}, err
+	}
+	return finding, nil
+}
+
 func (s *Store) AppendUsage(record model.UsageRecord) error {
 	payload, err := marshalPayload(record)
 	if err != nil {
@@ -354,6 +470,14 @@ func (s *Store) init() error {
 			payload TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS audit_records_seq_idx ON audit_records(seq)`,
+		`CREATE TABLE IF NOT EXISTS findings (
+			id TEXT PRIMARY KEY,
+			state TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			detected_at TEXT NOT NULL,
+			payload TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS findings_updated_at_idx ON findings(updated_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS usage_records (
 			seq INTEGER PRIMARY KEY AUTOINCREMENT,
 			day TEXT NOT NULL,
@@ -431,6 +555,11 @@ func (s *Store) migrateLegacyJSONIfNeeded(legacyJSONPath string) error {
 			return err
 		}
 	}
+	for _, finding := range state.Findings {
+		if err := saveFindingTx(tx, finding); err != nil {
+			return err
+		}
+	}
 	for _, record := range state.Usage {
 		if err := appendUsageTx(tx, record); err != nil {
 			return err
@@ -459,7 +588,7 @@ func (s *Store) migrateLegacyJSONIfNeeded(legacyJSONPath string) error {
 }
 
 func (s *Store) isEmpty() (bool, error) {
-	for _, table := range []string{"drafts", "checkpoints", "daily_reports", "audit_records", "usage_records", "cursors"} {
+	for _, table := range []string{"drafts", "checkpoints", "daily_reports", "audit_records", "findings", "usage_records", "cursors"} {
 		var count int
 		if err := s.db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
 			return false, err
@@ -489,6 +618,15 @@ func saveDraftTx(tx *sql.Tx, draft model.Draft) error {
 		payload,
 	)
 	return err
+}
+
+func getDraftTx(tx *sql.Tx, id string) (model.Draft, error) {
+	var payload string
+	err := tx.QueryRow(`SELECT payload FROM drafts WHERE id = ?`, id).Scan(&payload)
+	if err != nil {
+		return model.Draft{}, mapSQLError(err)
+	}
+	return unmarshalPayload[model.Draft](payload)
 }
 
 func saveCheckpointTx(tx *sql.Tx, doc model.CheckpointDoc) error {
@@ -542,6 +680,31 @@ func appendAuditTx(tx *sql.Tx, record model.AuditRecord) error {
 	_, err = tx.Exec(
 		`INSERT INTO audit_records (occurred_at, payload) VALUES (?, ?)`,
 		timeString(record.OccurredAt),
+		payload,
+	)
+	return err
+}
+
+func saveFindingTx(tx *sql.Tx, finding model.Finding) error {
+	if strings.TrimSpace(finding.ID) == "" {
+		return store.ErrInvalidKey
+	}
+	payload, err := marshalPayload(finding)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(
+		`INSERT INTO findings (id, state, updated_at, detected_at, payload)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		   state = excluded.state,
+		   updated_at = excluded.updated_at,
+		   detected_at = excluded.detected_at,
+		   payload = excluded.payload`,
+		finding.ID,
+		string(finding.State),
+		timeString(finding.UpdatedAt),
+		timeString(finding.DetectedAt),
 		payload,
 	)
 	return err

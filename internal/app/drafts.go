@@ -47,6 +47,10 @@ func (r *Runtime) RequestDraftRevision(id string) (model.Draft, error) {
 	return r.Harness.RequestDraftRevision(id, time.Now())
 }
 
+func (r *Runtime) SupersedeDraft(id string, update model.DraftSupersedeUpdate) (model.Draft, error) {
+	return r.Harness.SupersedeDraft(id, update, time.Now())
+}
+
 func (r *Runtime) ApplyDraft(id string) (model.Draft, error) {
 	return r.Harness.ApplyDraft(id, time.Now())
 }

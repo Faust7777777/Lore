@@ -87,6 +87,26 @@ func TestStorePersistsAcrossReload(t *testing.T) {
 		t.Fatalf("AppendAudit(second) error = %v", err)
 	}
 
+	if err := st.SaveFinding(model.Finding{
+		ID:       "finding-1",
+		Kind:     model.FindingOutOfBandVaultWrite,
+		State:    model.FindingOpen,
+		Severity: model.FindingSeverityInfo,
+		Target: model.DocumentRef{
+			Path:        "notes/outside.md",
+			Class:       model.DocClassNote,
+			BaseVersion: "hash-1",
+		},
+		Title:      "outside write",
+		Summary:    "outside write detected",
+		Source:     "vault_daemon",
+		AuditID:    "audit-2",
+		DetectedAt: createdAt,
+		UpdatedAt:  createdAt,
+	}); err != nil {
+		t.Fatalf("SaveFinding() error = %v", err)
+	}
+
 	if err := st.AppendUsage(model.UsageRecord{
 		RecordedAt:       createdAt,
 		PromptTokens:     11,
@@ -139,6 +159,14 @@ func TestStorePersistsAcrossReload(t *testing.T) {
 	}
 	if len(auditRecords) != 1 || auditRecords[0].ID != "audit-2" {
 		t.Fatalf("auditRecords = %+v, want last audit record only", auditRecords)
+	}
+
+	findings, err := reloaded.ListFindings(1)
+	if err != nil {
+		t.Fatalf("ListFindings() error = %v", err)
+	}
+	if len(findings) != 1 || findings[0].ID != "finding-1" {
+		t.Fatalf("findings = %+v, want finding-1", findings)
 	}
 
 	summary, err := reloaded.SummarizeUsage(createdAt)
@@ -218,6 +246,24 @@ func TestOpenWithJSONMigrationImportsLegacyState(t *testing.T) {
 			Target:     "progress.md",
 			OccurredAt: createdAt,
 		}},
+		Findings: map[string]model.Finding{
+			"finding-legacy": {
+				ID:       "finding-legacy",
+				Kind:     model.FindingGovernanceReviewNeeded,
+				State:    model.FindingOpen,
+				Severity: model.FindingSeverityWarning,
+				Target: model.DocumentRef{
+					Path:        "progress.md",
+					Class:       model.DocClassProgressIndex,
+					BaseVersion: "legacy-hash",
+				},
+				Title:      "legacy finding",
+				Summary:    "legacy finding summary",
+				Source:     "vault_daemon",
+				DetectedAt: createdAt,
+				UpdatedAt:  createdAt,
+			},
+		},
 		Usage: []model.UsageRecord{{
 			RecordedAt:       createdAt,
 			PromptTokens:     5,
@@ -274,6 +320,14 @@ func TestOpenWithJSONMigrationImportsLegacyState(t *testing.T) {
 	}
 	if len(auditRecords) != 1 || auditRecords[0].ID != "audit-legacy" {
 		t.Fatalf("auditRecords = %+v, want legacy audit record", auditRecords)
+	}
+
+	findings, err := st.ListFindings(10)
+	if err != nil {
+		t.Fatalf("ListFindings() error = %v", err)
+	}
+	if len(findings) != 1 || findings[0].ID != "finding-legacy" {
+		t.Fatalf("findings = %+v, want legacy finding", findings)
 	}
 
 	summary, err := st.SummarizeUsage(createdAt)

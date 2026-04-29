@@ -16,6 +16,7 @@ import (
 )
 
 const protocolVersion = "2024-11-05"
+const maxFrameContentLength = 1 * 1024 * 1024
 
 type Server struct {
 	harness *orchestrator.Harness
@@ -187,6 +188,25 @@ func (s *Server) callTool(name string, args map[string]any) (any, error) {
 			Source:        getString(args, "source"),
 			ObservedAt:    observedAt,
 		}, time.Now())
+	case "markdown_note_propose":
+		observedAt, err := parseObservedAt(getString(args, "observed_at"))
+		if err != nil {
+			return nil, err
+		}
+		return s.harness.ProposeMarkdownNote(model.MarkdownNoteProposal{
+			TargetPath:  getString(args, "target_path"),
+			Title:       getString(args, "title"),
+			Content:     getString(args, "content"),
+			SourceKind:  getString(args, "source_kind"),
+			Evidence:    getString(args, "evidence"),
+			Reason:      getString(args, "reason"),
+			Source:      getString(args, "source"),
+			ObservedAt:  observedAt,
+			TaskContext: getString(args, "task_context"),
+			Course:      getString(args, "course"),
+			Topic:       getString(args, "topic"),
+			DedupeKey:   getString(args, "dedupe_key"),
+		}, time.Now())
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -239,6 +259,9 @@ func readMessage(reader *bufio.Reader) ([]byte, error) {
 	}
 	if contentLength < 0 {
 		return nil, io.ErrUnexpectedEOF
+	}
+	if contentLength > maxFrameContentLength {
+		return nil, fmt.Errorf("content length exceeds %d bytes", maxFrameContentLength)
 	}
 
 	payload := make([]byte, contentLength)

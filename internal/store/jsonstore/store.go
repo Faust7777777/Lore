@@ -18,6 +18,7 @@ type persistedState struct {
 	Checkpoints map[string]model.CheckpointDoc `json:"checkpoints"`
 	Reports     map[string]model.DailyReport   `json:"reports"`
 	Audit       []model.AuditRecord            `json:"audit"`
+	Findings    map[string]model.Finding       `json:"findings"`
 	Usage       []model.UsageRecord            `json:"usage"`
 	Cursors     map[string]string              `json:"cursors"`
 }
@@ -37,6 +38,7 @@ func New(path string, tempSuffix string) (*Store, error) {
 			Drafts:      make(map[string]model.Draft),
 			Checkpoints: make(map[string]model.CheckpointDoc),
 			Reports:     make(map[string]model.DailyReport),
+			Findings:    make(map[string]model.Finding),
 			Cursors:     make(map[string]string),
 		},
 	}
@@ -56,6 +58,10 @@ func (s *Store) ProcessSink() store.ProcessSinkStore {
 }
 
 func (s *Store) Audit() store.AuditStore {
+	return s
+}
+
+func (s *Store) Findings() store.FindingStore {
 	return s
 }
 
@@ -113,6 +119,37 @@ func (s *Store) UpdateDraftState(id string, state model.DraftState, updatedAt ti
 		return model.Draft{}, err
 	}
 	return draft, nil
+}
+
+func (s *Store) SupersedeDraft(oldID string, newDraft model.Draft, updatedAt time.Time) (model.Draft, model.Draft, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if oldID == "" || newDraft.ID == "" {
+		return model.Draft{}, model.Draft{}, store.ErrInvalidKey
+	}
+	if oldID == newDraft.ID {
+		return model.Draft{}, model.Draft{}, store.ErrConflict
+	}
+	originalDraft, ok := s.state.Drafts[oldID]
+	if !ok {
+		return model.Draft{}, model.Draft{}, store.ErrNotFound
+	}
+	if _, exists := s.state.Drafts[newDraft.ID]; exists {
+		return model.Draft{}, model.Draft{}, store.ErrConflict
+	}
+
+	oldDraft := originalDraft
+	oldDraft.State = model.DraftSuperseded
+	oldDraft.UpdatedAt = updatedAt
+	s.state.Drafts[oldID] = oldDraft
+	s.state.Drafts[newDraft.ID] = newDraft
+	if err := s.persistLocked(); err != nil {
+		delete(s.state.Drafts, newDraft.ID)
+		s.state.Drafts[oldID] = originalDraft
+		return model.Draft{}, model.Draft{}, err
+	}
+	return oldDraft, newDraft, nil
 }
 
 func (s *Store) SaveCheckpoint(doc model.CheckpointDoc) error {
@@ -189,6 +226,68 @@ func (s *Store) ListAudit(limit int) ([]model.AuditRecord, error) {
 	return append([]model.AuditRecord(nil), s.state.Audit[start:]...), nil
 }
 
+func (s *Store) SaveFinding(finding model.Finding) error {
+	if finding.ID == "" {
+		return store.ErrInvalidKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Findings[finding.ID] = finding
+	return s.persistLocked()
+}
+
+func (s *Store) GetFinding(id string) (model.Finding, error) {
+	if id == "" {
+		return model.Finding{}, store.ErrInvalidKey
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	finding, ok := s.state.Findings[id]
+	if !ok {
+		return model.Finding{}, store.ErrNotFound
+	}
+	return finding, nil
+}
+
+func (s *Store) ListFindings(limit int) ([]model.Finding, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	findings := make([]model.Finding, 0, len(s.state.Findings))
+	for _, finding := range s.state.Findings {
+		findings = append(findings, finding)
+	}
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].UpdatedAt.Equal(findings[j].UpdatedAt) {
+			return findings[i].ID < findings[j].ID
+		}
+		return findings[i].UpdatedAt.After(findings[j].UpdatedAt)
+	})
+	if limit > 0 && limit < len(findings) {
+		findings = findings[:limit]
+	}
+	return findings, nil
+}
+
+func (s *Store) UpdateFindingState(id string, state model.FindingState, updatedAt time.Time) (model.Finding, error) {
+	if id == "" {
+		return model.Finding{}, store.ErrInvalidKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	finding, ok := s.state.Findings[id]
+	if !ok {
+		return model.Finding{}, store.ErrNotFound
+	}
+	finding.State = state
+	finding.UpdatedAt = updatedAt
+	s.state.Findings[id] = finding
+	if err := s.persistLocked(); err != nil {
+		return model.Finding{}, err
+	}
+	return finding, nil
+}
+
 func (s *Store) AppendUsage(record model.UsageRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -262,6 +361,9 @@ func (s *Store) load() error {
 	}
 	if s.state.Reports == nil {
 		s.state.Reports = make(map[string]model.DailyReport)
+	}
+	if s.state.Findings == nil {
+		s.state.Findings = make(map[string]model.Finding)
 	}
 	if s.state.Cursors == nil {
 		s.state.Cursors = make(map[string]string)

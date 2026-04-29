@@ -29,6 +29,13 @@ var (
 	ErrDirectWriteDenied   = errors.New("orchestrator: direct vault write denied by governance policy")
 )
 
+const (
+	markdownNoteContentMaxBytes     = 256 * 1024
+	markdownNoteLongFieldMaxBytes   = 16 * 1024
+	markdownNoteShortFieldMaxBytes  = 512
+	markdownNoteProposalStatusDraft = "draft_created"
+)
+
 type Harness struct {
 	cfg        config.Config
 	store      store.StateStore
@@ -239,6 +246,80 @@ func (h *Harness) ProposePersonaUpdate(proposal model.PersonaUpdateProposal, at 
 	}, nil
 }
 
+func (h *Harness) ProposeMarkdownNote(proposal model.MarkdownNoteProposal, at time.Time) (model.MarkdownNoteProposalResult, error) {
+	proposal = normalizeMarkdownNoteProposal(proposal)
+	if err := validateMarkdownNoteProposalFields(proposal); err != nil {
+		return model.MarkdownNoteProposalResult{}, err
+	}
+	targetPath, targetClass, err := h.validateLowGovernanceMarkdownTarget(proposal.TargetPath)
+	if err != nil {
+		return model.MarkdownNoteProposalResult{}, err
+	}
+	proposal.TargetPath = targetPath
+
+	targetAbs := filepath.Join(h.cfg.Paths.VaultRoot, filepath.FromSlash(targetPath))
+	_, baseVersion, err := vault.ReadFileWithHash(targetAbs)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return model.MarkdownNoteProposalResult{}, err
+		}
+		baseVersion = model.DraftBaseVersionNewFile
+	}
+
+	payload, err := json.MarshalIndent(proposal, "", "  ")
+	if err != nil {
+		return model.MarkdownNoteProposalResult{}, err
+	}
+	draft := model.Draft{
+		ID:    fmt.Sprintf("draft-%d", at.UnixNano()),
+		Kind:  model.DraftKindMarkdownNoteWrite,
+		State: model.DraftPendingReview,
+		Target: model.DocumentRef{
+			Path:        targetPath,
+			Class:       targetClass,
+			BaseVersion: baseVersion,
+		},
+		Title:           "Markdown note proposal: " + proposal.Title,
+		Summary:         fmt.Sprintf("Propose markdown note %q at %s from %s. Proposal creation is not apply; the target note is unchanged until reviewed and applied by Lore.", proposal.Title, targetPath, proposal.SourceKind),
+		ProposedContent: string(payload),
+		EvidenceRefs:    []string{proposal.Evidence},
+		CreatedAt:       at,
+		UpdatedAt:       at,
+	}
+
+	if err := h.store.Drafts().SaveDraft(draft); err != nil {
+		return model.MarkdownNoteProposalResult{}, err
+	}
+	if err := h.broker.Publish(context.Background(), hruntime.Event{
+		ID:         draft.ID,
+		Type:       hruntime.EventDraftCreated,
+		Source:     "markdown_note_propose",
+		OccurredAt: at,
+		Payload:    draft,
+	}); err != nil {
+		return model.MarkdownNoteProposalResult{}, err
+	}
+	h.recordAudit(model.AuditRecord{
+		ID:            auditID("markdown-note-proposed", at),
+		Kind:          model.AuditDraftCreated,
+		CorrelationID: draft.ID,
+		Actor:         "external_agent",
+		Target:        draft.Target.Path,
+		OccurredAt:    at,
+		Metadata: map[string]string{
+			"draft_id":    draft.ID,
+			"source":      proposal.Source,
+			"source_kind": proposal.SourceKind,
+		},
+	})
+	return model.MarkdownNoteProposalResult{
+		Status:         markdownNoteProposalStatusDraft,
+		DraftID:        draft.ID,
+		Target:         draft.Target.Path,
+		ReviewRequired: true,
+	}, nil
+}
+
 func (h *Harness) ListDrafts() ([]model.Draft, error) {
 	return h.store.Drafts().ListDrafts()
 }
@@ -283,6 +364,126 @@ func (h *Harness) RequestDraftRevision(id string, at time.Time) (model.Draft, er
 	return h.transitionDraftState(id, model.DraftRevisionRequested, "request_draft_revision", "draft-revision-requested", "reviewer", at)
 }
 
+func (h *Harness) SupersedeDraft(id string, update model.DraftSupersedeUpdate, at time.Time) (model.Draft, error) {
+	update.TargetPath = cleanRelPath(update.TargetPath)
+	update.Summary = strings.TrimSpace(update.Summary)
+	update.Reason = strings.TrimSpace(update.Reason)
+	if strings.TrimSpace(update.ProposedContent) == "" || update.Reason == "" {
+		return model.Draft{}, fmt.Errorf("orchestrator: draft supersede requires proposed_content and reason")
+	}
+
+	oldDraft, err := h.store.Drafts().GetDraft(id)
+	if err != nil {
+		return model.Draft{}, err
+	}
+	if oldDraft.Kind != model.DraftKindMarkdownNoteWrite {
+		return model.Draft{}, ErrUnsupportedDraft
+	}
+	if err := drafts.ValidateTransition(oldDraft.State, model.DraftSuperseded); err != nil {
+		return model.Draft{}, ErrDraftNotReady
+	}
+
+	var proposal model.MarkdownNoteProposal
+	if err := json.Unmarshal([]byte(oldDraft.ProposedContent), &proposal); err != nil {
+		return model.Draft{}, ErrInvalidDraftPatch
+	}
+	proposal = normalizeMarkdownNoteProposal(proposal)
+	if err := validateMarkdownNoteProposalFields(proposal); err != nil {
+		return model.Draft{}, ErrInvalidDraftPatch
+	}
+	if update.TargetPath != "" {
+		proposal.TargetPath = update.TargetPath
+	}
+	proposal.Content = update.ProposedContent
+	proposal = normalizeMarkdownNoteProposal(proposal)
+	if err := validateMarkdownNoteProposalFields(proposal); err != nil {
+		return model.Draft{}, err
+	}
+
+	targetPath, targetClass, err := h.validateLowGovernanceMarkdownTarget(proposal.TargetPath)
+	if err != nil {
+		return model.Draft{}, err
+	}
+	proposal.TargetPath = targetPath
+	targetAbs := filepath.Join(h.cfg.Paths.VaultRoot, filepath.FromSlash(targetPath))
+	_, baseVersion, err := vault.ReadFileWithHash(targetAbs)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return model.Draft{}, err
+		}
+		baseVersion = model.DraftBaseVersionNewFile
+	}
+
+	payload, err := json.MarshalIndent(proposal, "", "  ")
+	if err != nil {
+		return model.Draft{}, err
+	}
+	newDraft := model.Draft{
+		ID:    supersedingDraftID(oldDraft.ID, at),
+		Kind:  model.DraftKindMarkdownNoteWrite,
+		State: model.DraftPendingReview,
+		Target: model.DocumentRef{
+			Path:        targetPath,
+			Class:       targetClass,
+			BaseVersion: baseVersion,
+		},
+		Title:           "Markdown note proposal: " + proposal.Title,
+		Summary:         supersedeSummary(oldDraft.ID, targetPath, update),
+		ProposedContent: string(payload),
+		EvidenceRefs:    append([]string(nil), oldDraft.EvidenceRefs...),
+		Supersedes:      oldDraft.ID,
+		CreatedAt:       at,
+		UpdatedAt:       at,
+	}
+
+	superseded, revised, err := h.store.Drafts().SupersedeDraft(oldDraft.ID, newDraft, at)
+	if err != nil {
+		return model.Draft{}, err
+	}
+	_ = h.broker.Publish(context.Background(), hruntime.Event{
+		ID:         superseded.ID,
+		Type:       hruntime.EventDraftStateChanged,
+		Source:     "supersede_draft",
+		OccurredAt: at,
+		Payload:    superseded,
+	})
+	_ = h.broker.Publish(context.Background(), hruntime.Event{
+		ID:         revised.ID,
+		Type:       hruntime.EventDraftCreated,
+		Source:     "supersede_draft",
+		OccurredAt: at,
+		Payload:    revised,
+	})
+	h.recordAudit(model.AuditRecord{
+		ID:            auditID("draft-superseded", at),
+		Kind:          model.AuditDraftStateChange,
+		CorrelationID: superseded.ID,
+		Actor:         "operator",
+		Target:        superseded.Target.Path,
+		OccurredAt:    at,
+		Metadata: map[string]string{
+			"draft_id":      superseded.ID,
+			"state":         string(superseded.State),
+			"superseded_by": revised.ID,
+			"reason":        update.Reason,
+		},
+	})
+	h.recordAudit(model.AuditRecord{
+		ID:            auditID("draft-superseding-created", at),
+		Kind:          model.AuditDraftCreated,
+		CorrelationID: revised.ID,
+		Actor:         "operator",
+		Target:        revised.Target.Path,
+		OccurredAt:    at,
+		Metadata: map[string]string{
+			"draft_id":   revised.ID,
+			"supersedes": superseded.ID,
+			"reason":     update.Reason,
+		},
+	})
+	return revised, nil
+}
+
 func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 	draft, err := h.store.Drafts().GetDraft(id)
 	if err != nil {
@@ -295,26 +496,10 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 		return model.Draft{}, err
 	}
 
-	targetAbs := filepath.Join(h.cfg.Paths.VaultRoot, draft.Target.Path)
-	current, hash, err := vault.ReadFileWithHash(targetAbs)
+	targetAbs := filepath.Join(h.cfg.Paths.VaultRoot, filepath.FromSlash(draft.Target.Path))
+	current, err := h.readDraftTargetForApply(draft, targetAbs, at)
 	if err != nil {
 		return model.Draft{}, err
-	}
-	if hash != draft.Target.BaseVersion {
-		if err := drafts.ValidateTransition(draft.State, model.DraftConflicted); err != nil {
-			return model.Draft{}, ErrDraftNotReady
-		}
-		conflicted, updateErr := h.store.Drafts().UpdateDraftState(id, model.DraftConflicted, at)
-		if updateErr == nil {
-			_ = h.broker.Publish(context.Background(), hruntime.Event{
-				ID:         conflicted.ID,
-				Type:       hruntime.EventDraftStateChanged,
-				Source:     "apply_draft_conflict",
-				OccurredAt: at,
-				Payload:    conflicted,
-			})
-		}
-		return model.Draft{}, store.ErrConflict
 	}
 
 	next, err := applyDraftPatch(current, draft)
@@ -344,23 +529,64 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 	return applied, nil
 }
 
+func (h *Harness) readDraftTargetForApply(draft model.Draft, targetAbs string, at time.Time) ([]byte, error) {
+	if draft.Kind == model.DraftKindMarkdownNoteWrite && draft.Target.BaseVersion == model.DraftBaseVersionNewFile {
+		if _, err := os.Stat(targetAbs); err == nil {
+			return nil, h.markDraftConflicted(draft, at)
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	current, hash, err := vault.ReadFileWithHash(targetAbs)
+	if err != nil {
+		return nil, err
+	}
+	if hash != draft.Target.BaseVersion {
+		return nil, h.markDraftConflicted(draft, at)
+	}
+	return current, nil
+}
+
+func (h *Harness) markDraftConflicted(draft model.Draft, at time.Time) error {
+	if err := drafts.ValidateTransition(draft.State, model.DraftConflicted); err != nil {
+		return ErrDraftNotReady
+	}
+	conflicted, updateErr := h.store.Drafts().UpdateDraftState(draft.ID, model.DraftConflicted, at)
+	if updateErr == nil {
+		_ = h.broker.Publish(context.Background(), hruntime.Event{
+			ID:         conflicted.ID,
+			Type:       hruntime.EventDraftStateChanged,
+			Source:     "apply_draft_conflict",
+			OccurredAt: at,
+			Payload:    conflicted,
+		})
+	}
+	return store.ErrConflict
+}
+
 func (h *Harness) validateDraftTarget(draft model.Draft) error {
 	switch draft.Kind {
 	case model.DraftKindPersonaUpdate:
 		if !sameRelPath(draft.Target.Path, h.cfg.Vault.ManagedCore.Persona) || draft.Target.Class != model.DocClassPersona {
 			return ErrInvalidDraftPatch
 		}
+	case model.DraftKindMarkdownNoteWrite:
+		if draft.Target.Class != model.DocClassNote {
+			return ErrInvalidDraftPatch
+		}
+		if _, _, err := h.validateLowGovernanceMarkdownTarget(draft.Target.Path); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func (h *Harness) WriteLowRiskNote(relPath string, content []byte, overwrite bool, at time.Time) (model.VaultDocument, error) {
-	normalizedPath := cleanRelPath(relPath)
-	if !isLowRiskWritePath(normalizedPath) {
-		return model.VaultDocument{}, ErrDirectWriteDenied
-	}
-	if !h.allowsLowRiskDirectWrite(normalizedPath) {
-		return model.VaultDocument{}, ErrDirectWriteDenied
+	normalizedPath, _, err := h.validateLowGovernanceMarkdownTarget(relPath)
+	if err != nil {
+		return model.VaultDocument{}, err
 	}
 
 	targetAbs := filepath.Join(h.cfg.Paths.VaultRoot, filepath.FromSlash(normalizedPath))
@@ -398,6 +624,20 @@ func (h *Harness) WriteLowRiskNote(relPath string, content []byte, overwrite boo
 	return doc, nil
 }
 
+func (h *Harness) validateLowGovernanceMarkdownTarget(relPath string) (string, model.DocClass, error) {
+	normalizedPath := cleanRelPath(relPath)
+	if !isLowRiskWritePath(normalizedPath) {
+		return "", model.DocClassUnknown, ErrDirectWriteDenied
+	}
+	if hasHiddenPathSegment(normalizedPath) {
+		return "", model.DocClassUnknown, ErrDirectWriteDenied
+	}
+	if !h.allowsLowRiskDirectWrite(normalizedPath) {
+		return "", model.DocClassUnknown, ErrDirectWriteDenied
+	}
+	return normalizedPath, model.DocClassNote, nil
+}
+
 func (h *Harness) allowsLowRiskDirectWrite(relPath string) bool {
 	if relPath == "" || vault.ShouldIgnoreRelativePath(relPath) {
 		return false
@@ -415,6 +655,78 @@ func (h *Harness) allowsLowRiskDirectWrite(relPath string) bool {
 
 	classification := h.classifier.Classify(relPath)
 	return classification.Class == model.DocClassUnknown || classification.Class == model.DocClassNote
+}
+
+func normalizeMarkdownNoteProposal(proposal model.MarkdownNoteProposal) model.MarkdownNoteProposal {
+	proposal.TargetPath = cleanRelPath(proposal.TargetPath)
+	proposal.Title = strings.TrimSpace(proposal.Title)
+	proposal.SourceKind = strings.ToLower(strings.TrimSpace(proposal.SourceKind))
+	proposal.Evidence = strings.TrimSpace(proposal.Evidence)
+	proposal.Reason = strings.TrimSpace(proposal.Reason)
+	proposal.Source = strings.TrimSpace(proposal.Source)
+	proposal.TaskContext = strings.TrimSpace(proposal.TaskContext)
+	proposal.Course = strings.TrimSpace(proposal.Course)
+	proposal.Topic = strings.TrimSpace(proposal.Topic)
+	proposal.DedupeKey = strings.TrimSpace(proposal.DedupeKey)
+	return proposal
+}
+
+func validateMarkdownNoteProposalFields(proposal model.MarkdownNoteProposal) error {
+	if proposal.TargetPath == "" || proposal.Title == "" || strings.TrimSpace(proposal.Content) == "" || proposal.SourceKind == "" || proposal.Evidence == "" || proposal.Reason == "" || proposal.Source == "" || proposal.ObservedAt.IsZero() {
+		return fmt.Errorf("orchestrator: markdown note proposal requires target_path, title, content, source_kind, evidence, reason, source, and observed_at")
+	}
+	if !validMarkdownNoteSourceKind(proposal.SourceKind) {
+		return fmt.Errorf("orchestrator: markdown note proposal source_kind must be class, meeting, development, conversation, research, or other")
+	}
+	if len(proposal.Content) > markdownNoteContentMaxBytes {
+		return fmt.Errorf("orchestrator: markdown note proposal content exceeds %d bytes", markdownNoteContentMaxBytes)
+	}
+	for name, value := range map[string]string{
+		"evidence":     proposal.Evidence,
+		"reason":       proposal.Reason,
+		"task_context": proposal.TaskContext,
+	} {
+		if len(value) > markdownNoteLongFieldMaxBytes {
+			return fmt.Errorf("orchestrator: markdown note proposal %s exceeds %d bytes", name, markdownNoteLongFieldMaxBytes)
+		}
+	}
+	for name, value := range map[string]string{
+		"title":      proposal.Title,
+		"course":     proposal.Course,
+		"topic":      proposal.Topic,
+		"source":     proposal.Source,
+		"dedupe_key": proposal.DedupeKey,
+	} {
+		if len(value) > markdownNoteShortFieldMaxBytes {
+			return fmt.Errorf("orchestrator: markdown note proposal %s exceeds %d bytes", name, markdownNoteShortFieldMaxBytes)
+		}
+	}
+	return nil
+}
+
+func validMarkdownNoteSourceKind(value string) bool {
+	switch value {
+	case "class", "meeting", "development", "conversation", "research", "other":
+		return true
+	default:
+		return false
+	}
+}
+
+func supersedingDraftID(oldID string, at time.Time) string {
+	suffix := strings.NewReplacer(" ", "-", "/", "-", "\\", "-", ":", "-").Replace(strings.TrimSpace(oldID))
+	if suffix == "" {
+		suffix = "unknown"
+	}
+	return fmt.Sprintf("draft-%d-supersedes-%s", at.UnixNano(), suffix)
+}
+
+func supersedeSummary(oldID string, targetPath string, update model.DraftSupersedeUpdate) string {
+	detail := strings.TrimSpace(update.Summary)
+	if detail == "" {
+		detail = update.Reason
+	}
+	return fmt.Sprintf("Revised markdown note draft superseding %s for %s. Reason: %s. %s. Proposal creation is not apply; the target note is unchanged until reviewed and applied by Lore.", oldID, targetPath, update.Reason, detail)
 }
 
 func (h *Harness) transitionDraftState(id string, next model.DraftState, source string, auditPrefix string, actor string, at time.Time) (model.Draft, error) {
@@ -527,6 +839,15 @@ func isLowRiskWritePath(relPath string) bool {
 	return strings.EqualFold(filepath.Ext(relPath), ".md")
 }
 
+func hasHiddenPathSegment(relPath string) bool {
+	for _, part := range strings.Split(cleanRelPath(relPath), "/") {
+		if strings.HasPrefix(part, ".") {
+			return true
+		}
+	}
+	return false
+}
+
 func sameRelPath(left string, right string) bool {
 	return strings.EqualFold(cleanRelPath(left), cleanRelPath(right))
 }
@@ -563,9 +884,28 @@ func applyDraftPatch(current []byte, draft model.Draft) ([]byte, error) {
 		return upsertProgressIndexRow(current, draft.ProposedContent)
 	case model.DraftKindPersonaUpdate:
 		return appendPersonaUpdateRecord(current, draft)
+	case model.DraftKindMarkdownNoteWrite:
+		return renderMarkdownNoteDraft(current, draft)
 	default:
 		return nil, ErrUnsupportedDraft
 	}
+}
+
+func renderMarkdownNoteDraft(_ []byte, draft model.Draft) ([]byte, error) {
+	var proposal model.MarkdownNoteProposal
+	if err := json.Unmarshal([]byte(draft.ProposedContent), &proposal); err != nil {
+		return nil, ErrInvalidDraftPatch
+	}
+	proposal = normalizeMarkdownNoteProposal(proposal)
+	if err := validateMarkdownNoteProposalFields(proposal); err != nil {
+		return nil, ErrInvalidDraftPatch
+	}
+	if draft.Target.Class != model.DocClassNote || !sameRelPath(proposal.TargetPath, draft.Target.Path) {
+		return nil, ErrInvalidDraftPatch
+	}
+	content := strings.ReplaceAll(proposal.Content, "\r\n", "\n")
+	content = strings.TrimRight(content, "\n") + "\n"
+	return []byte(content), nil
 }
 
 func appendPersonaUpdateRecord(current []byte, draft model.Draft) ([]byte, error) {

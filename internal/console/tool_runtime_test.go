@@ -67,6 +67,51 @@ func TestToolRuntimeVaultWriteLowCallsRuntimeWithoutKeywordGate(t *testing.T) {
 	}
 }
 
+func TestToolRuntimeDraftSupersedeIsLocalTool(t *testing.T) {
+	runtime := &fakeRuntime{
+		drafts: []model.Draft{{
+			ID:     "draft-1",
+			Kind:   model.DraftKindMarkdownNoteWrite,
+			State:  model.DraftPendingReview,
+			Target: model.DocumentRef{Path: "03-notes/inbox/ecommerce.md", Class: model.DocClassNote},
+		}},
+	}
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	tools := newToolRuntime(session, runtime)
+
+	found := false
+	for _, tool := range tools.DescribeTools(operatoragent.Context{}) {
+		if tool.Name == "draft_supersede" {
+			found = true
+			if !strings.Contains(tool.Description, "Local Lore only") || !strings.Contains(tool.Description, "not MCP") {
+				t.Fatalf("draft_supersede description = %q, want local-only boundary", tool.Description)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("DescribeTools() missing draft_supersede")
+	}
+
+	result, err := tools.CallTool("draft_supersede", map[string]any{
+		"draft_id":    "draft-1",
+		"target_path": "03-notes/class/ecommerce.md",
+		"content":     "# E-commerce\n\nRevised.",
+		"reason":      "Aligned with persona and weak points",
+	})
+	if err != nil {
+		t.Fatalf("draft_supersede error = %v", err)
+	}
+	if runtime.supersede == nil || runtime.supersede.TargetPath != "03-notes/class/ecommerce.md" || runtime.supersede.ProposedContent != "# E-commerce\n\nRevised." {
+		t.Fatalf("supersede update = %+v", runtime.supersede)
+	}
+	if session.CurrentDraftID != "draft-1-revised" {
+		t.Fatalf("CurrentDraftID = %q, want revised draft", session.CurrentDraftID)
+	}
+	if !strings.Contains(result.Content, "supersede") || !strings.Contains(result.Content, "draft-1-revised") {
+		t.Fatalf("draft_supersede result = %q", result.Content)
+	}
+}
+
 func TestToolRuntimeVaultResolveEnrichesUniqueSelectedPath(t *testing.T) {
 	runtime := &fakeRuntime{}
 	session := NewSessionWithAgent("test", &fakeAgent{})

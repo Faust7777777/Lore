@@ -67,6 +67,25 @@ func TestStorePersistsAcrossReload(t *testing.T) {
 		t.Fatalf("SaveDailyReport() error = %v", err)
 	}
 
+	if err := st.SaveFinding(model.Finding{
+		ID:       "finding-1",
+		Kind:     model.FindingOutOfBandVaultWrite,
+		State:    model.FindingOpen,
+		Severity: model.FindingSeverityInfo,
+		Target: model.DocumentRef{
+			Path:        "notes/outside.md",
+			Class:       model.DocClassNote,
+			BaseVersion: "hash-1",
+		},
+		Title:      "outside write",
+		Summary:    "outside write detected",
+		Source:     "vault_daemon",
+		DetectedAt: createdAt,
+		UpdatedAt:  createdAt,
+	}); err != nil {
+		t.Fatalf("SaveFinding() error = %v", err)
+	}
+
 	if err := st.SaveCursor("codex:session-1", "cursor-42"); err != nil {
 		t.Fatalf("SaveCursor() error = %v", err)
 	}
@@ -98,6 +117,14 @@ func TestStorePersistsAcrossReload(t *testing.T) {
 	}
 	if len(report.WindowKeys) != 1 {
 		t.Fatalf("WindowKeys = %d, want 1", len(report.WindowKeys))
+	}
+
+	findings, err := reloaded.ListFindings(1)
+	if err != nil {
+		t.Fatalf("ListFindings() error = %v", err)
+	}
+	if len(findings) != 1 || findings[0].ID != "finding-1" {
+		t.Fatalf("findings = %+v, want finding-1", findings)
 	}
 
 	cursor, err := reloaded.GetCursor("codex:session-1")

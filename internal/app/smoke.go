@@ -24,6 +24,14 @@ type P0SmokeResult struct {
 	Checks     []SmokeCheck
 }
 
+type GovernedNoteSmokeResult struct {
+	Proposal model.MarkdownNoteProposalResult
+	Review   DraftReview
+	Applied  model.Draft
+	Target   model.VaultDocument
+	Checks   []SmokeCheck
+}
+
 func (r *Runtime) SmokeP0(now time.Time) (P0SmokeResult, error) {
 	if _, err := r.Bootstrap(now); err != nil {
 		return P0SmokeResult{}, fmt.Errorf("bootstrap: %w", err)
@@ -115,7 +123,98 @@ func (r *Runtime) SmokeP0(now time.Time) (P0SmokeResult, error) {
 	return result, nil
 }
 
+func (r *Runtime) SmokeGovernedMarkdownNoteIntake(now time.Time) (GovernedNoteSmokeResult, error) {
+	if _, err := r.Bootstrap(now); err != nil {
+		return GovernedNoteSmokeResult{}, fmt.Errorf("bootstrap: %w", err)
+	}
+
+	targetPath := "03-notes/smoke/governed-note-intake.md"
+	proposal := model.MarkdownNoteProposal{
+		TargetPath:  targetPath,
+		Title:       "Governed Note Intake Smoke",
+		Content:     "# Governed Note Intake Smoke\n\n- External agent content enters Lore as a proposal.\n- Local Lore applies only after review and approval.",
+		SourceKind:  "development",
+		Evidence:    "deterministic smoke test content",
+		Reason:      "verify governed markdown note intake flow",
+		Source:      "runtime_smoke",
+		ObservedAt:  now,
+		TaskContext: "business-level governed intake smoke",
+		Topic:       "Lore governance",
+		DedupeKey:   "governed-note-intake-smoke",
+	}
+	proposalResult, err := r.Harness.ProposeMarkdownNote(proposal, now)
+	if err != nil {
+		return GovernedNoteSmokeResult{}, fmt.Errorf("markdown note proposal: %w", err)
+	}
+
+	targetAbs := filepath.Join(r.Config.Paths.VaultRoot, filepath.FromSlash(targetPath))
+	_, statAfterProposalErr := os.Stat(targetAbs)
+	review, err := r.ReviewDraft(proposalResult.DraftID)
+	if err != nil {
+		return GovernedNoteSmokeResult{}, fmt.Errorf("review draft: %w", err)
+	}
+	if _, err := r.Harness.ApproveDraft(proposalResult.DraftID, now.Add(time.Minute)); err != nil {
+		return GovernedNoteSmokeResult{}, fmt.Errorf("approve draft: %w", err)
+	}
+	applied, err := r.Harness.ApplyDraft(proposalResult.DraftID, now.Add(2*time.Minute))
+	if err != nil {
+		return GovernedNoteSmokeResult{}, fmt.Errorf("apply draft: %w", err)
+	}
+	targetDoc, err := r.Harness.VaultRead(targetPath)
+	if err != nil {
+		return GovernedNoteSmokeResult{}, fmt.Errorf("read applied note: %w", err)
+	}
+	auditRecords, err := r.Store.Audit().ListAudit(64)
+	if err != nil {
+		return GovernedNoteSmokeResult{}, fmt.Errorf("audit list: %w", err)
+	}
+
+	result := GovernedNoteSmokeResult{
+		Proposal: proposalResult,
+		Review:   review,
+		Applied:  applied,
+		Target:   targetDoc,
+	}
+	result.Checks = append(result.Checks,
+		SmokeCheck{
+			Name:   "proposal_created_pending_draft",
+			OK:     proposalResult.Status == "draft_created" && proposalResult.DraftID != "" && proposalResult.ReviewRequired && review.Draft.State == model.DraftPendingReview,
+			Detail: fmt.Sprintf("draft=%s state=%s", proposalResult.DraftID, review.Draft.State),
+		},
+		SmokeCheck{
+			Name:   "proposal_does_not_write_target",
+			OK:     os.IsNotExist(statAfterProposalErr),
+			Detail: targetPath,
+		},
+		SmokeCheck{
+			Name:   "review_loaded_candidate",
+			OK:     review.Draft.Kind == model.DraftKindMarkdownNoteWrite && review.Draft.Target.Path == targetPath && strings.Contains(review.Draft.ProposedContent, "Governed Note Intake Smoke"),
+			Detail: review.Draft.Target.Path,
+		},
+		SmokeCheck{
+			Name:   "approved_apply_writes_note",
+			OK:     applied.State == model.DraftApplied && targetDoc.Path == targetPath && strings.Contains(targetDoc.Content, "Local Lore applies only after review and approval."),
+			Detail: fmt.Sprintf("draft=%s target=%s", applied.ID, targetDoc.Path),
+		},
+		SmokeCheck{
+			Name:   "audit_chain_present",
+			OK:     auditHasDraftChain(auditRecords, proposalResult.DraftID, targetPath),
+			Detail: fmt.Sprintf("draft=%s target=%s audit_records=%d", proposalResult.DraftID, targetPath, len(auditRecords)),
+		},
+	)
+	return result, nil
+}
+
 func (r P0SmokeResult) OK() bool {
+	for _, check := range r.Checks {
+		if !check.OK {
+			return false
+		}
+	}
+	return true
+}
+
+func (r GovernedNoteSmokeResult) OK() bool {
 	for _, check := range r.Checks {
 		if !check.OK {
 			return false
@@ -159,4 +258,27 @@ func auditHasKinds(records []model.AuditRecord, wants ...model.AuditKind) bool {
 		}
 	}
 	return true
+}
+
+func auditHasDraftChain(records []model.AuditRecord, draftID string, target string) bool {
+	if strings.TrimSpace(draftID) == "" || strings.TrimSpace(target) == "" {
+		return false
+	}
+	var created, approved, applied bool
+	for _, record := range records {
+		if record.CorrelationID != draftID || record.Target != target {
+			continue
+		}
+		switch record.Kind {
+		case model.AuditDraftCreated:
+			created = record.Metadata["draft_id"] == draftID
+		case model.AuditDraftStateChange:
+			if record.Metadata["state"] == string(model.DraftApproved) {
+				approved = true
+			}
+		case model.AuditDraftApplied:
+			applied = record.Metadata["draft_id"] == draftID && record.Metadata["state"] == string(model.DraftApplied)
+		}
+	}
+	return created && approved && applied
 }

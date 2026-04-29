@@ -19,10 +19,12 @@ const (
 type DraftKind string
 
 const (
-	DraftKindProgressSync   DraftKind = "progress_sync"
-	DraftKindPersonaUpdate  DraftKind = "persona_update"
-	DraftKindWeaknessUpdate DraftKind = "weakness_update"
-	DraftKindPlanAdjustment DraftKind = "plan_adjustment"
+	DraftKindProgressSync      DraftKind = "progress_sync"
+	DraftKindPersonaUpdate     DraftKind = "persona_update"
+	DraftKindWeaknessUpdate    DraftKind = "weakness_update"
+	DraftKindPlanAdjustment    DraftKind = "plan_adjustment"
+	DraftKindMarkdownNoteWrite DraftKind = "markdown_note_write"
+	DraftBaseVersionNewFile              = "new"
 )
 
 type Draft struct {
@@ -55,4 +57,35 @@ type PersonaUpdateProposalResult struct {
 	DraftID        string `json:"draft_id"`
 	Target         string `json:"target"`
 	ReviewRequired bool   `json:"review_required"`
+}
+
+type MarkdownNoteProposal struct {
+	TargetPath   string    `json:"target_path"`
+	Title        string    `json:"title"`
+	Content      string    `json:"content"`
+	SourceKind   string    `json:"source_kind"`
+	Evidence     string    `json:"evidence"`
+	Reason       string    `json:"reason"`
+	Source       string    `json:"source"`
+	ObservedAt   time.Time `json:"observed_at"`
+	TaskContext  string    `json:"task_context,omitempty"`
+	Course       string    `json:"course,omitempty"`
+	Topic        string    `json:"topic,omitempty"`
+	Tags         []string  `json:"tags,omitempty"`
+	RelatedPaths []string  `json:"related_paths,omitempty"`
+	DedupeKey    string    `json:"dedupe_key,omitempty"`
+}
+
+type MarkdownNoteProposalResult struct {
+	Status         string `json:"status"`
+	DraftID        string `json:"draft_id"`
+	Target         string `json:"target"`
+	ReviewRequired bool   `json:"review_required"`
+}
+
+type DraftSupersedeUpdate struct {
+	TargetPath      string `json:"target_path,omitempty"`
+	ProposedContent string `json:"proposed_content"`
+	Summary         string `json:"summary,omitempty"`
+	Reason          string `json:"reason"`
 }
