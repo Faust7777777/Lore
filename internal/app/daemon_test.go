@@ -14,6 +14,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
+	"obsidian-harness/internal/config/configtest"
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/vault"
 )
@@ -832,7 +833,7 @@ var _ io.Writer = (*lockedBuffer)(nil)
 func openRuntimeForTest(t *testing.T, workDir string) (*Runtime, error) {
 	t.Helper()
 
-	runtime, err := OpenRuntime(workDir)
+	runtime, err := OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
 	if err != nil {
 		return nil, err
 	}
