@@ -17,6 +17,13 @@ Lore already exposes a read-only MCP surface through `lore mcp`. External caller
 
 The SDK should make this read-only surface reusable without weakening existing governance boundaries.
 
+> Update (post v1 governance line): the live MCP surface now also includes
+> proposal-intake tools (for example `persona_update_propose`,
+> `markdown_note_propose`). The SDK's typed methods deliberately remain
+> read-only; proposal-intake tools are reachable only through the raw
+> `CallTool` escape hatch, preserving the SDK governance boundary stated
+> in this ADR. Updating typed coverage is out of scope for v0.
+
 Current baseline:
 
 - MCP server exists under `internal/mcp`.
