@@ -16,12 +16,13 @@ import (
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/orchestrator"
 	"obsidian-harness/internal/store/memory"
+	"obsidian-harness/internal/tools"
 	"obsidian-harness/internal/vault"
 )
 
 func TestToolDefinitionsExposeSDKContract(t *testing.T) {
 	tools := toolDefinitionsByName(t)
-	contracts := toolContracts()
+	contracts := allToolContractsForTesting(t)
 	if len(tools) != len(contracts) {
 		t.Fatalf("tool count = %d, want %d", len(tools), len(contracts))
 	}
@@ -594,8 +595,14 @@ func decodeFrames(t *testing.T, raw []byte) []map[string]any {
 
 func toolDefinitionsByName(t *testing.T) map[string]map[string]any {
 	t.Helper()
+	// After the tool-registry refactor (commit 2), the canonical tools/list
+	// source is Server.toolListDefinitions which merges registry-driven
+	// read-only tools with the legacy proposal table. The Harness pointer
+	// is unused by tools/list (metadata-only path), so a typed nil keeps
+	// the test helper free of an orchestrator setup.
+	s := NewServer(nil, "test")
 	out := make(map[string]map[string]any)
-	for _, tool := range toolDefinitions() {
+	for _, tool := range s.toolListDefinitions() {
 		name, ok := tool["name"].(string)
 		if !ok || name == "" {
 			t.Fatalf("tool missing string name: %#v", tool)
@@ -603,6 +610,42 @@ func toolDefinitionsByName(t *testing.T) map[string]map[string]any {
 		out[name] = tool
 	}
 	return out
+}
+
+// allToolContractsForTesting returns the full set of MCP-visible tool
+// contracts in legacy toolContract shape: registry-driven read-only tools
+// projected back into toolContract via tools.Tool inspection, followed by
+// the legacy proposal contracts. Used by TestToolDefinitionsExposeSDKContract
+// for an exhaustiveness check that survives the registry split. Will be
+// removed in commit 3 once proposal tools also live in the registry and
+// the legacy toolContracts() table is gone.
+func allToolContractsForTesting(t *testing.T) []toolContract {
+	t.Helper()
+	s := NewServer(nil, "test")
+	out := make([]toolContract, 0, 16)
+	for _, tool := range s.registry.ListBySurface(tools.SurfaceMCP) {
+		out = append(out, toolContractFromTool(tool))
+	}
+	out = append(out, toolContracts()...)
+	return out
+}
+
+func toolContractFromTool(tool tools.Tool) toolContract {
+	args := make([]toolArgument, 0, len(tool.Arguments()))
+	for _, arg := range tool.Arguments() {
+		args = append(args, toolArgument{
+			Name:            arg.Name,
+			Type:            string(arg.Type),
+			Enum:            arg.Enum,
+			DeprecatedAlias: arg.DeprecatedAlias,
+		})
+	}
+	return toolContract{
+		Name:        tool.Name(),
+		Description: tool.Description(),
+		Arguments:   args,
+		Required:    tool.Required(),
+	}
 }
 
 func toolNames(tools map[string]map[string]any) []string {

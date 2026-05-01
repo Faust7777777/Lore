@@ -13,14 +13,16 @@ import (
 
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/orchestrator"
+	"obsidian-harness/internal/tools"
 )
 
 const protocolVersion = "2024-11-05"
 const maxFrameContentLength = 1 * 1024 * 1024
 
 type Server struct {
-	harness *orchestrator.Harness
-	version string
+	harness  *orchestrator.Harness
+	version  string
+	registry *tools.Registry
 }
 
 type requestEnvelope struct {
@@ -43,9 +45,21 @@ type responseError struct {
 }
 
 func NewServer(harness *orchestrator.Harness, version string) *Server {
+	registry := tools.NewRegistry()
+	// Read-only built-in tools migrate to the registry as part of the
+	// tool-registry refactor. Proposal tools and any future MCP-visible
+	// tools will join the registry in subsequent commits.
+	if err := tools.RegisterReadOnly(registry, harness); err != nil {
+		// RegisterReadOnly only fails on a programming error (duplicate
+		// or empty tool name) which is impossible with the static
+		// built-in list. Fail fast so the misconfiguration is caught
+		// at server startup rather than during a tools/call dispatch.
+		panic(fmt.Errorf("mcp: register read-only tools: %w", err))
+	}
 	return &Server{
-		harness: harness,
-		version: version,
+		harness:  harness,
+		version:  version,
+		registry: registry,
 	}
 }
 
@@ -119,7 +133,7 @@ func (s *Server) handle(_ context.Context, method string, rawParams json.RawMess
 	case "ping":
 		return map[string]any{}, nil
 	case "tools/list":
-		return map[string]any{"tools": toolDefinitions()}, nil
+		return map[string]any{"tools": s.toolListDefinitions()}, nil
 	case "tools/call":
 		var callParams struct {
 			Name      string         `json:"name"`
@@ -153,26 +167,26 @@ func (s *Server) handle(_ context.Context, method string, rawParams json.RawMess
 	}
 }
 
+// toolListDefinitions returns the merged tools/list definitions: built-in
+// read-only tools come from the shared registry, proposal tools still
+// come from the legacy toolContracts() table. Order is preserved so
+// external MCP callers see the same JSON they did before the registry
+// migration. Commit 3 of the tool-registry refactor will move proposal
+// tools into the registry and drop the legacy fallback.
+func (s *Server) toolListDefinitions() []map[string]any {
+	registryDefs := tools.MCPDefinitions(s.registry.ListBySurface(tools.SurfaceMCP))
+	legacyDefs := toolDefinitions()
+	merged := make([]map[string]any, 0, len(registryDefs)+len(legacyDefs))
+	merged = append(merged, registryDefs...)
+	merged = append(merged, legacyDefs...)
+	return merged
+}
+
 func (s *Server) callTool(name string, args map[string]any) (any, error) {
+	if tool, ok := s.registry.Get(name); ok && tool.Surfaces().Has(tools.SurfaceMCP) {
+		return tool.Call(args)
+	}
 	switch name {
-	case "managed_status":
-		return s.harness.ManagedStatus()
-	case "system_doc_get":
-		return s.harness.SystemDocGet(getString(args, "name"))
-	case "vault_read":
-		return s.harness.VaultRead(getString(args, "path"))
-	case "vault_list":
-		return s.harness.VaultList(getDirArg(args))
-	case "vault_search_text":
-		return s.harness.VaultSearchText(getString(args, "query"), getDirArg(args), getInt(args, "limit", 10))
-	case "vault_resolve":
-		return s.harness.VaultResolve(getString(args, "query"), getDirArg(args), getInt(args, "limit", 5))
-	case "vault_backlinks":
-		return s.harness.VaultBacklinks(getString(args, "path"), getInt(args, "limit", 10))
-	case "doc_classify":
-		return s.harness.DocClassify(getString(args, "path")), nil
-	case "context_pack":
-		return s.harness.ContextPack(getTargetPathArg(args), getString(args, "task"), getInt(args, "limit", 6))
 	case "persona_update_propose":
 		observedAt, err := parseObservedAt(getString(args, "observed_at"))
 		if err != nil {

@@ -14,81 +14,16 @@ type toolArgument struct {
 	DeprecatedAlias string
 }
 
+// toolContracts returns the legacy proposal-tool contracts that have not
+// yet migrated to the shared tools.Registry. The 9 read-only tools
+// (managed_status, system_doc_get, vault_read, vault_list,
+// vault_search_text, vault_resolve, vault_backlinks, doc_classify,
+// context_pack) now live in internal/tools and are surfaced through
+// Server.registry. Commit 3 of the tool-registry refactor will move the
+// proposal tools too, after which this function and its helpers will be
+// deleted.
 func toolContracts() []toolContract {
 	return []toolContract{
-		{
-			Name:        "managed_status",
-			Description: "Return managed mode and core document status.",
-		},
-		{
-			Name:        "system_doc_get",
-			Description: "Read one of the managed core documents.",
-			Arguments: []toolArgument{
-				{Name: "name", Type: "string", Enum: []string{"system", "progress", "persona", "agent", "identity"}},
-			},
-			Required: []string{"name"},
-		},
-		{
-			Name:        "vault_read",
-			Description: "Read a markdown document from the vault.",
-			Arguments:   []toolArgument{{Name: "path", Type: "string"}},
-			Required:    []string{"path"},
-		},
-		{
-			Name:        "vault_list",
-			Description: "List files under a vault directory.",
-			Arguments: []toolArgument{
-				{Name: "dir", Type: "string"},
-				{Name: "path", Type: "string", DeprecatedAlias: "dir"},
-			},
-		},
-		{
-			Name:        "vault_search_text",
-			Description: "Search vault text content.",
-			Arguments: []toolArgument{
-				{Name: "query", Type: "string"},
-				{Name: "dir", Type: "string"},
-				{Name: "path", Type: "string", DeprecatedAlias: "dir"},
-				{Name: "limit", Type: "integer"},
-			},
-			Required: []string{"query"},
-		},
-		{
-			Name:        "vault_resolve",
-			Description: "Resolve a natural-language note reference to vault markdown paths. Returns unique, ambiguous, or not_found.",
-			Arguments: []toolArgument{
-				{Name: "query", Type: "string"},
-				{Name: "dir", Type: "string"},
-				{Name: "path", Type: "string", DeprecatedAlias: "dir"},
-				{Name: "limit", Type: "integer"},
-			},
-			Required: []string{"query"},
-		},
-		{
-			Name:        "vault_backlinks",
-			Description: "Find backlinks to a vault document.",
-			Arguments: []toolArgument{
-				{Name: "path", Type: "string"},
-				{Name: "limit", Type: "integer"},
-			},
-			Required: []string{"path"},
-		},
-		{
-			Name:        "doc_classify",
-			Description: "Classify a vault document by the current rules.",
-			Arguments:   []toolArgument{{Name: "path", Type: "string"}},
-			Required:    []string{"path"},
-		},
-		{
-			Name:        "context_pack",
-			Description: "Assemble a read-only context pack for a task or document.",
-			Arguments: []toolArgument{
-				{Name: "target_path", Type: "string"},
-				{Name: "path", Type: "string", DeprecatedAlias: "target_path"},
-				{Name: "task", Type: "string"},
-				{Name: "limit", Type: "integer"},
-			},
-		},
 		{
 			Name:        "persona_update_propose",
 			Description: "Submit a persona update proposal for Lore review. Creates a pending draft; does not write or apply the persona document.",
