@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/operatoragent"
 )
 
@@ -160,10 +161,48 @@ func TestRenderInputHeaderIdle(t *testing.T) {
 	}
 }
 
-func TestRenderApprovalPlaceholder(t *testing.T) {
-	result := renderApprovalPlaceholder()
-	if !strings.Contains(result, "No pending actions.") {
-		t.Errorf("approval placeholder should show empty state, got: %q", result)
+func TestRenderApprovalPaneEmpty(t *testing.T) {
+	result := renderApprovalPane(nil, 0, false, 30, 10)
+	if !strings.Contains(result, "No pending drafts") {
+		t.Errorf("approval pane empty state should show 'No pending drafts', got: %q", result)
+	}
+}
+
+func TestRenderApprovalListWithDrafts(t *testing.T) {
+	drafts := []model.Draft{
+		{ID: "d1", Kind: model.DraftKindMarkdownNoteWrite, Title: "Test note", State: model.DraftPendingReview},
+		{ID: "d2", Kind: model.DraftKindPersonaUpdate, Title: "Update persona", State: model.DraftPendingReview},
+	}
+	result := renderApprovalPane(drafts, 0, false, 36, 10)
+	if !strings.Contains(result, "Test note") {
+		t.Errorf("approval list should contain draft title, got: %q", result)
+	}
+	if !strings.Contains(result, "Update persona") {
+		t.Errorf("approval list should contain second draft title, got: %q", result)
+	}
+	if !strings.Contains(result, "enter=detail") {
+		t.Errorf("approval list should show enter hint, got: %q", result)
+	}
+	// Cursor is on first item
+	if !strings.Contains(result, "1/2") {
+		t.Errorf("approval list should show position indicator, got: %q", result)
+	}
+}
+
+func TestRenderApprovalDetail(t *testing.T) {
+	draft := model.Draft{
+		ID: "d1", Kind: model.DraftKindMarkdownNoteWrite, Title: "Test note",
+		State: model.DraftPendingReview, Summary: "A summary here", ProposedContent: "Note content",
+	}
+	result := renderApprovalPane([]model.Draft{draft}, 0, true, 36, 20)
+	if !strings.Contains(result, "Draft Detail") {
+		t.Errorf("approval detail should show 'Draft Detail', got: %q", result)
+	}
+	if !strings.Contains(result, "A summary here") {
+		t.Errorf("approval detail should show summary, got: %q", result)
+	}
+	if !strings.Contains(result, "a=approve") {
+		t.Errorf("approval detail should show action hints, got: %q", result)
 	}
 }
 

@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"obsidian-harness/internal/model"
 )
 
 func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
@@ -36,8 +39,8 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 	} else {
 		approvalTitle = "Pending Approvals"
 	}
-	approvalPane := paneStyle(false).Width(rightWidth).Height(rightBottomHeight).Render(
-		renderPaneTitle(approvalTitle, false, false, "", "") + "\n" + renderApprovalPlaceholder(),
+	approvalPane := paneStyle(model.focus == focusApproval).Width(rightWidth).Height(rightBottomHeight).Render(
+		renderPaneTitle(approvalTitle, model.focus == focusApproval, false, "", "") + "\n" + renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalDetail, rightWidth-4, rightBottomHeight-4),
 	)
 	rightColumn := lipgloss.JoinVertical(lipgloss.Left, statusPane, approvalPane)
 
@@ -201,9 +204,78 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 	return builder.String()
 }
 
-func renderApprovalPlaceholder() string {
-	return styleMutedText.Render("No pending actions.") + "\n" +
-		styleMutedText.Render("Drafts go through review before apply.")
+func renderApprovalPane(drafts []model.Draft, cursor int, detail bool, width int, height int) string {
+	if len(drafts) == 0 {
+		return styleMutedText.Render("No pending drafts.") + "\n" +
+			styleMutedText.Render("Proposals appear here for review.")
+	}
+
+	if detail && cursor < len(drafts) {
+		return renderApprovalDetail(drafts[cursor], width, height)
+	}
+
+	return renderApprovalList(drafts, cursor, width, height)
+}
+
+func renderApprovalList(drafts []model.Draft, cursor int, width int, height int) string {
+	var builder strings.Builder
+
+	limit := len(drafts)
+	if limit > height {
+		limit = height
+	}
+
+	for i := 0; i < limit; i++ {
+		draft := drafts[i]
+		prefix := "  "
+		style := styleMutedText
+		if i == cursor {
+			prefix = styleWarn.Render(glyphFocus + " ")
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
+		}
+
+		kindLabel := oneLine(string(draft.Kind), 16)
+		title := oneLine(draft.Title, maxInt(10, width-22))
+
+		builder.WriteString(prefix + style.Render(kindLabel) + " " + style.Render(title))
+		builder.WriteString("\n")
+	}
+
+	if len(drafts) > 1 {
+		builder.WriteString(styleMutedText.Render(fmt.Sprintf("[%d/%d] enter=detail", cursor+1, len(drafts))))
+	} else {
+		builder.WriteString(styleMutedText.Render("[1/1] enter=detail"))
+	}
+	builder.WriteString("\n")
+
+	return builder.String()
+}
+
+func renderApprovalDetail(draft model.Draft, width int, height int) string {
+	var builder strings.Builder
+
+	builder.WriteString(styleSectionHead.Render("Draft Detail") + "\n")
+	builder.WriteString("  Kind   " + string(draft.Kind) + "\n")
+	builder.WriteString("  Target " + oneLine(draft.Target.Path, maxInt(10, width-10)) + "\n")
+	builder.WriteString("  State  " + string(draft.State) + "\n")
+
+	if draft.Summary != "" {
+		builder.WriteString("\n" + styleSectionHead.Render("Summary") + "\n")
+		summaryLines := maxInt(1, (height-8)/2)
+		summary := oneLine(draft.Summary, width*summaryLines)
+		builder.WriteString("  " + wrapText(summary, maxInt(10, width-2)) + "\n")
+	}
+
+	if draft.ProposedContent != "" {
+		builder.WriteString("\n" + styleSectionHead.Render("Proposed") + "\n")
+		contentLines := maxInt(1, (height-10)/2)
+		content := oneLine(draft.ProposedContent, width*contentLines)
+		builder.WriteString("  " + wrapText(content, maxInt(10, width-2)) + "\n")
+	}
+
+	builder.WriteString("\n" + styleWarn.Render("a") + "=approve " + styleErr.Render("r") + "=reject " + styleOK.Render("p") + "=apply " + styleMutedText.Render("esc=back"))
+
+	return builder.String()
 }
 
 func renderSessionDetail(snap WorkbenchSnapshot) string {

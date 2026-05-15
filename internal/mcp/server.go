@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/orchestrator"
 	"obsidian-harness/internal/tools"
 )
@@ -263,6 +262,13 @@ func writeResponse(writer io.Writer, response responseEnvelope) error {
 	return err
 }
 
+func getIntArg(args map[string]any, key string, fallback int) int {
+	value, ok := args[key]
+	if !ok {
+		return fallback
+	}
+	switch value := value.(type) {
+	case float64:
 		return int(value)
 	case int:
 		return value

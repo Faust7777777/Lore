@@ -16,6 +16,7 @@ import (
 type InteractiveWorkbenchDriver interface {
 	Load(lastOutput string) (WorkbenchViewModel, error)
 	Execute(line string, lastOutput string) (InteractiveWorkbenchUpdate, error)
+	ExecuteApprovalAction(action string, draftID string) (InteractiveWorkbenchUpdate, error)
 }
 
 type InteractiveWorkbenchUpdate struct {
@@ -30,6 +31,7 @@ const (
 	focusInput interactiveFocus = iota
 	focusConversation
 	focusStatus
+	focusApproval
 )
 
 type interactiveResultMsg struct {
@@ -45,20 +47,23 @@ type textSelection struct {
 }
 
 type interactiveWorkbenchModel struct {
-	driver         InteractiveWorkbenchDriver
-	viewModel      WorkbenchViewModel
-	lastOutput     string
-	width          int
-	height         int
-	focus          interactiveFocus
-	running        bool
-	pendingLine    string
-	chatViewport   viewport.Model
-	statusViewport viewport.Model
-	input          textarea.Model
-	spin           spinner.Model
-	selection      textSelection
-	contentLines   []string
+	driver          InteractiveWorkbenchDriver
+	viewModel       WorkbenchViewModel
+	lastOutput      string
+	width           int
+	height          int
+	focus           interactiveFocus
+	running         bool
+	pendingLine     string
+	chatViewport    viewport.Model
+	statusViewport  viewport.Model
+	approvalViewport viewport.Model
+	input           textarea.Model
+	spin            spinner.Model
+	selection       textSelection
+	contentLines    []string
+	approvalCursor  int
+	approvalDetail  bool
 }
 
 func RunInteractiveWorkbench(input io.Reader, output io.Writer, driver InteractiveWorkbenchDriver) error {
@@ -92,15 +97,16 @@ func newInteractiveWorkbenchModel(driver InteractiveWorkbenchDriver, viewModel W
 	spin := spinner.New(spinner.WithSpinner(spinner.Line))
 
 	model := interactiveWorkbenchModel{
-		driver:         driver,
-		viewModel:      viewModel,
-		focus:          focusInput,
-		chatViewport:   viewport.New(80, 20),
-		statusViewport: viewport.New(36, 20),
-		input:          input,
-		spin:           spin,
-		width:          120,
-		height:         32,
+		driver:           driver,
+		viewModel:        viewModel,
+		focus:            focusInput,
+		chatViewport:     viewport.New(80, 20),
+		statusViewport:   viewport.New(36, 20),
+		approvalViewport: viewport.New(36, 10),
+		input:            input,
+		spin:             spin,
+		width:            120,
+		height:           32,
 	}
 
 	model.input.Focus()
@@ -148,6 +154,8 @@ func (m interactiveWorkbenchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, nil
+	case approvalResultMsg:
+		return m.handleApprovalResult(msg)
 	case tea.MouseMsg:
 		return m.handleMouse(tea.MouseEvent(msg))
 	case tea.KeyMsg:
@@ -190,6 +198,8 @@ func (m interactiveWorkbenchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.statusViewport, cmd = m.statusViewport.Update(msg)
 			return m, cmd
+		case focusApproval:
+			return m.handleApprovalKeys(msg)
 		default:
 			switch msg.String() {
 			case "up", "down":
@@ -272,23 +282,32 @@ func (m *interactiveWorkbenchModel) resize() {
 		m.height = 32
 	}
 
-	leftWidth := maxInt(40, (m.width*2)/3)
-	rightWidth := maxInt(28, m.width-leftWidth-1)
+	narrow := m.width < 80
+	var leftWidth, rightWidth int
+	if narrow {
+		leftWidth = maxInt(30, (m.width*3)/4)
+	} else {
+		leftWidth = maxInt(40, (m.width*2)/3)
+	}
+	rightWidth = maxInt(28, m.width-leftWidth-1)
 	contentHeight := maxInt(12, m.height-8)
 	rightTopHeight := maxInt(8, (contentHeight*2)/3)
+	rightBottomHeight := maxInt(5, contentHeight-rightTopHeight-1)
 	inputWidth := maxInt(24, m.width-6)
 
 	m.chatViewport.Width = maxInt(18, leftWidth-4)
 	m.chatViewport.Height = maxInt(8, contentHeight-4)
 	m.statusViewport.Width = maxInt(16, rightWidth-4)
 	m.statusViewport.Height = maxInt(6, rightTopHeight-4)
+	m.approvalViewport.Width = maxInt(16, rightWidth-4)
+	m.approvalViewport.Height = maxInt(3, rightBottomHeight-4)
 	m.input.SetWidth(inputWidth)
 	m.input.SetHeight(3)
 }
 
 func (m *interactiveWorkbenchModel) applyFocus() tea.Cmd {
 	switch m.focus {
-	case focusConversation, focusStatus:
+	case focusConversation, focusStatus, focusApproval:
 		m.input.Blur()
 		return nil
 	default:
@@ -409,6 +428,8 @@ func nextFocus(current interactiveFocus) interactiveFocus {
 		return focusConversation
 	case focusConversation:
 		return focusStatus
+	case focusStatus:
+		return focusApproval
 	default:
 		return focusInput
 	}
@@ -417,6 +438,8 @@ func nextFocus(current interactiveFocus) interactiveFocus {
 func previousFocus(current interactiveFocus) interactiveFocus {
 	switch current {
 	case focusInput:
+		return focusApproval
+	case focusApproval:
 		return focusStatus
 	case focusStatus:
 		return focusConversation
@@ -435,6 +458,100 @@ func isTerminalWriter(output io.Writer) bool {
 		return false
 	}
 	return info.Mode()&os.ModeCharDevice != 0
+}
+
+// Approval pane keyboard handler.
+// List view: up/down select draft, enter opens detail.
+// Detail view: a=approve, r=reject, p=apply, esc=back to list.
+func (m interactiveWorkbenchModel) handleApprovalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	drafts := m.viewModel.PendingDrafts
+
+	if m.approvalDetail {
+		return m.handleApprovalDetailKeys(msg)
+	}
+
+	switch msg.String() {
+	case "up", "k":
+		if m.approvalCursor > 0 {
+			m.approvalCursor--
+		}
+		m.refreshContent(false)
+		return m, nil
+	case "down", "j":
+		if m.approvalCursor < len(drafts)-1 {
+			m.approvalCursor++
+		}
+		m.refreshContent(false)
+		return m, nil
+	case "enter":
+		if len(drafts) > 0 {
+			m.approvalDetail = true
+			m.refreshContent(false)
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m interactiveWorkbenchModel) handleApprovalDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	drafts := m.viewModel.PendingDrafts
+	if len(drafts) == 0 || m.approvalCursor >= len(drafts) {
+		m.approvalDetail = false
+		return m, nil
+	}
+
+	draft := drafts[m.approvalCursor]
+
+	switch msg.String() {
+	case "esc":
+		m.approvalDetail = false
+		m.refreshContent(false)
+		return m, nil
+	case "a":
+		return m.executeApprovalAction("approve", draft.ID)
+	case "r":
+		return m.executeApprovalAction("reject", draft.ID)
+	case "p":
+		return m.executeApprovalAction("apply", draft.ID)
+	}
+	return m, nil
+}
+
+type approvalResultMsg struct {
+	action   string
+	draftID  string
+	viewModel WorkbenchViewModel
+	lastOutput string
+	err      error
+}
+
+func (m interactiveWorkbenchModel) executeApprovalAction(action string, draftID string) (tea.Model, tea.Cmd) {
+	return m, func() tea.Msg {
+		update, err := m.driver.ExecuteApprovalAction(action, draftID)
+		return approvalResultMsg{
+			action:     action,
+			draftID:    draftID,
+			viewModel:  update.ViewModel,
+			lastOutput: update.LastOutput,
+			err:        err,
+		}
+	}
+}
+
+func (m interactiveWorkbenchModel) handleApprovalResult(msg approvalResultMsg) (tea.Model, tea.Cmd) {
+	m.approvalDetail = false
+	if msg.err != nil {
+		m.lastOutput = "Approval error: " + msg.err.Error()
+	} else {
+		m.viewModel = msg.viewModel
+		m.lastOutput = msg.lastOutput
+	}
+	// Clamp cursor to new list length
+	if m.approvalCursor >= len(m.viewModel.PendingDrafts) {
+		m.approvalCursor = maxInt(0, len(m.viewModel.PendingDrafts)-1)
+	}
+	m.refreshContent(true)
+	return m, nil
 }
 
 func minInt(a int, b int) int {

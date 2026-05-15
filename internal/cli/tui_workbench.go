@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -99,4 +100,39 @@ func (d interactiveWorkbenchDriver) Execute(line string, lastOutput string) (tui
 		viewModel, err := d.Load(lastOutput)
 		return tui.InteractiveWorkbenchUpdate{ViewModel: viewModel, LastOutput: lastOutput}, err
 	}
+}
+
+func (d interactiveWorkbenchDriver) ExecuteApprovalAction(action string, draftID string) (tui.InteractiveWorkbenchUpdate, error) {
+	var lastOutput string
+	switch action {
+	case "approve":
+		draft, err := d.runtime.ApproveDraft(draftID)
+		if err != nil {
+			return tui.InteractiveWorkbenchUpdate{}, err
+		}
+		lastOutput = fmt.Sprintf("Draft %s approved (%s). Use /drafts to review or ask Lore to apply it.", shortID(draft.ID, 8), draft.Kind)
+	case "reject":
+		draft, err := d.runtime.RejectDraft(draftID)
+		if err != nil {
+			return tui.InteractiveWorkbenchUpdate{}, err
+		}
+		lastOutput = fmt.Sprintf("Draft %s rejected (%s).", shortID(draft.ID, 8), draft.Kind)
+	case "apply":
+		draft, err := d.runtime.ApplyDraft(draftID)
+		if err != nil {
+			return tui.InteractiveWorkbenchUpdate{}, err
+		}
+		lastOutput = fmt.Sprintf("Draft %s applied (%s -> %s).", shortID(draft.ID, 8), draft.Kind, draft.Target.Path)
+	default:
+		return tui.InteractiveWorkbenchUpdate{}, fmt.Errorf("unknown approval action: %s", action)
+	}
+	viewModel, err := d.Load(lastOutput)
+	return tui.InteractiveWorkbenchUpdate{ViewModel: viewModel, LastOutput: lastOutput}, err
+}
+
+func shortID(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
