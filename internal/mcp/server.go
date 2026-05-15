@@ -46,15 +46,19 @@ type responseError struct {
 
 func NewServer(harness *orchestrator.Harness, version string) *Server {
 	registry := tools.NewRegistry()
-	// Read-only built-in tools migrate to the registry as part of the
-	// tool-registry refactor. Proposal tools and any future MCP-visible
-	// tools will join the registry in subsequent commits.
+	// Built-in tools live in the shared registry. Read-only tools first,
+	// then proposal-intake tools, so MCP tools/list output preserves the
+	// historical ordering: managed_status .. context_pack,
+	// persona_update_propose, markdown_note_propose. RegisterReadOnly
+	// and RegisterProposal only fail on programming errors (duplicate
+	// or empty names) which the static built-in lists make impossible;
+	// panic so misconfiguration surfaces at server startup rather than
+	// during a tools/call dispatch.
 	if err := tools.RegisterReadOnly(registry, harness); err != nil {
-		// RegisterReadOnly only fails on a programming error (duplicate
-		// or empty tool name) which is impossible with the static
-		// built-in list. Fail fast so the misconfiguration is caught
-		// at server startup rather than during a tools/call dispatch.
 		panic(fmt.Errorf("mcp: register read-only tools: %w", err))
+	}
+	if err := tools.RegisterProposal(registry, harness); err != nil {
+		panic(fmt.Errorf("mcp: register proposal tools: %w", err))
 	}
 	return &Server{
 		harness:  harness,
@@ -167,63 +171,25 @@ func (s *Server) handle(_ context.Context, method string, rawParams json.RawMess
 	}
 }
 
-// toolListDefinitions returns the merged tools/list definitions: built-in
-// read-only tools come from the shared registry, proposal tools still
-// come from the legacy toolContracts() table. Order is preserved so
-// external MCP callers see the same JSON they did before the registry
-// migration. Commit 3 of the tool-registry refactor will move proposal
-// tools into the registry and drop the legacy fallback.
+// toolListDefinitions returns the tools/list definitions surfaced over
+// MCP. After commit 3a the registry is the sole source of truth: the 9
+// read-only and 2 proposal-intake tools all live there in their
+// historical order.
 func (s *Server) toolListDefinitions() []map[string]any {
-	registryDefs := tools.MCPDefinitions(s.registry.ListBySurface(tools.SurfaceMCP))
-	legacyDefs := toolDefinitions()
-	merged := make([]map[string]any, 0, len(registryDefs)+len(legacyDefs))
-	merged = append(merged, registryDefs...)
-	merged = append(merged, legacyDefs...)
-	return merged
+	return tools.MCPDefinitions(s.registry.ListBySurface(tools.SurfaceMCP))
 }
 
+// callTool dispatches a tools/call invocation through the shared
+// registry. A tool is only callable on MCP if its Surfaces() bitmask
+// contains SurfaceMCP; this is the authoritative governance boundary
+// preventing draft-action and local-exec tools from leaking out of the
+// console.
 func (s *Server) callTool(name string, args map[string]any) (any, error) {
-	if tool, ok := s.registry.Get(name); ok && tool.Surfaces().Has(tools.SurfaceMCP) {
-		return tool.Call(args)
-	}
-	switch name {
-	case "persona_update_propose":
-		observedAt, err := parseObservedAt(getString(args, "observed_at"))
-		if err != nil {
-			return nil, err
-		}
-		return s.harness.ProposePersonaUpdate(model.PersonaUpdateProposal{
-			Field:         getString(args, "field"),
-			CurrentValue:  getString(args, "current_value"),
-			ProposedValue: getString(args, "proposed_value"),
-			Evidence:      getString(args, "evidence"),
-			Reason:        getString(args, "reason"),
-			Confidence:    getString(args, "confidence"),
-			Source:        getString(args, "source"),
-			ObservedAt:    observedAt,
-		}, time.Now())
-	case "markdown_note_propose":
-		observedAt, err := parseObservedAt(getString(args, "observed_at"))
-		if err != nil {
-			return nil, err
-		}
-		return s.harness.ProposeMarkdownNote(model.MarkdownNoteProposal{
-			TargetPath:  getString(args, "target_path"),
-			Title:       getString(args, "title"),
-			Content:     getString(args, "content"),
-			SourceKind:  getString(args, "source_kind"),
-			Evidence:    getString(args, "evidence"),
-			Reason:      getString(args, "reason"),
-			Source:      getString(args, "source"),
-			ObservedAt:  observedAt,
-			TaskContext: getString(args, "task_context"),
-			Course:      getString(args, "course"),
-			Topic:       getString(args, "topic"),
-			DedupeKey:   getString(args, "dedupe_key"),
-		}, time.Now())
-	default:
+	tool, ok := s.registry.Get(name)
+	if !ok || !tool.Surfaces().Has(tools.SurfaceMCP) {
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
+	return tool.Call(args)
 }
 
 func validateProcessAuth() error {
@@ -297,35 +263,6 @@ func writeResponse(writer io.Writer, response responseEnvelope) error {
 	return err
 }
 
-func getString(args map[string]any, key string) string {
-	if args == nil {
-		return ""
-	}
-	value, _ := args[key]
-	text, _ := value.(string)
-	return strings.TrimSpace(text)
-}
-
-func getDirArg(args map[string]any) string {
-	if dir := getString(args, "dir"); dir != "" {
-		return dir
-	}
-	return getString(args, "path")
-}
-
-func getTargetPathArg(args map[string]any) string {
-	if targetPath := getString(args, "target_path"); targetPath != "" {
-		return targetPath
-	}
-	return getString(args, "path")
-}
-
-func getInt(args map[string]any, key string, fallback int) int {
-	if args == nil {
-		return fallback
-	}
-	switch value := args[key].(type) {
-	case float64:
 		return int(value)
 	case int:
 		return value

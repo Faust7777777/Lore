@@ -1,6 +1,10 @@
 package tools
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // getString returns the string value at args[key] with whitespace trimmed.
 // Returns "" when args is nil, the key is missing, or the value is not a
@@ -57,4 +61,23 @@ func getTargetPathArg(args map[string]any) string {
 		return targetPath
 	}
 	return getString(args, "path")
+}
+
+// parseObservedAt parses the observed_at proposal argument. The value is
+// required and must be either RFC3339 (e.g. 2026-04-22T09:00:00Z) or the
+// shorter YYYY-MM-DD form. Behavior mirrors internal/mcp/server.go's
+// historical parseObservedAt so the proposal-tool migration produces
+// identical responses for invalid inputs.
+func parseObservedAt(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, fmt.Errorf("observed_at is required")
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02", raw); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("observed_at must be RFC3339 or YYYY-MM-DD")
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"obsidian-harness/internal/model"
 )
@@ -48,6 +49,16 @@ type fakeHarness struct {
 	contextPackLimit                   int
 	contextPackResult                  model.ContextPack
 	contextPackErr                     error
+
+	proposePersonaArg model.PersonaUpdateProposal
+	proposePersonaAt  time.Time
+	proposePersonaRes model.PersonaUpdateProposalResult
+	proposePersonaErr error
+
+	proposeMarkdownArg model.MarkdownNoteProposal
+	proposeMarkdownAt  time.Time
+	proposeMarkdownRes model.MarkdownNoteProposalResult
+	proposeMarkdownErr error
 }
 
 func (f *fakeHarness) ManagedStatus() (model.ManagedStatusView, error) {
@@ -91,6 +102,16 @@ func (f *fakeHarness) ContextPack(targetPath, task string, limit int) (model.Con
 	f.contextPackTask = task
 	f.contextPackLimit = limit
 	return f.contextPackResult, f.contextPackErr
+}
+func (f *fakeHarness) ProposePersonaUpdate(p model.PersonaUpdateProposal, at time.Time) (model.PersonaUpdateProposalResult, error) {
+	f.proposePersonaArg = p
+	f.proposePersonaAt = at
+	return f.proposePersonaRes, f.proposePersonaErr
+}
+func (f *fakeHarness) ProposeMarkdownNote(p model.MarkdownNoteProposal, at time.Time) (model.MarkdownNoteProposalResult, error) {
+	f.proposeMarkdownArg = p
+	f.proposeMarkdownAt = at
+	return f.proposeMarkdownRes, f.proposeMarkdownErr
 }
 
 func TestRegisterReadOnlyRegistersAllNineToolsInLegacyOrder(t *testing.T) {
