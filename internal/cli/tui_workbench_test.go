@@ -164,8 +164,8 @@ func TestLoadWorkbenchViewModelBuildsSnapshotFromRuntimeAndSession(t *testing.T)
 	if got, want := viewModel.Snapshot.Profile, "local-exec"; got != want {
 		t.Fatalf("viewModel.Snapshot.Profile = %q, want %q", got, want)
 	}
-	if got, want := len(viewModel.PendingDrafts), 1; got != want {
-		t.Fatalf("len(viewModel.PendingDrafts) = %d, want %d", got, want)
+	if got, want := len(viewModel.PendingDrafts), 2; got != want {
+		t.Fatalf("len(viewModel.PendingDrafts) = %d, want %d (pending_review + approved)", got, want)
 	}
 	if viewModel.FocusedReview == nil {
 		t.Fatalf("viewModel.FocusedReview = nil, want non-nil")

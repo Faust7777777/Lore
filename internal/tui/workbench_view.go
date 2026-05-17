@@ -213,6 +213,20 @@ func filterDraftsByState(drafts []model.Draft, state model.DraftState) []model.D
 	return out
 }
 
+func filterDraftsByStates(drafts []model.Draft, states ...model.DraftState) []model.Draft {
+	allowed := make(map[model.DraftState]bool, len(states))
+	for _, s := range states {
+		allowed[s] = true
+	}
+	out := make([]model.Draft, 0, len(drafts))
+	for _, draft := range drafts {
+		if allowed[draft.State] {
+			out = append(out, draft)
+		}
+	}
+	return out
+}
+
 func indentBlock(value string, prefix string) string {
 	if strings.TrimSpace(value) == "" {
 		return ""

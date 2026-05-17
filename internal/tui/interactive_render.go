@@ -40,7 +40,7 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 		approvalTitle = "Pending Approvals"
 	}
 	approvalPane := paneStyle(model.focus == focusApproval).Width(rightWidth).Height(rightBottomHeight).Render(
-		renderPaneTitle(approvalTitle, model.focus == focusApproval, false, "", "") + "\n" + renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalDetail, rightWidth-4, rightBottomHeight-4),
+		renderPaneTitle(approvalTitle, model.focus == focusApproval, false, "", "") + "\n" + renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalOffset, model.approvalDetail, rightWidth-4, rightBottomHeight-4),
 	)
 	rightColumn := lipgloss.JoinVertical(lipgloss.Left, statusPane, approvalPane)
 
@@ -204,7 +204,7 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 	return builder.String()
 }
 
-func renderApprovalPane(drafts []model.Draft, cursor int, detail bool, width int, height int) string {
+func renderApprovalPane(drafts []model.Draft, cursor int, offset int, detail bool, width int, height int) string {
 	if len(drafts) == 0 {
 		return styleMutedText.Render("No pending drafts.") + "\n" +
 			styleMutedText.Render("Proposals appear here for review.")
@@ -214,38 +214,51 @@ func renderApprovalPane(drafts []model.Draft, cursor int, detail bool, width int
 		return renderApprovalDetail(drafts[cursor], width, height)
 	}
 
-	return renderApprovalList(drafts, cursor, width, height)
+	return renderApprovalList(drafts, cursor, offset, width, height)
 }
 
-func renderApprovalList(drafts []model.Draft, cursor int, width int, height int) string {
+func renderApprovalList(drafts []model.Draft, cursor int, offset int, width int, height int) string {
 	var builder strings.Builder
 
-	limit := len(drafts)
-	if limit > height {
-		limit = height
+	// Reserve 1 line for position hint
+	listHeight := height - 1
+	if listHeight < 1 {
+		listHeight = 1
 	}
 
-	for i := 0; i < limit; i++ {
+	// Clamp offset
+	end := offset + listHeight
+	if end > len(drafts) {
+		end = len(drafts)
+	}
+
+	for i := offset; i < end; i++ {
 		draft := drafts[i]
 		prefix := "  "
-		style := styleMutedText
+		titleStyle := styleMutedText
 		if i == cursor {
 			prefix = styleWarn.Render(glyphFocus + " ")
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
+			titleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
 		}
 
-		kindLabel := oneLine(string(draft.Kind), 16)
-		title := oneLine(draft.Title, maxInt(10, width-22))
+		// State badge
+		var stateBadge string
+		switch draft.State {
+		case model.DraftApproved:
+			stateBadge = styleOK.Render("ok")
+		case model.DraftPendingReview:
+			stateBadge = styleWarn.Render("??")
+		default:
+			stateBadge = styleMutedText.Render(string(draft.State))
+		}
 
-		builder.WriteString(prefix + style.Render(kindLabel) + " " + style.Render(title))
+		title := oneLine(draft.Title, maxInt(16, width-8))
+
+		builder.WriteString(prefix + stateBadge + " " + titleStyle.Render(title))
 		builder.WriteString("\n")
 	}
 
-	if len(drafts) > 1 {
-		builder.WriteString(styleMutedText.Render(fmt.Sprintf("[%d/%d] enter=detail", cursor+1, len(drafts))))
-	} else {
-		builder.WriteString(styleMutedText.Render("[1/1] enter=detail"))
-	}
+	builder.WriteString(styleMutedText.Render(fmt.Sprintf("[%d/%d] enter=detail", cursor+1, len(drafts))))
 	builder.WriteString("\n")
 
 	return builder.String()
@@ -273,7 +286,15 @@ func renderApprovalDetail(draft model.Draft, width int, height int) string {
 		builder.WriteString("  " + wrapText(content, maxInt(10, width-2)) + "\n")
 	}
 
-	builder.WriteString("\n" + styleWarn.Render("a") + "=approve " + styleErr.Render("r") + "=reject " + styleOK.Render("p") + "=apply " + styleMutedText.Render("esc=back"))
+	builder.WriteString("\n")
+	switch draft.State {
+	case model.DraftPendingReview:
+		builder.WriteString(styleWarn.Render("a") + "=approve " + styleErr.Render("r") + "=reject " + styleMutedText.Render("esc=back"))
+	case model.DraftApproved:
+		builder.WriteString(styleOK.Render("p") + "=apply " + styleErr.Render("r") + "=reject " + styleMutedText.Render("esc=back"))
+	default:
+		builder.WriteString(styleMutedText.Render("esc=back"))
+	}
 
 	return builder.String()
 }

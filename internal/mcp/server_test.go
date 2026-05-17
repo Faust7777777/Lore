@@ -623,10 +623,19 @@ func allToolContractsForTesting(t *testing.T) []toolContract {
 	t.Helper()
 	s := NewServer(nil, "test")
 	out := make([]toolContract, 0, 16)
+	// Registry tools already include proposal intake tools.
+	registryNames := make(map[string]bool, 16)
 	for _, tool := range s.registry.ListBySurface(tools.SurfaceMCP) {
-		out = append(out, toolContractFromTool(tool))
+		tc := toolContractFromTool(tool)
+		out = append(out, tc)
+		registryNames[tc.Name] = true
 	}
-	out = append(out, toolContracts()...)
+	// Add hardcoded contracts only if not already in registry.
+	for _, tc := range toolContracts() {
+		if !registryNames[tc.Name] {
+			out = append(out, tc)
+		}
+	}
 	return out
 }
 

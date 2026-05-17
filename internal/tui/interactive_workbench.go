@@ -64,6 +64,7 @@ type interactiveWorkbenchModel struct {
 	contentLines    []string
 	approvalCursor  int
 	approvalDetail  bool
+	approvalOffset  int
 }
 
 func RunInteractiveWorkbench(input io.Reader, output io.Writer, driver InteractiveWorkbenchDriver) error {
@@ -474,12 +475,14 @@ func (m interactiveWorkbenchModel) handleApprovalKeys(msg tea.KeyMsg) (tea.Model
 	case "up", "k":
 		if m.approvalCursor > 0 {
 			m.approvalCursor--
+			m.clampApprovalOffset()
 		}
 		m.refreshContent(false)
 		return m, nil
 	case "down", "j":
 		if m.approvalCursor < len(drafts)-1 {
 			m.approvalCursor++
+			m.clampApprovalOffset()
 		}
 		m.refreshContent(false)
 		return m, nil
@@ -491,6 +494,25 @@ func (m interactiveWorkbenchModel) handleApprovalKeys(msg tea.KeyMsg) (tea.Model
 		return m, nil
 	}
 	return m, nil
+}
+
+// clampApprovalOffset keeps the cursor inside the visible window.
+func (m *interactiveWorkbenchModel) clampApprovalOffset() {
+	visibleHeight := m.approvalViewport.Height
+	if visibleHeight < 1 {
+		visibleHeight = 5
+	}
+	// Reserve 1 line for the position hint
+	listHeight := visibleHeight - 1
+	if listHeight < 1 {
+		listHeight = 1
+	}
+	if m.approvalCursor < m.approvalOffset {
+		m.approvalOffset = m.approvalCursor
+	}
+	if m.approvalCursor >= m.approvalOffset+listHeight {
+		m.approvalOffset = m.approvalCursor - listHeight + 1
+	}
 }
 
 func (m interactiveWorkbenchModel) handleApprovalDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

@@ -137,14 +137,14 @@ func TestNewWorkbenchViewModelFiltersPendingDraftsAndPreservesConversation(t *te
 		"state/sessions/session-1.jsonl",
 	)
 
-	if got, want := len(viewModel.PendingDrafts), 1; got != want {
-		t.Fatalf("len(viewModel.PendingDrafts) = %d, want %d", got, want)
+	if got, want := len(viewModel.PendingDrafts), 2; got != want {
+		t.Fatalf("len(viewModel.PendingDrafts) = %d, want %d (pending_review + approved)", got, want)
 	}
 	if got, want := len(viewModel.Conversation.Turns), 2; got != want {
 		t.Fatalf("len(viewModel.Conversation.Turns) = %d, want %d", got, want)
 	}
-	if got, want := viewModel.Snapshot.PendingDrafts, 1; got != want {
-		t.Fatalf("viewModel.Snapshot.PendingDrafts = %d, want %d", got, want)
+	if got, want := viewModel.Snapshot.PendingDrafts, 2; got != want {
+		t.Fatalf("viewModel.Snapshot.PendingDrafts = %d, want %d (pending_review + approved)", got, want)
 	}
 	if got, want := viewModel.Conversation.LastOutput, "world"; got != want {
 		t.Fatalf("viewModel.Conversation.LastOutput = %q, want %q", got, want)

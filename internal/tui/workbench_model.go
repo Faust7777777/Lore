@@ -55,7 +55,7 @@ type WorkbenchConversation struct {
 }
 
 func NewWorkbenchViewModel(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, toolTrace []operatoragent.ToolCallTrace, history []operatoragent.ConversationTurn, localExec bool, shellEnabled bool, lastOutput string, sessionID string, transcriptPath string) WorkbenchViewModel {
-	pendingDrafts := filterDraftsByState(drafts, model.DraftPendingReview)
+	pendingDrafts := filterDraftsByStates(drafts, model.DraftPendingReview, model.DraftApproved)
 	dailyReportPath := "missing"
 	if processSink.Report != nil {
 		dailyReportPath = processSink.Report.Path
