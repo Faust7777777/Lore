@@ -104,5 +104,5 @@ func NewWorkbenchViewModel(version string, managed model.ManagedStatusView, draf
 }
 
 func (s WorkbenchSnapshot) DraftSummary() string {
-	return fmt.Sprintf("%d pending / %d total", s.PendingDrafts, s.TotalDrafts)
+	return fmt.Sprintf("%d reviewable / %d total", s.PendingDrafts, s.TotalDrafts)
 }

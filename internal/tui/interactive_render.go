@@ -291,7 +291,7 @@ func renderApprovalDetail(draft model.Draft, width int, height int) string {
 	case model.DraftPendingReview:
 		builder.WriteString(styleWarn.Render("a") + "=approve " + styleErr.Render("r") + "=reject " + styleMutedText.Render("esc=back"))
 	case model.DraftApproved:
-		builder.WriteString(styleOK.Render("p") + "=apply " + styleErr.Render("r") + "=reject " + styleMutedText.Render("esc=back"))
+		builder.WriteString(styleOK.Render("p") + "=apply " + styleMutedText.Render("esc=back"))
 	default:
 		builder.WriteString(styleMutedText.Render("esc=back"))
 	}

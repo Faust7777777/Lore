@@ -11,6 +11,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"obsidian-harness/internal/model"
 )
 
 type InteractiveWorkbenchDriver interface {
@@ -530,10 +532,19 @@ func (m interactiveWorkbenchModel) handleApprovalDetailKeys(msg tea.KeyMsg) (tea
 		m.refreshContent(false)
 		return m, nil
 	case "a":
+		if draft.State != model.DraftPendingReview {
+			return m, nil
+		}
 		return m.executeApprovalAction("approve", draft.ID)
 	case "r":
+		if draft.State != model.DraftPendingReview {
+			return m, nil
+		}
 		return m.executeApprovalAction("reject", draft.ID)
 	case "p":
+		if draft.State != model.DraftApproved {
+			return m, nil
+		}
 		return m.executeApprovalAction("apply", draft.ID)
 	}
 	return m, nil
