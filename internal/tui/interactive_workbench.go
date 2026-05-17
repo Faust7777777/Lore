@@ -580,8 +580,14 @@ func (m interactiveWorkbenchModel) handleApprovalResult(msg approvalResultMsg) (
 		m.lastOutput = msg.lastOutput
 	}
 	// Clamp cursor to new list length
-	if m.approvalCursor >= len(m.viewModel.PendingDrafts) {
-		m.approvalCursor = maxInt(0, len(m.viewModel.PendingDrafts)-1)
+	if len(m.viewModel.PendingDrafts) == 0 {
+		m.approvalCursor = 0
+		m.approvalOffset = 0
+	} else {
+		if m.approvalCursor >= len(m.viewModel.PendingDrafts) {
+			m.approvalCursor = maxInt(0, len(m.viewModel.PendingDrafts)-1)
+		}
+		m.clampApprovalOffset()
 	}
 	m.refreshContent(true)
 	return m, nil
