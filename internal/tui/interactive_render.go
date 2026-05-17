@@ -35,9 +35,9 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 
 	var approvalTitle string
 	if narrow {
-		approvalTitle = "Approvals"
+		approvalTitle = "Drafts"
 	} else {
-		approvalTitle = "Pending Approvals"
+		approvalTitle = "Reviewable Drafts"
 	}
 	approvalPane := paneStyle(model.focus == focusApproval).Width(rightWidth).Height(rightBottomHeight).Render(
 		renderPaneTitle(approvalTitle, model.focus == focusApproval, false, "", "") + "\n" + renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalOffset, model.approvalDetail, rightWidth-4, rightBottomHeight-4),
@@ -182,7 +182,7 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 		}
 	}
 
-	builder.WriteString("\n" + styleSectionHead.Render("Pending Drafts") + "\n")
+	builder.WriteString("\n" + styleSectionHead.Render("Reviewable Drafts") + "\n")
 	if len(viewModel.PendingDrafts) == 0 {
 		builder.WriteString("  " + styleMutedText.Render("None.") + "\n")
 	} else {
@@ -206,7 +206,7 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 
 func renderApprovalPane(drafts []model.Draft, cursor int, offset int, detail bool, width int, height int) string {
 	if len(drafts) == 0 {
-		return styleMutedText.Render("No pending drafts.") + "\n" +
+		return styleMutedText.Render("No reviewable drafts.") + "\n" +
 			styleMutedText.Render("Proposals appear here for review.")
 	}
 
@@ -245,9 +245,9 @@ func renderApprovalList(drafts []model.Draft, cursor int, offset int, width int,
 		var stateBadge string
 		switch draft.State {
 		case model.DraftApproved:
-			stateBadge = styleOK.Render("ok")
+			stateBadge = styleOK.Render("approved")
 		case model.DraftPendingReview:
-			stateBadge = styleWarn.Render("??")
+			stateBadge = styleWarn.Render("review")
 		default:
 			stateBadge = styleMutedText.Render(string(draft.State))
 		}

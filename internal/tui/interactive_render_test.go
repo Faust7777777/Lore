@@ -163,8 +163,8 @@ func TestRenderInputHeaderIdle(t *testing.T) {
 
 func TestRenderApprovalPaneEmpty(t *testing.T) {
 	result := renderApprovalPane(nil, 0, 0, false, 30, 10)
-	if !strings.Contains(result, "No pending drafts") {
-		t.Errorf("approval pane empty state should show 'No pending drafts', got: %q", result)
+	if !strings.Contains(result, "No reviewable drafts") {
+		t.Errorf("approval pane empty state should show 'No reviewable drafts', got: %q", result)
 	}
 }
 
