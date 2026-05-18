@@ -54,13 +54,16 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "smoke binary build failed"
     }
-    $SmokeWorkDir = Join-Path $RepoRoot ".smoke-workdir"
-    if (Test-Path $SmokeWorkDir) {
-        Remove-Item -LiteralPath $SmokeWorkDir -Recurse -Force
-    }
-    & $SmokeBin smoke p0 --workdir $SmokeWorkDir --full
-    if ($LASTEXITCODE -ne 0) {
-        throw "smoke p0 --full failed with exit code $LASTEXITCODE"
+    $SmokeWorkDir = Join-Path ([System.IO.Path]::GetTempPath()) ("lore-smoke-" + [System.Guid]::NewGuid().ToString("N"))
+    try {
+        & $SmokeBin smoke p0 --workdir $SmokeWorkDir --full
+        if ($LASTEXITCODE -ne 0) {
+            throw "smoke p0 --full failed with exit code $LASTEXITCODE"
+        }
+    } finally {
+        if (Test-Path $SmokeWorkDir) {
+            Remove-Item -LiteralPath $SmokeWorkDir -Recurse -Force
+        }
     }
     Write-Host "--- Smoke P0 passed ---`n" -ForegroundColor Green
     # --- End smoke gate ---

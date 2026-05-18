@@ -3,6 +3,7 @@ bin/
 dist/
 tmp/
 .tmp/
+.smoke-workdir/
 *.exe
 *.test
 *.out
