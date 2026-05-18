@@ -17,6 +17,17 @@ type vaultWatcher struct {
 	watched map[string]struct{}
 }
 
+type vaultEventWatcher interface {
+	Events() <-chan fsnotify.Event
+	Errors() <-chan error
+	Close() error
+	CollectPaths(event fsnotify.Event) ([]string, error)
+}
+
+var newVaultWatcherFunc = func(root string) (vaultEventWatcher, error) {
+	return newVaultWatcher(root)
+}
+
 func newVaultWatcher(root string) (*vaultWatcher, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {

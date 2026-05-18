@@ -207,7 +207,7 @@ func (r *Runtime) RunVaultDaemon(ctx context.Context, opts VaultDaemonRunOptions
 		return nil
 	}
 
-	watcher, err := newVaultWatcher(r.Config.Paths.VaultRoot)
+	watcher, err := newVaultWatcherFunc(r.Config.Paths.VaultRoot)
 	if err != nil {
 		writeDaemonLine(opts.Stdout, "Vault watcher unavailable\n- error: %s\n- mode: polling fallback\n", err)
 	} else {

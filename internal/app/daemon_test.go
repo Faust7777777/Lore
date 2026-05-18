@@ -566,7 +566,7 @@ func TestRunVaultDaemonWatcherCreatesDraftAfterFileChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
-	runtime.Config.Vault.DebounceWindow = 50 * time.Millisecond
+	runtime.Config.Vault.DebounceWindow = 0
 
 	now := time.Date(2026, 4, 23, 9, 0, 0, 0, time.Local)
 	if _, err := runtime.Bootstrap(now); err != nil {
@@ -579,6 +579,15 @@ func TestRunVaultDaemonWatcherCreatesDraftAfterFileChange(t *testing.T) {
 	if _, err := runtime.ScanVaultChanges(now); err != nil {
 		t.Fatalf("ScanVaultChanges(prime) error = %v", err)
 	}
+
+	fakeWatcher := newFakeVaultEventWatcher()
+	previousWatcherFactory := newVaultWatcherFunc
+	newVaultWatcherFunc = func(root string) (vaultEventWatcher, error) {
+		return fakeWatcher, nil
+	}
+	t.Cleanup(func() {
+		newVaultWatcherFunc = previousWatcherFactory
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -598,6 +607,7 @@ func TestRunVaultDaemonWatcherCreatesDraftAfterFileChange(t *testing.T) {
 	})
 
 	writeTestPlan(t, runtime, absPath, "# Week\n\n- [x] watcher update", time.Now())
+	fakeWatcher.Emit(fsnotify.Event{Name: filepath.ToSlash(relPath), Op: fsnotify.Write})
 	waitForCondition(t, 2*time.Second, func() bool {
 		drafts, err := runtime.ListDrafts()
 		return err == nil && len(drafts) == 1
@@ -620,12 +630,21 @@ func TestRunVaultDaemonWatcherIgnoresObsidianDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenRuntime() error = %v", err)
 	}
-	runtime.Config.Vault.DebounceWindow = 50 * time.Millisecond
+	runtime.Config.Vault.DebounceWindow = 0
 
 	now := time.Date(2026, 4, 23, 9, 0, 0, 0, time.Local)
 	if _, err := runtime.Bootstrap(now); err != nil {
 		t.Fatalf("Bootstrap() error = %v", err)
 	}
+
+	fakeWatcher := newFakeVaultEventWatcher()
+	previousWatcherFactory := newVaultWatcherFunc
+	newVaultWatcherFunc = func(root string) (vaultEventWatcher, error) {
+		return fakeWatcher, nil
+	}
+	t.Cleanup(func() {
+		newVaultWatcherFunc = previousWatcherFactory
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -645,7 +664,8 @@ func TestRunVaultDaemonWatcherIgnoresObsidianDirectory(t *testing.T) {
 
 	ignoredPath := filepath.Join(runtime.Config.Paths.VaultRoot, ".obsidian", "04-éŽµÑ†î”‘", "week.md")
 	writeTestPlan(t, runtime, ignoredPath, "# Week\n\n- [x] ignored", time.Now())
-	time.Sleep(250 * time.Millisecond)
+	fakeWatcher.Emit(fsnotify.Event{Name: ".obsidian/04-execution/week.md", Op: fsnotify.Write})
+	fakeWatcher.WaitCollected(t)
 
 	drafts, err := runtime.ListDrafts()
 	if err != nil {
@@ -796,6 +816,59 @@ func (f *fakeFileEventWatcher) Matches(event fsnotify.Event) bool {
 
 func (f *fakeFileEventWatcher) Emit(event fsnotify.Event) {
 	f.events <- event
+}
+
+type fakeVaultEventWatcher struct {
+	events    chan fsnotify.Event
+	errors    chan error
+	collected chan fsnotify.Event
+}
+
+func newFakeVaultEventWatcher() *fakeVaultEventWatcher {
+	return &fakeVaultEventWatcher{
+		events:    make(chan fsnotify.Event, 8),
+		errors:    make(chan error, 1),
+		collected: make(chan fsnotify.Event, 8),
+	}
+}
+
+func (f *fakeVaultEventWatcher) Events() <-chan fsnotify.Event {
+	return f.events
+}
+
+func (f *fakeVaultEventWatcher) Errors() <-chan error {
+	return f.errors
+}
+
+func (f *fakeVaultEventWatcher) Close() error {
+	close(f.events)
+	close(f.errors)
+	return nil
+}
+
+func (f *fakeVaultEventWatcher) CollectPaths(event fsnotify.Event) ([]string, error) {
+	f.collected <- event
+	relPath := vault.NormalizeRelativePath(event.Name)
+	if relPath == "" || vault.ShouldIgnoreRelativePath(relPath) {
+		return nil, nil
+	}
+	if strings.ToLower(filepath.Ext(relPath)) != ".md" {
+		return nil, nil
+	}
+	return []string{relPath}, nil
+}
+
+func (f *fakeVaultEventWatcher) Emit(event fsnotify.Event) {
+	f.events <- event
+}
+
+func (f *fakeVaultEventWatcher) WaitCollected(t *testing.T) {
+	t.Helper()
+	select {
+	case <-f.collected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("vault watcher event was not collected")
+	}
 }
 
 func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool) {
