@@ -496,6 +496,74 @@ func TestSessionHandlePropagatesUsagePersistenceError(t *testing.T) {
 	}
 }
 
+func TestSessionHandlePersistsUsageOnRespondFailure(t *testing.T) {
+	billed := []operatoragent.ModelCallUsage{
+		{Provider: "openai-compatible", Model: "gpt-x", PromptTokens: 42, CompletionTokens: 9, StartedAt: time.Now().UTC()},
+	}
+	originalErr := fmt.Errorf("operator agent: invalid loop response: parse failure")
+	agent := &fakeLoopAgent{
+		response: operatoragent.Response{Usage: billed},
+		err:      &operatoragent.UsageError{Err: originalErr, Usage: billed},
+	}
+	session := NewSessionWithAgent("test", agent)
+	session.DefaultAgentID = "codex"
+	recorder := &recordingRecorder{}
+	session.Recorder = recorder
+	session.Now = func() time.Time { return time.Date(2026, 4, 22, 9, 0, 0, 0, time.Local) }
+
+	runtime := &fakeRuntime{managed: model.ManagedStatusView{Ready: true, WorkDir: "work", VaultRoot: "vault"}}
+
+	_, err := session.Handle("show me status", runtime)
+	if err == nil || !strings.Contains(err.Error(), "invalid loop response") {
+		t.Fatalf("Handle() error = %v, want original error surfaced", err)
+	}
+	if len(runtime.usageRecords) != 1 {
+		t.Fatalf("usage records = %d, want 1 (billed cost must reach store on failed turn)", len(runtime.usageRecords))
+	}
+	if runtime.usageRecords[0].PromptTokens != 42 || runtime.usageRecords[0].CompletionTokens != 9 {
+		t.Fatalf("usage tokens = %d/%d, want 42/9", runtime.usageRecords[0].PromptTokens, runtime.usageRecords[0].CompletionTokens)
+	}
+	if len(recorder.usages) != 1 || len(recorder.usages[0]) != 1 {
+		t.Fatalf("recorder usages = %+v, want one batch of 1", recorder.usages)
+	}
+}
+
+func TestSessionHandleRecordsErrorWhenUsagePersistenceFailsOnRespondError(t *testing.T) {
+	billed := []operatoragent.ModelCallUsage{
+		{Provider: "openai-compatible", Model: "gpt-x", PromptTokens: 5, CompletionTokens: 1},
+	}
+	originalErr := fmt.Errorf("operator agent: final response is empty")
+	agent := &fakeLoopAgent{
+		response: operatoragent.Response{Usage: billed},
+		err:      &operatoragent.UsageError{Err: originalErr, Usage: billed},
+	}
+	session := NewSessionWithAgent("test", agent)
+	recorder := &recordingRecorder{}
+	session.Recorder = recorder
+	session.Now = func() time.Time { return time.Date(2026, 4, 22, 9, 0, 0, 0, time.Local) }
+
+	runtime := &fakeRuntime{usageErr: fmt.Errorf("disk full")}
+	_, err := session.Handle("show me status", runtime)
+	// User must still see the original Respond error, not the
+	// store-side disk failure that occurred during best-effort
+	// persistence.
+	if err == nil || !strings.Contains(err.Error(), "final response is empty") {
+		t.Fatalf("Handle() error = %v, want original Respond error", err)
+	}
+	// The store-side error is captured in the transcript so the
+	// failure is not invisible to operators.
+	foundDiskFull := false
+	for _, msg := range recorder.errors {
+		if strings.Contains(msg, "disk full") {
+			foundDiskFull = true
+			break
+		}
+	}
+	if !foundDiskFull {
+		t.Fatalf("recorder.errors = %+v, want disk-full message recorded", recorder.errors)
+	}
+}
+
 func TestSessionHandleSkipsUsageWhenLoopResponseHasNone(t *testing.T) {
 	agent := &fakeLoopAgent{response: operatoragent.Response{Final: "ok\n"}}
 	session := NewSessionWithAgent("test", agent)

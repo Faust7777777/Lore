@@ -3,6 +3,7 @@ package operatoragent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -347,6 +348,110 @@ func TestModelAgentRespondReportsUsageForFinalOnly(t *testing.T) {
 	}
 	if got.StartedAt.Before(before) || got.StartedAt.After(time.Now().UTC().Add(time.Second)) {
 		t.Fatalf("usage StartedAt = %v, expected within recent window", got.StartedAt)
+	}
+}
+
+func TestModelAgentRespondWrapsParseFailureWithUsageError(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{
+			Content:          `definitely not json`,
+			PromptTokens:     42,
+			CompletionTokens: 9,
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}}}
+
+	response, err := agent.Respond("show status", Context{
+		DefaultAgentID: "codex",
+		Now:            time.Date(2026, 4, 22, 11, 0, 0, 0, time.Local),
+	}, runtime)
+	if err == nil {
+		t.Fatal("Respond() error = nil, want parse failure")
+	}
+	if !strings.Contains(err.Error(), "invalid loop response") {
+		t.Fatalf("error message = %q, want parse failure text preserved", err.Error())
+	}
+
+	var usageErr *UsageError
+	if !errors.As(err, &usageErr) {
+		t.Fatalf("error chain missing *UsageError; got %T %v", err, err)
+	}
+	if len(usageErr.Usage) != 1 {
+		t.Fatalf("UsageError.Usage len = %d, want 1", len(usageErr.Usage))
+	}
+	if usageErr.Usage[0].PromptTokens != 42 || usageErr.Usage[0].CompletionTokens != 9 {
+		t.Fatalf("UsageError tokens = %d/%d, want 42/9", usageErr.Usage[0].PromptTokens, usageErr.Usage[0].CompletionTokens)
+	}
+	if usageErr.Usage[0].Provider != "test" || usageErr.Usage[0].Model != "test-model" {
+		t.Fatalf("UsageError provider/model = %q/%q", usageErr.Usage[0].Provider, usageErr.Usage[0].Model)
+	}
+	// Response.Usage mirrors the wrapper so value-side callers see it too.
+	if len(response.Usage) != 1 || response.Usage[0].PromptTokens != 42 {
+		t.Fatalf("response.Usage = %+v, want mirror of UsageError.Usage", response.Usage)
+	}
+}
+
+func TestModelAgentRespondWrapsEmptyFinalWithUsageError(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{
+			Content:          `{"type":"final","message":"   "}`,
+			PromptTokens:     12,
+			CompletionTokens: 3,
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}}}
+
+	_, err := agent.Respond("ok", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err == nil || !strings.Contains(err.Error(), "final response is empty") {
+		t.Fatalf("error = %v, want empty-final error", err)
+	}
+	var usageErr *UsageError
+	if !errors.As(err, &usageErr) || len(usageErr.Usage) != 1 || usageErr.Usage[0].PromptTokens != 12 {
+		t.Fatalf("expected UsageError carrying 1 record with 12 prompt tokens; got %v", err)
+	}
+}
+
+func TestModelAgentRespondWrapsMultipleNativeToolCallsWithUsageError(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{
+			ToolCalls: []openai.ToolCall{
+				{Name: "managed_status", Arguments: map[string]any{}},
+				{Name: "vault_read", Arguments: map[string]any{"path": "x.md"}},
+			},
+			PromptTokens:     7,
+			CompletionTokens: 2,
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}}}
+
+	_, err := agent.Respond("ok", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err == nil || !strings.Contains(err.Error(), "tool calls") {
+		t.Fatalf("error = %v, want multiple-tool-calls error", err)
+	}
+	var usageErr *UsageError
+	if !errors.As(err, &usageErr) || len(usageErr.Usage) != 1 {
+		t.Fatalf("expected UsageError carrying 1 record; got %v", err)
+	}
+	if usageErr.Usage[0].PromptTokens != 7 || usageErr.Usage[0].CompletionTokens != 2 {
+		t.Fatalf("UsageError tokens = %d/%d, want 7/2", usageErr.Usage[0].PromptTokens, usageErr.Usage[0].CompletionTokens)
+	}
+}
+
+func TestModelAgentRespondDoesNotWrapWhenChatCompletionFails(t *testing.T) {
+	client := &fakeCompletionClient{err: errors.New("upstream connection refused")}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}}}
+
+	_, err := agent.Respond("ok", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err == nil {
+		t.Fatal("Respond() error = nil, want upstream error")
+	}
+	var usageErr *UsageError
+	if errors.As(err, &usageErr) {
+		t.Fatalf("ChatCompletion failure should not produce UsageError; got %+v", usageErr)
 	}
 }
 

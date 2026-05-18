@@ -2,6 +2,7 @@ package console
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -101,6 +102,17 @@ func (s *Session) Handle(input string, runtime Runtime) (string, error) {
 	if loopAgent, ok := s.Agent.(operatoragent.LoopAgent); ok {
 		response, err := loopAgent.Respond(input, s.agentContext(runtime), newToolRuntime(s, runtime))
 		if err != nil {
+			// Failed turns may still carry usage from already-billed
+			// ChatCompletion calls. Best-effort persist on the error
+			// path: store/recorder failures here must not mask the
+			// original Respond error the user is about to see, so
+			// surface them only into the transcript error log.
+			var usageErr *operatoragent.UsageError
+			if errors.As(err, &usageErr) && len(usageErr.Usage) > 0 {
+				if persistErr := s.persistResponseUsage(runtime, usageErr.Usage); persistErr != nil {
+					s.recordError(persistErr, true)
+				}
+			}
 			return "", err
 		}
 		s.LastToolTrace = append([]operatoragent.ToolCallTrace(nil), response.Trace...)

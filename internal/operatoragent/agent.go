@@ -91,6 +91,38 @@ type Response struct {
 	Usage    []ModelCallUsage
 }
 
+// UsageError wraps an error returned by Respond after one or more
+// successful ChatCompletion calls, carrying the per-call usage so the
+// caller can still bill cost for billed-but-failed turns. The wrapped
+// error is preserved verbatim via Unwrap; Error() defers to it without
+// adding a prefix so user-visible messages stay unchanged from
+// pre-existing failure modes.
+//
+// Callers should test for usage carry-over with errors.As:
+//
+//	var usageErr *UsageError
+//	if errors.As(err, &usageErr) {
+//	    runtime.RecordUsage(translate(usageErr.Usage))
+//	}
+type UsageError struct {
+	Err   error
+	Usage []ModelCallUsage
+}
+
+func (e *UsageError) Error() string {
+	if e == nil || e.Err == nil {
+		return ""
+	}
+	return e.Err.Error()
+}
+
+func (e *UsageError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 type LoopAgent interface {
 	Respond(input string, ctx Context, runtime ToolRuntime) (Response, error)
 }
