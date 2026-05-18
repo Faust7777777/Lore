@@ -222,8 +222,23 @@ func TestRunBootstrap(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workDir, "vault")); err != nil {
 		t.Fatalf("expected vault directory to exist: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "bootstrapped") {
-		t.Fatalf("expected bootstrap summary, got %q", stdout.String())
+
+	output := stdout.String()
+	if !strings.Contains(output, "bootstrapped") {
+		t.Fatalf("expected bootstrap summary, got %q", output)
+	}
+	// Onboarding guidance must be present
+	if !strings.Contains(output, "Next steps:") {
+		t.Fatalf("bootstrap output should contain 'Next steps:', got %q", output)
+	}
+	if !strings.Contains(output, "fill in your vault goals") {
+		t.Fatalf("bootstrap output should guide user to system doc, got %q", output)
+	}
+	if !strings.Contains(output, "add your profile") {
+		t.Fatalf("bootstrap output should guide user to persona doc, got %q", output)
+	}
+	if !strings.Contains(output, "lore tui --workdir") {
+		t.Fatalf("bootstrap output should suggest lore tui, got %q", output)
 	}
 }
 

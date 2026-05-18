@@ -45,7 +45,7 @@ type VaultDaemonRunOptions struct {
 	CodexJSONL *ImportCodexJSONLParams
 }
 
-const codexWatchDebounce = 200 * time.Millisecond
+var codexWatchDebounce = 200 * time.Millisecond
 
 func (r *Runtime) ScanVaultChanges(now time.Time) (VaultDaemonScanResult, error) {
 	if _, err := r.Bootstrap(now); err != nil {

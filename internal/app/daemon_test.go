@@ -708,6 +708,11 @@ func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 	t.Cleanup(func() {
 		newSingleFileWatcherFunc = previousWatcherFactory
 	})
+	previousCodexDebounce := codexWatchDebounce
+	codexWatchDebounce = 0
+	t.Cleanup(func() {
+		codexWatchDebounce = previousCodexDebounce
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -747,6 +752,7 @@ func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 		t.Fatalf("Chtimes(transcript) error = %v", err)
 	}
 	fakeWatcher.Emit(fsnotify.Event{Name: transcriptPath, Op: fsnotify.Write})
+	fakeWatcher.WaitMatched(t)
 
 	waitForCondition(t, 4*time.Second, func() bool {
 		return strings.Count(output.String(), "Codex JSONL synced") >= 2
@@ -783,16 +789,18 @@ func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 }
 
 type fakeFileEventWatcher struct {
-	path   string
-	events chan fsnotify.Event
-	errors chan error
+	path    string
+	events  chan fsnotify.Event
+	errors  chan error
+	matched chan fsnotify.Event
 }
 
 func newFakeFileEventWatcher(path string) *fakeFileEventWatcher {
 	return &fakeFileEventWatcher{
-		path:   path,
-		events: make(chan fsnotify.Event, 8),
-		errors: make(chan error, 1),
+		path:    path,
+		events:  make(chan fsnotify.Event, 8),
+		errors:  make(chan error, 1),
+		matched: make(chan fsnotify.Event, 8),
 	}
 }
 
@@ -811,11 +819,24 @@ func (f *fakeFileEventWatcher) Close() error {
 }
 
 func (f *fakeFileEventWatcher) Matches(event fsnotify.Event) bool {
-	return sameWatchPath(event.Name, f.path)
+	matched := sameWatchPath(event.Name, f.path)
+	if matched {
+		f.matched <- event
+	}
+	return matched
 }
 
 func (f *fakeFileEventWatcher) Emit(event fsnotify.Event) {
 	f.events <- event
+}
+
+func (f *fakeFileEventWatcher) WaitMatched(t *testing.T) {
+	t.Helper()
+	select {
+	case <-f.matched:
+	case <-time.After(2 * time.Second):
+		t.Fatal("file watcher event was not matched")
+	}
 }
 
 type fakeVaultEventWatcher struct {

@@ -72,9 +72,9 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 			fmt.Fprintf(stdout, "- %s (%s)\n", ref.Path, ref.Class)
 		}
 		fmt.Fprintf(stdout, "\nNext steps:\n")
-		fmt.Fprintf(stdout, "  1. Open %s/00-系统/系统说明.md and fill in your vault goals.\n", runtime.Config.Paths.VaultRoot)
-		fmt.Fprintf(stdout, "  2. Open %s/03-画像/人物画像.md and add your profile.\n", runtime.Config.Paths.VaultRoot)
-		fmt.Fprintf(stdout, "  3. Run: lore tui --workdir %s\n", workDir)
+		fmt.Fprintf(stdout, "  1. Open %s and fill in your vault goals.\n", filepath.Join(runtime.Config.Paths.VaultRoot, "00-\u7cfb\u7edf", "\u7cfb\u7edf\u8bf4\u660e.md"))
+		fmt.Fprintf(stdout, "  2. Open %s and add your profile.\n", filepath.Join(runtime.Config.Paths.VaultRoot, "03-\u753b\u50cf", "\u4eba\u7269\u753b\u50cf.md"))
+		fmt.Fprintf(stdout, "  3. Run: lore tui --workdir %q\n", workDir)
 		if len(created) == 0 {
 			fmt.Fprintf(stdout, "(All managed docs already existed. No files were created.)\n")
 		}
