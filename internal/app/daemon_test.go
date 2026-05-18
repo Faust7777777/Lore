@@ -712,7 +712,7 @@ func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 		newSingleFileWatcherFunc = previousWatcherFactory
 	})
 	previousCodexDebounce := codexWatchDebounce
-	codexWatchDebounce = 0
+	codexWatchDebounce = 1 * time.Millisecond
 	t.Cleanup(func() {
 		codexWatchDebounce = previousCodexDebounce
 	})
