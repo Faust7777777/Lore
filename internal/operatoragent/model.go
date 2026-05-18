@@ -19,7 +19,9 @@ type completionClient interface {
 }
 
 type ModelAgent struct {
-	client completionClient
+	client   completionClient
+	provider string
+	model    string
 }
 
 type ErrorAgent struct {
@@ -110,11 +112,21 @@ func NewFromEnv() (Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewModelAgent(client), nil
+	return NewModelAgent(client, "openai-compatible", modelName), nil
 }
 
-func NewModelAgent(client completionClient) Agent {
-	return ModelAgent{client: client}
+// NewModelAgent constructs a ModelAgent bound to a client and the
+// provider/model metadata used for usage attribution. provider is a
+// short identifier such as "openai-compatible" or "test"; model is the
+// resolved model name. Both may be empty in callers that do not care
+// about usage attribution (the empty strings then propagate into
+// Response.Usage and the storage layer can decide how to render them).
+func NewModelAgent(client completionClient, provider, model string) Agent {
+	return ModelAgent{
+		client:   client,
+		provider: strings.TrimSpace(provider),
+		model:    strings.TrimSpace(model),
+	}
 }
 
 func LoadEnvConfig() (EnvConfig, bool, error) {
@@ -235,7 +247,9 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 
 	toolHistory := make([]string, 0, maxLoopSteps)
 	trace := make([]ToolCallTrace, 0, maxLoopSteps)
+	usage := make([]ModelCallUsage, 0, maxLoopSteps)
 	for step := 0; step < maxLoopSteps; step++ {
+		startedAt := time.Now().UTC()
 		resp, err := a.client.ChatCompletion(context.Background(), openai.ChatCompletionRequest{
 			Messages:    messages,
 			Tools:       openAIToolDefinitions(tools),
@@ -244,6 +258,13 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 		if err != nil {
 			return Response{}, fmt.Errorf("operator agent: model request failed: %w", err)
 		}
+		usage = append(usage, ModelCallUsage{
+			Provider:         a.provider,
+			Model:            a.model,
+			PromptTokens:     resp.PromptTokens,
+			CompletionTokens: resp.CompletionTokens,
+			StartedAt:        startedAt,
+		})
 
 		if len(resp.ToolCalls) > 0 {
 			if len(resp.ToolCalls) > 1 {
@@ -272,7 +293,11 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 				Error:     toolTraceError(toolErr),
 			})
 			if isShellConfirmationResult(toolName, toolContent, toolErr) {
-				return Response{Final: toolContent, Trace: append([]ToolCallTrace(nil), trace...)}, nil
+				return Response{
+					Final: toolContent,
+					Trace: append([]ToolCallTrace(nil), trace...),
+					Usage: append([]ModelCallUsage(nil), usage...),
+				}, nil
 			}
 			if toolErr != nil && toolContent != "" {
 				toolErr = fmt.Errorf("%w\n%s", toolErr, toolContent)
@@ -290,7 +315,11 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 			return Response{}, fmt.Errorf("operator agent: invalid loop response: %w", err)
 		}
 		if legacyDecision != nil {
-			return Response{Decision: legacyDecision, Trace: append([]ToolCallTrace(nil), trace...)}, nil
+			return Response{
+				Decision: legacyDecision,
+				Trace:    append([]ToolCallTrace(nil), trace...),
+				Usage:    append([]ModelCallUsage(nil), usage...),
+			}, nil
 		}
 
 		switch envelope.Type {
@@ -299,7 +328,11 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 			if final == "" {
 				return Response{}, fmt.Errorf("operator agent: final response is empty")
 			}
-			return Response{Final: final, Trace: append([]ToolCallTrace(nil), trace...)}, nil
+			return Response{
+				Final: final,
+				Trace: append([]ToolCallTrace(nil), trace...),
+				Usage: append([]ModelCallUsage(nil), usage...),
+			}, nil
 		case "tool_call":
 			toolName := strings.TrimSpace(envelope.Tool)
 			if toolName == "" {
@@ -323,7 +356,11 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 				Error:     toolTraceError(toolErr),
 			})
 			if isShellConfirmationResult(toolName, toolContent, toolErr) {
-				return Response{Final: toolContent, Trace: append([]ToolCallTrace(nil), trace...)}, nil
+				return Response{
+					Final: toolContent,
+					Trace: append([]ToolCallTrace(nil), trace...),
+					Usage: append([]ModelCallUsage(nil), usage...),
+				}, nil
 			}
 			if toolErr != nil && toolContent != "" {
 				toolErr = fmt.Errorf("%w\n%s", toolErr, toolContent)

@@ -174,7 +174,7 @@ func TestModelAgentDecideParsesSingleJSONDecision(t *testing.T) {
 			Content: "```json\n{\"action\":\"approve_draft\",\"use_focused_draft\":true}\n```",
 		},
 	}
-	agent := NewModelAgent(client)
+	agent := NewModelAgent(client, "test", "test-model")
 
 	decision, err := agent.Decide("approve it", Context{
 		CurrentDraftID: "draft-123",
@@ -200,7 +200,7 @@ func TestModelAgentDecideParsesSingleJSONDecision(t *testing.T) {
 
 func TestModelAgentDecideRejectsBackgroundTaskRequests(t *testing.T) {
 	client := &fakeCompletionClient{}
-	agent := NewModelAgent(client)
+	agent := NewModelAgent(client, "test", "test-model")
 
 	_, err := agent.Decide("sync codex session every 30 minutes", Context{})
 	if err == nil {
@@ -220,7 +220,7 @@ func TestModelAgentDecideErrorsOnInvalidModelOutput(t *testing.T) {
 			Content: "status please",
 		},
 	}
-	agent := NewModelAgent(client)
+	agent := NewModelAgent(client, "test", "test-model")
 
 	_, err := agent.Decide("show status", Context{})
 	if err == nil {
@@ -238,7 +238,7 @@ func TestModelAgentRespondRunsToolLoopThenFinal(t *testing.T) {
 			{Content: `{"type":"final","message":"Managed Status\n--------------\nready"}`},
 		},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{
 		tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}},
 		results: map[string]ToolResult{
@@ -274,7 +274,7 @@ func TestModelAgentRespondRunsNativeToolCallThenFinal(t *testing.T) {
 			{Content: `{"type":"final","message":"Managed Status\n--------------\nready"}`},
 		},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{
 		tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}},
 		results: map[string]ToolResult{
@@ -316,11 +316,95 @@ func TestModelAgentRespondRunsNativeToolCallThenFinal(t *testing.T) {
 	}
 }
 
+func TestModelAgentRespondReportsUsageForFinalOnly(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{
+			Content:          `{"type":"final","message":"ok"}`,
+			PromptTokens:     42,
+			CompletionTokens: 9,
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}}}
+
+	before := time.Now().UTC().Add(-time.Second)
+	response, err := agent.Respond("show current status", Context{
+		DefaultAgentID: "codex",
+		Now:            time.Date(2026, 4, 22, 11, 0, 0, 0, time.Local),
+	}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if len(response.Usage) != 1 {
+		t.Fatalf("response.Usage length = %d, want 1; usage = %+v", len(response.Usage), response.Usage)
+	}
+	got := response.Usage[0]
+	if got.Provider != "test" || got.Model != "test-model" {
+		t.Fatalf("usage provider/model = %q/%q, want test/test-model", got.Provider, got.Model)
+	}
+	if got.PromptTokens != 42 || got.CompletionTokens != 9 {
+		t.Fatalf("usage tokens = %d/%d, want 42/9", got.PromptTokens, got.CompletionTokens)
+	}
+	if got.StartedAt.Before(before) || got.StartedAt.After(time.Now().UTC().Add(time.Second)) {
+		t.Fatalf("usage StartedAt = %v, expected within recent window", got.StartedAt)
+	}
+}
+
+func TestModelAgentRespondReportsUsagePerLoopStep(t *testing.T) {
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{
+				ToolCalls:        []openai.ToolCall{{Name: "managed_status", Arguments: map[string]any{}}},
+				PromptTokens:     30,
+				CompletionTokens: 4,
+			},
+			{
+				Content:          `{"type":"final","message":"Managed Status\n--------------\nready"}`,
+				PromptTokens:     55,
+				CompletionTokens: 12,
+			},
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}},
+		results: map[string]ToolResult{
+			"managed_status": {Content: "Managed Status\n--------------\nready"},
+		},
+	}
+
+	response, err := agent.Respond("show current status", Context{
+		DefaultAgentID: "codex",
+		Now:            time.Date(2026, 4, 22, 11, 0, 0, 0, time.Local),
+	}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if len(response.Usage) != 2 {
+		t.Fatalf("response.Usage length = %d, want 2; usage = %+v", len(response.Usage), response.Usage)
+	}
+	first, second := response.Usage[0], response.Usage[1]
+	if first.PromptTokens != 30 || first.CompletionTokens != 4 {
+		t.Fatalf("usage[0] tokens = %d/%d, want 30/4", first.PromptTokens, first.CompletionTokens)
+	}
+	if second.PromptTokens != 55 || second.CompletionTokens != 12 {
+		t.Fatalf("usage[1] tokens = %d/%d, want 55/12", second.PromptTokens, second.CompletionTokens)
+	}
+	for i, got := range response.Usage {
+		if got.Provider != "test" || got.Model != "test-model" {
+			t.Fatalf("usage[%d] provider/model = %q/%q, want test/test-model", i, got.Provider, got.Model)
+		}
+	}
+	if second.StartedAt.Before(first.StartedAt) {
+		t.Fatalf("usage[1].StartedAt %v should be >= usage[0].StartedAt %v", second.StartedAt, first.StartedAt)
+	}
+}
+
 func TestModelAgentRespondIncludesWorkingSetInUserPrompt(t *testing.T) {
 	client := &fakeCompletionClient{
 		response: openai.ChatCompletionResponse{Content: `{"type":"final","message":"ok"}`},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{tools: []ToolDefinition{{Name: "vault_read", Description: "read note", Arguments: `{"path":"relative/path.md"}`}}}
 
 	_, err := agent.Respond("\u8bfb\u53d6", Context{
@@ -353,7 +437,7 @@ func TestModelAgentRespondIncludesCoreContextForReview(t *testing.T) {
 	client := &fakeCompletionClient{
 		response: openai.ChatCompletionResponse{Content: `{"type":"final","message":"ok"}`},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{tools: []ToolDefinition{{Name: "draft_supersede", Description: "revise draft"}}}
 
 	_, err := agent.Respond("review this note proposal", Context{
@@ -410,7 +494,7 @@ func TestModelAgentRespondSendsRecentHistoryAsChatMessages(t *testing.T) {
 	client := &fakeCompletionClient{
 		response: openai.ChatCompletionResponse{Content: `{"type":"final","message":"古风版：此心安处是吾乡。"}`},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{}
 	assistantOffer := "可以，我给你三种版本：古风版、伤感版、惊艳版。你回“给”，我就直接展开这三版，不再重复解释。"
 
@@ -449,7 +533,7 @@ func TestModelAgentRespondSummarizesOlderHistoryAndKeepsRecentMessagesFull(t *te
 	client := &fakeCompletionClient{
 		response: openai.ChatCompletionResponse{Content: `{"type":"final","message":"继续。"}`},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{}
 	recentAssistant := strings.Repeat("最近这条 assistant 历史必须完整保留。", 20)
 
@@ -514,7 +598,7 @@ func TestModelAgentRespondPromptWarnsAssistantHistoryIsNotOutputFormat(t *testin
 	client := &fakeCompletionClient{
 		response: openai.ChatCompletionResponse{Content: `{"type":"final","message":"ok"}`},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{}
 
 	_, err := agent.Respond("继续", Context{
@@ -551,7 +635,7 @@ func TestModelAgentRespondRejectsMultipleNativeToolCalls(t *testing.T) {
 			},
 		},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{
 		tools: []ToolDefinition{
 			{Name: "managed_status", Description: "show status"},
@@ -578,7 +662,7 @@ func TestModelAgentRespondUsesLeadingJSONObjectWhenProviderConcatenatesObjects(t
 			{Content: `{"type":"final","message":"Managed Status\n--------------\nready"}`},
 		},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{
 		tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}},
 		results: map[string]ToolResult{
@@ -607,7 +691,7 @@ func TestModelAgentRespondPromptIncludesGovernanceSummaryAndModes(t *testing.T) 
 			Content: `{"type":"final","message":"ok"}`,
 		},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{
 		tools: []ToolDefinition{
 			{Name: "managed_status", Description: "show status"},
@@ -644,7 +728,7 @@ func TestModelAgentRespondPromptListsGitToolsWhenShellModeIsDisabled(t *testing.
 			Content: `{"type":"final","message":"ok"}`,
 		},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{
 		tools: []ToolDefinition{
 			{Name: "managed_status", Description: "show status"},
@@ -682,7 +766,7 @@ func TestModelAgentRespondPromptIncludesRuntimeAgentDocs(t *testing.T) {
 			Content: `{"type":"final","message":"ok"}`,
 		},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{
 		tools: []ToolDefinition{
 			{Name: "system_doc_get", Description: "read one managed core doc"},
@@ -740,7 +824,7 @@ func TestModelAgentRespondReturnsShellConfirmationImmediately(t *testing.T) {
 			Content: `{"type":"tool_call","tool":"shell_exec","arguments":{"command":"go test ./...","timeout_seconds":30}}`,
 		},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{
 		tools: []ToolDefinition{
 			{Name: "shell_exec", Description: "request one shell command with confirmation"},
@@ -776,7 +860,7 @@ func TestModelAgentRespondFallsBackToLegacyDecisionJSON(t *testing.T) {
 			Content: `{"action":"show_status"}`,
 		},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{}
 
 	response, err := agent.Respond("show current status", Context{DefaultAgentID: "codex"}, runtime)
@@ -796,7 +880,7 @@ func TestModelAgentRespondDetectsRepeatedToolLoop(t *testing.T) {
 			{Content: `{"type":"tool_call","tool":"managed_status","arguments":{}}`},
 		},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{
 		tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}},
 		results: map[string]ToolResult{
@@ -824,7 +908,7 @@ func TestModelAgentRespondDetectsAlternatingToolLoop(t *testing.T) {
 			{Content: `{"type":"tool_call","tool":"draft_list","arguments":{}}`},
 		},
 	}
-	agent := NewModelAgent(client).(ModelAgent)
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
 	runtime := &fakeToolRuntime{
 		tools: []ToolDefinition{
 			{Name: "managed_status", Description: "show status"},

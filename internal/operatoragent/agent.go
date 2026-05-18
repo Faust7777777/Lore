@@ -76,10 +76,19 @@ type ToolRuntime interface {
 	CallTool(name string, arguments map[string]any) (ToolResult, error)
 }
 
+type ModelCallUsage struct {
+	Provider         string    `json:"provider,omitempty"`
+	Model            string    `json:"model,omitempty"`
+	PromptTokens     int       `json:"prompt_tokens"`
+	CompletionTokens int       `json:"completion_tokens"`
+	StartedAt        time.Time `json:"started_at"`
+}
+
 type Response struct {
 	Final    string
 	Decision *Decision
 	Trace    []ToolCallTrace
+	Usage    []ModelCallUsage
 }
 
 type LoopAgent interface {
