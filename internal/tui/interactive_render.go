@@ -363,7 +363,7 @@ func renderFindingsList(findings []model.Finding, cursor int, offset int, width 
 		prefix := "  "
 		titleStyle := styleMutedText
 		if i == cursor {
-			prefix = styleWarn.Render(glyphFocus+" ")
+			prefix = styleWarn.Render(glyphFocus + " ")
 			titleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
 		}
 
@@ -468,7 +468,7 @@ func renderSinkTimelineList(sink app.ProcessSinkDayView, cursor int, offset int,
 		timeStyle := styleMutedText
 		titleStyle := styleMutedText
 		if i == cursor {
-			prefix = styleWarn.Render(glyphFocus+" ")
+			prefix = styleWarn.Render(glyphFocus + " ")
 			timeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
 			titleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
 		}
@@ -530,7 +530,8 @@ func renderSinkDetail(sink app.ProcessSinkDayView, idx int, width int, height in
 
 // --- Draft detail diff (enhanced approval detail) ---
 
-func renderApprovalDetailWithTarget(draft model.Draft, review *app.DraftReview, width int, height int) string {	var builder strings.Builder
+func renderApprovalDetailWithTarget(draft model.Draft, review *app.DraftReview, width int, height int) string {
+	var builder strings.Builder
 
 	builder.WriteString(styleSectionHead.Render("Draft Detail") + "\n")
 	builder.WriteString("  Kind   " + string(draft.Kind) + "\n")

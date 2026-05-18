@@ -14,16 +14,16 @@ import (
 )
 
 type fakeRuntime struct {
-	managed       model.ManagedStatusView
-	drafts        []model.Draft
-	review        app.DraftReview
-	processSink   app.ProcessSinkDayView
-	vaultResolve  model.VaultResolveResult
-	writtenNote   *model.VaultDocument
-	supersede     *model.DraftSupersedeUpdate
-	coreContext   model.CoreContext
-	usageRecords  []model.UsageRecord
-	usageErr      error
+	managed      model.ManagedStatusView
+	drafts       []model.Draft
+	review       app.DraftReview
+	processSink  app.ProcessSinkDayView
+	vaultResolve model.VaultResolveResult
+	writtenNote  *model.VaultDocument
+	supersede    *model.DraftSupersedeUpdate
+	coreContext  model.CoreContext
+	usageRecords []model.UsageRecord
+	usageErr     error
 }
 
 func (f *fakeRuntime) ManagedStatus() (model.ManagedStatusView, error) {

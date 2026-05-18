@@ -52,30 +52,30 @@ type textSelection struct {
 }
 
 type interactiveWorkbenchModel struct {
-	driver          InteractiveWorkbenchDriver
-	viewModel       WorkbenchViewModel
-	lastOutput      string
-	width           int
-	height          int
-	focus           interactiveFocus
-	running         bool
-	pendingLine     string
-	chatViewport    viewport.Model
-	statusViewport  viewport.Model
+	driver           InteractiveWorkbenchDriver
+	viewModel        WorkbenchViewModel
+	lastOutput       string
+	width            int
+	height           int
+	focus            interactiveFocus
+	running          bool
+	pendingLine      string
+	chatViewport     viewport.Model
+	statusViewport   viewport.Model
 	approvalViewport viewport.Model
-	input           textarea.Model
-	spin            spinner.Model
-	selection       textSelection
-	contentLines    []string
-	approvalCursor  int
-	approvalDetail  bool
-	approvalOffset  int
-	findingsCursor  int
-	findingsOffset  int
-	findingsDetail  bool
-	sinkCursor      int
-	sinkOffset      int
-	sinkDetail      bool
+	input            textarea.Model
+	spin             spinner.Model
+	selection        textSelection
+	contentLines     []string
+	approvalCursor   int
+	approvalDetail   bool
+	approvalOffset   int
+	findingsCursor   int
+	findingsOffset   int
+	findingsDetail   bool
+	sinkCursor       int
+	sinkOffset       int
+	sinkDetail       bool
 }
 
 func RunInteractiveWorkbench(input io.Reader, output io.Writer, driver InteractiveWorkbenchDriver) error {
@@ -663,11 +663,11 @@ func (m interactiveWorkbenchModel) handleFindingsDetailKeys(msg tea.KeyMsg) (tea
 }
 
 type findingsResultMsg struct {
-	action    string
-	findingID string
-	viewModel WorkbenchViewModel
+	action     string
+	findingID  string
+	viewModel  WorkbenchViewModel
 	lastOutput string
-	err       error
+	err        error
 }
 
 func (m interactiveWorkbenchModel) executeFindingsAction(action string, findingID string) (tea.Model, tea.Cmd) {
@@ -766,11 +766,11 @@ func (m interactiveWorkbenchModel) handleSinkDetailKeys(msg tea.KeyMsg) (tea.Mod
 }
 
 type approvalResultMsg struct {
-	action   string
-	draftID  string
-	viewModel WorkbenchViewModel
+	action     string
+	draftID    string
+	viewModel  WorkbenchViewModel
 	lastOutput string
-	err      error
+	err        error
 }
 
 func (m interactiveWorkbenchModel) executeApprovalAction(action string, draftID string) (tea.Model, tea.Cmd) {
