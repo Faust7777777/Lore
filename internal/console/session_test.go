@@ -1,6 +1,7 @@
 package console
 
 import (
+	"fmt"
 	"path/filepath"
 	osruntime "runtime"
 	"strings"
@@ -13,14 +14,16 @@ import (
 )
 
 type fakeRuntime struct {
-	managed      model.ManagedStatusView
-	drafts       []model.Draft
-	review       app.DraftReview
-	processSink  app.ProcessSinkDayView
-	vaultResolve model.VaultResolveResult
-	writtenNote  *model.VaultDocument
-	supersede    *model.DraftSupersedeUpdate
-	coreContext  model.CoreContext
+	managed       model.ManagedStatusView
+	drafts        []model.Draft
+	review        app.DraftReview
+	processSink   app.ProcessSinkDayView
+	vaultResolve  model.VaultResolveResult
+	writtenNote   *model.VaultDocument
+	supersede     *model.DraftSupersedeUpdate
+	coreContext   model.CoreContext
+	usageRecords  []model.UsageRecord
+	usageErr      error
 }
 
 func (f *fakeRuntime) ManagedStatus() (model.ManagedStatusView, error) {
@@ -109,6 +112,14 @@ func (f *fakeRuntime) WriteLowRiskNote(relPath string, content string, overwrite
 
 func (f *fakeRuntime) BuildCoreContext(limit int) (model.CoreContext, error) {
 	return f.coreContext, nil
+}
+
+func (f *fakeRuntime) RecordUsage(records []model.UsageRecord) error {
+	if f.usageErr != nil {
+		return f.usageErr
+	}
+	f.usageRecords = append(f.usageRecords, records...)
+	return nil
 }
 
 func (f *fakeRuntime) WorkDirPath() string {
@@ -394,6 +405,83 @@ func TestSessionHandleUsesLoopAgentResponseAndStoresHistory(t *testing.T) {
 	}
 	if len(session.LastToolTrace) != 1 || session.LastToolTrace[0].Name != "managed_status" {
 		t.Fatalf("last tool trace = %+v, want managed_status", session.LastToolTrace)
+	}
+}
+
+func TestSessionHandlePersistsLoopAgentUsage(t *testing.T) {
+	started := time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)
+	agent := &fakeLoopAgent{
+		response: operatoragent.Response{
+			Final: "ok\n",
+			Usage: []operatoragent.ModelCallUsage{
+				{Provider: "openai-compatible", Model: "gpt-x", PromptTokens: 30, CompletionTokens: 4, StartedAt: started},
+				{Provider: "openai-compatible", Model: "gpt-x", PromptTokens: 55, CompletionTokens: 12, StartedAt: started.Add(time.Second)},
+			},
+		},
+	}
+	session := NewSessionWithAgent("test", agent)
+	session.DefaultAgentID = "codex"
+	session.Recorder = &recordingRecorder{}
+	session.Now = func() time.Time { return time.Date(2026, 4, 22, 9, 0, 0, 0, time.Local) }
+
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{Ready: true, WorkDir: "work", VaultRoot: "vault"},
+	}
+
+	if _, err := session.Handle("show me status", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if len(runtime.usageRecords) != 2 {
+		t.Fatalf("usage records = %d, want 2; got %+v", len(runtime.usageRecords), runtime.usageRecords)
+	}
+	first := runtime.usageRecords[0]
+	if first.Provider != "openai-compatible" || first.Model != "gpt-x" {
+		t.Fatalf("usage[0] provider/model = %q/%q", first.Provider, first.Model)
+	}
+	if first.AgentID != "codex" || first.SessionID != "test-session" {
+		t.Fatalf("usage[0] agent/session = %q/%q, want codex/test-session", first.AgentID, first.SessionID)
+	}
+	if first.PromptTokens != 30 || first.CompletionTokens != 4 {
+		t.Fatalf("usage[0] tokens = %d/%d, want 30/4", first.PromptTokens, first.CompletionTokens)
+	}
+	if !first.RecordedAt.Equal(started) {
+		t.Fatalf("usage[0] RecordedAt = %v, want %v", first.RecordedAt, started)
+	}
+	second := runtime.usageRecords[1]
+	if second.PromptTokens != 55 || second.CompletionTokens != 12 {
+		t.Fatalf("usage[1] tokens = %d/%d, want 55/12", second.PromptTokens, second.CompletionTokens)
+	}
+}
+
+func TestSessionHandlePropagatesUsagePersistenceError(t *testing.T) {
+	agent := &fakeLoopAgent{
+		response: operatoragent.Response{
+			Final: "ok\n",
+			Usage: []operatoragent.ModelCallUsage{{PromptTokens: 1, CompletionTokens: 1}},
+		},
+	}
+	session := NewSessionWithAgent("test", agent)
+	session.Now = func() time.Time { return time.Date(2026, 4, 22, 9, 0, 0, 0, time.Local) }
+
+	runtime := &fakeRuntime{usageErr: fmt.Errorf("disk full")}
+
+	_, err := session.Handle("show me status", runtime)
+	if err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("Handle() error = %v, want disk full error", err)
+	}
+}
+
+func TestSessionHandleSkipsUsageWhenLoopResponseHasNone(t *testing.T) {
+	agent := &fakeLoopAgent{response: operatoragent.Response{Final: "ok\n"}}
+	session := NewSessionWithAgent("test", agent)
+	session.Now = func() time.Time { return time.Date(2026, 4, 22, 9, 0, 0, 0, time.Local) }
+
+	runtime := &fakeRuntime{}
+	if _, err := session.Handle("show me status", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if len(runtime.usageRecords) != 0 {
+		t.Fatalf("usage records = %+v, want empty", runtime.usageRecords)
 	}
 }
 

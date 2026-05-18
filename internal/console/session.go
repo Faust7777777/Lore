@@ -32,6 +32,7 @@ type Runtime interface {
 	ContextPack(targetPath string, task string, limit int) (model.ContextPack, error)
 	WriteLowRiskNote(relPath string, content string, overwrite bool) (model.VaultDocument, error)
 	BuildCoreContext(limit int) (model.CoreContext, error)
+	RecordUsage(records []model.UsageRecord) error
 	WorkDirPath() string
 	VaultRootPath() string
 	StateDirPath() string
@@ -102,6 +103,9 @@ func (s *Session) Handle(input string, runtime Runtime) (string, error) {
 		s.recordToolTrace(s.LastToolTrace)
 		s.rememberToolTargets(response.Trace, response.Final)
 		s.recordWorkingSet()
+		if err := s.persistResponseUsage(runtime, response.Usage); err != nil {
+			return "", err
+		}
 		if response.Decision != nil {
 			output, err := s.executeDecision(*response.Decision, runtime)
 			if err != nil {
@@ -466,6 +470,36 @@ func (s *Session) recordError(err error, recoverable bool) {
 	if s.Recorder != nil && err != nil {
 		_ = s.Recorder.RecordError(err.Error(), recoverable)
 	}
+}
+
+// persistResponseUsage translates per-loop-step ModelCallUsage entries
+// emitted by the operator agent into model.UsageRecord values and
+// delegates to runtime.RecordUsage. AgentID falls back to the session
+// default ("codex" unless overridden); SessionID is sourced from the
+// active transcript recorder when one is attached. An empty usage slice
+// is a no-op; persistence errors propagate so that store-side failures
+// are not silently dropped.
+func (s *Session) persistResponseUsage(runtime Runtime, usage []operatoragent.ModelCallUsage) error {
+	if len(usage) == 0 {
+		return nil
+	}
+	sessionID := ""
+	if s.Recorder != nil {
+		sessionID = s.Recorder.SessionID()
+	}
+	records := make([]model.UsageRecord, 0, len(usage))
+	for _, u := range usage {
+		records = append(records, model.UsageRecord{
+			Provider:         u.Provider,
+			Model:            u.Model,
+			AgentID:          s.DefaultAgentID,
+			SessionID:        sessionID,
+			PromptTokens:     u.PromptTokens,
+			CompletionTokens: u.CompletionTokens,
+			RecordedAt:       u.StartedAt,
+		})
+	}
+	return runtime.RecordUsage(records)
 }
 func (s *Session) resolveDraftID(decision operatoragent.Decision, runtime Runtime, preferredState model.DraftState) (string, error) {
 	if decision.DraftID != "" {

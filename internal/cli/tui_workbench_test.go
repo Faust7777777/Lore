@@ -92,6 +92,10 @@ func (s workbenchRuntimeStub) BuildCoreContext(limit int) (model.CoreContext, er
 	return model.CoreContext{}, nil
 }
 
+func (s workbenchRuntimeStub) RecordUsage(records []model.UsageRecord) error {
+	return nil
+}
+
 func (s workbenchRuntimeStub) WorkDirPath() string {
 	return s.managed.WorkDir
 }
