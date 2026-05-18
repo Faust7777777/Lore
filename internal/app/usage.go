@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"time"
 
 	"obsidian-harness/internal/model"
 )
@@ -28,4 +29,15 @@ func (r *Runtime) RecordUsage(records []model.UsageRecord) error {
 		}
 	}
 	return nil
+}
+
+// SummarizeUsage returns the per-day rollup of recorded usage for the
+// given local day. It is a thin pass-through onto the underlying store
+// so that CLI commands and other app-layer consumers do not reach into
+// store internals directly.
+func (r *Runtime) SummarizeUsage(day time.Time) (model.UsageSummary, error) {
+	if r == nil || r.Store == nil {
+		return model.UsageSummary{}, fmt.Errorf("app: runtime is not initialized")
+	}
+	return r.Store.Usage().SummarizeUsage(day)
 }

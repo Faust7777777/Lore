@@ -49,6 +49,9 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 		}
 		fmt.Fprint(stdout, tui.RenderManagedStatus(version, managed))
 		fmt.Fprint(stdout, tui.RenderConfigLayers(runtime.ConfigDiagnostics))
+		if summary, err := runtime.SummarizeUsage(time.Now()); err == nil && summary.Calls > 0 {
+			fmt.Fprint(stdout, renderTodayUsageTail(summary))
+		}
 		return 0
 	case "bootstrap":
 		workDir, err := resolveWorkDir(args[1:])
@@ -129,6 +132,8 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 		return runDraftCommand(args[1:], stdout, stderr)
 	case "findings":
 		return runFindingsCommand(args[1:], stdout, stderr)
+	case "usage":
+		return runUsageCommand(args[1:], stdout, stderr)
 	case "process-sink":
 		return runProcessSinkCommand(args[1:], stdout, stderr)
 	case "smoke":
@@ -192,6 +197,7 @@ Commands:
   daemon               Run the vault watcher daemon / one-shot scan
   draft                Review and act on pending drafts
   findings             Inspect and close post-scan governance findings
+  usage [workdir]      Summarize model-call usage and token cost
   process-sink         Inspect checkpoint and daily report status
   smoke                Run verification smoke checks (for example: smoke p0)
   models               List models from the configured LLM endpoint
@@ -870,6 +876,108 @@ func runFindingsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "findings: unknown subcommand %q\n", args[0])
 		return 1
 	}
+}
+
+func runUsageCommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	workDir, days, err := parseUsageFlags(args, stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	runtime, err := app.OpenRuntime(workDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "open runtime: %v\n", err)
+		return 1
+	}
+	defer closeRuntime(stderr, runtime, "usage")
+
+	now := time.Now()
+	// Iterate from oldest to newest day so the output reads left to
+	// right in time order. SummarizeUsage normalizes each day, so
+	// passing different times-of-day on the same day collapses
+	// correctly.
+	daily := make([]model.UsageSummary, 0, days)
+	for offset := days - 1; offset >= 0; offset-- {
+		day := now.AddDate(0, 0, -offset)
+		summary, err := runtime.SummarizeUsage(day)
+		if err != nil {
+			fmt.Fprintf(stderr, "usage: %v\n", err)
+			return 1
+		}
+		daily = append(daily, summary)
+	}
+	renderUsageReport(stdout, days, daily)
+	return 0
+}
+
+func parseUsageFlags(args []string, stderr io.Writer) (string, int, error) {
+	flags := flag.NewFlagSet("usage", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	days := flags.Int("days", 1, "number of trailing days to summarize (>=1)")
+	if err := flags.Parse(args); err != nil {
+		return "", 0, err
+	}
+	if *days < 1 {
+		return "", 0, fmt.Errorf("usage: --days must be >= 1")
+	}
+	// Allow positional [workdir] after flags so both `lore usage ./dir`
+	// and `lore usage --days 7 ./dir` work, matching the style of
+	// `lore status [workdir]`.
+	resolved, err := resolveWorkDir(flags.Args())
+	if err != nil {
+		return "", 0, err
+	}
+	return resolved, *days, nil
+}
+
+func renderUsageReport(stdout io.Writer, days int, daily []model.UsageSummary) {
+	fmt.Fprintln(stdout, "Usage")
+	fmt.Fprintln(stdout, "=====")
+	if days == 1 {
+		fmt.Fprintln(stdout, "Window: today")
+	} else {
+		fmt.Fprintf(stdout, "Window: trailing %d days\n", days)
+	}
+
+	var totalCalls, totalPrompt, totalCompletion int
+	for _, summary := range daily {
+		totalCalls += summary.Calls
+		totalPrompt += summary.PromptTokens
+		totalCompletion += summary.CompletionTokens
+	}
+
+	if totalCalls == 0 {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "No usage recorded.")
+		return
+	}
+
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, "%-12s %8s %10s %12s %8s\n", "DAY", "CALLS", "PROMPT", "COMPLETION", "TOTAL")
+	for _, summary := range daily {
+		fmt.Fprintf(
+			stdout,
+			"%-12s %8d %10d %12d %8d\n",
+			summary.Day.Format("2006-01-02"),
+			summary.Calls,
+			summary.PromptTokens,
+			summary.CompletionTokens,
+			summary.TotalTokens,
+		)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(
+		stdout,
+		"Total: %d calls / %d prompt + %d completion = %d tokens\n",
+		totalCalls, totalPrompt, totalCompletion, totalPrompt+totalCompletion,
+	)
+}
+
+func renderTodayUsageTail(summary model.UsageSummary) string {
+	return fmt.Sprintf(
+		"\nToday Usage\n-----------\n%d calls / %d prompt + %d completion = %d tokens\n",
+		summary.Calls, summary.PromptTokens, summary.CompletionTokens, summary.TotalTokens,
+	)
 }
 
 func renderFindingList(stdout io.Writer, findings []model.Finding) {

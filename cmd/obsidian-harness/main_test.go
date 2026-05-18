@@ -1185,3 +1185,142 @@ func openRuntimeForCLITest(t *testing.T, workDir string) (*app.Runtime, error) {
 	})
 	return runtime, nil
 }
+
+func seedUsageForCLI(t *testing.T, workDir string, records []model.UsageRecord) {
+	t.Helper()
+	runtime, err := openRuntimeForCLITest(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	if err := runtime.RecordUsage(records); err != nil {
+		t.Fatalf("RecordUsage() error = %v", err)
+	}
+}
+
+func TestRunUsageTodayShowsAggregateAndTable(t *testing.T) {
+	clearOperatorEnv(t)
+	workDir := t.TempDir()
+	today := time.Now()
+	seedUsageForCLI(t, workDir, []model.UsageRecord{
+		{Provider: "openai-compatible", Model: "gpt-x", AgentID: "codex", SessionID: "s1", PromptTokens: 30, CompletionTokens: 4, RecordedAt: today},
+		{Provider: "openai-compatible", Model: "gpt-x", AgentID: "codex", SessionID: "s1", PromptTokens: 55, CompletionTokens: 12, RecordedAt: today.Add(time.Second)},
+	})
+
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"usage", workDir}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Usage",
+		"Window: today",
+		today.Format("2006-01-02"),
+		"DAY",
+		"CALLS",
+		"Total: 2 calls / 85 prompt + 16 completion = 101 tokens",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("usage output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunUsageMultiDayAggregatesAcrossDays(t *testing.T) {
+	clearOperatorEnv(t)
+	workDir := t.TempDir()
+	today := time.Now()
+	yesterday := today.AddDate(0, 0, -1)
+	seedUsageForCLI(t, workDir, []model.UsageRecord{
+		{Provider: "openai-compatible", Model: "gpt-x", AgentID: "codex", PromptTokens: 10, CompletionTokens: 2, RecordedAt: yesterday},
+		{Provider: "openai-compatible", Model: "gpt-x", AgentID: "codex", PromptTokens: 30, CompletionTokens: 4, RecordedAt: today},
+		{Provider: "openai-compatible", Model: "gpt-x", AgentID: "codex", PromptTokens: 55, CompletionTokens: 12, RecordedAt: today.Add(time.Second)},
+	})
+
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"usage", "--days", "2", workDir}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr.String())
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "Window: trailing 2 days") {
+		t.Fatalf("usage output missing trailing window header:\n%s", output)
+	}
+	for _, want := range []string{
+		yesterday.Format("2006-01-02"),
+		today.Format("2006-01-02"),
+		"Total: 3 calls / 95 prompt + 18 completion = 113 tokens",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("usage output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunUsageWithNoRecordsShowsFriendlyMessage(t *testing.T) {
+	clearOperatorEnv(t)
+	workDir := t.TempDir()
+	// Touch the runtime so the state dir is created; otherwise the
+	// usage command opens it on first call. Either path works, but
+	// pre-creating mirrors how a freshly bootstrapped workdir looks.
+	if _, err := openRuntimeForCLITest(t, workDir); err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"usage", workDir}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "No usage recorded.") {
+		t.Fatalf("expected friendly empty message, got:\n%s", stdout.String())
+	}
+}
+
+func TestRunUsageRejectsInvalidDays(t *testing.T) {
+	clearOperatorEnv(t)
+	workDir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"usage", "--days", "0", workDir}, &stdout, &stderr)
+	if exitCode == 0 {
+		t.Fatalf("expected non-zero exit for --days 0; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunStatusAppendsTodayUsageWhenRecorded(t *testing.T) {
+	clearOperatorEnv(t)
+	workDir := t.TempDir()
+	today := time.Now()
+	seedUsageForCLI(t, workDir, []model.UsageRecord{
+		{Provider: "openai-compatible", Model: "gpt-x", AgentID: "codex", PromptTokens: 30, CompletionTokens: 4, RecordedAt: today},
+	})
+
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"status", workDir}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{"Managed Status", "Today Usage", "1 calls / 30 prompt + 4 completion = 34 tokens"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("status output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunStatusOmitsTodayUsageWhenEmpty(t *testing.T) {
+	clearOperatorEnv(t)
+	workDir := t.TempDir()
+	if _, err := openRuntimeForCLITest(t, workDir); err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"status", workDir}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "Today Usage") {
+		t.Fatalf("status should not show Today Usage when no records:\n%s", stdout.String())
+	}
+}
