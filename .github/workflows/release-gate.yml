@@ -1,0 +1,47 @@
+name: Release Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-gate:
+    name: release-gate
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Run release gate
+        shell: powershell
+        run: .\scripts\release-gate.ps1 -Full
+
+      - name: Assert release gate leaves repo clean
+        shell: powershell
+        run: |
+          if (Test-Path -LiteralPath ".smoke-workdir") {
+              throw ".smoke-workdir was created in the repository"
+          }
+          $dirty = git status --short
+          if ($dirty) {
+              $dirty
+              throw "release gate left the worktree dirty"
+          }
