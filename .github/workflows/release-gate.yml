@@ -49,6 +49,7 @@ jobs:
           .\scripts\release-gate.ps1 -Full
 
       - name: Assert release gate leaves repo clean
+        if: always()
         shell: powershell
         run: |
           if (Test-Path -LiteralPath ".smoke-workdir") {
