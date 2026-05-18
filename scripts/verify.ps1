@@ -38,6 +38,29 @@ function Invoke-PowerShellScript {
 Push-Location $RepoRoot
 try {
     Invoke-GoTest -Arguments @("test", "./...", "-count=1")
+
+    # --- Smoke gate (business-level, post unit tests) ---
+    Write-Host "`n--- Smoke P0 --full ---" -ForegroundColor Cyan
+    $SmokeBin = Join-Path $RepoRoot ".build\lore-smoke.exe"
+    $SmokeBinDir = Split-Path -Parent $SmokeBin
+    if (-not (Test-Path $SmokeBinDir)) {
+        New-Item -ItemType Directory -Path $SmokeBinDir -Force | Out-Null
+    }
+    & $Go build -o $SmokeBin (Join-Path $RepoRoot "cmd\obsidian-harness\main.go")
+    if ($LASTEXITCODE -ne 0) {
+        throw "smoke binary build failed"
+    }
+    $SmokeWorkDir = Join-Path $RepoRoot ".smoke-workdir"
+    if (Test-Path $SmokeWorkDir) {
+        Remove-Item -LiteralPath $SmokeWorkDir -Recurse -Force
+    }
+    & $SmokeBin smoke p0 --workdir $SmokeWorkDir --full
+    if ($LASTEXITCODE -ne 0) {
+        throw "smoke p0 --full failed with exit code $LASTEXITCODE"
+    }
+    Write-Host "--- Smoke P0 passed ---`n" -ForegroundColor Green
+    # --- End smoke gate ---
+
     if (Test-Path (Join-Path $RepoRoot "sdk\go\lore\go.mod")) {
         Push-Location (Join-Path $RepoRoot "sdk\go\lore")
         try {

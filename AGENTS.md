@@ -160,6 +160,9 @@ Those files are workspace content, not repository governance files.
   when feasible. This covers the root module and the Go SDK submodule.
 - If a change touches prompt loading, governance, bootstrap, ingest, runtime
   contracts, or TUI shell behavior, full-suite verification is expected.
+- `verify.ps1` includes a smoke gate (`smoke p0 --full`) that exercises
+  business-level flows after unit tests. A failing smoke check means the
+  change cannot be considered complete, even if all unit tests pass.
 
 ## Real Pitfalls Already Seen
 
