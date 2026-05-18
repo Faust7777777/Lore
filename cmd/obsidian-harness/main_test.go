@@ -297,6 +297,28 @@ func TestRunSmokeP0(t *testing.T) {
 	}
 }
 
+func TestRunSmokeP0FullIncludesGovernedNoteIntake(t *testing.T) {
+	workDir := t.TempDir()
+	configureLLMTestEnv(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"smoke", "p0", "--workdir", workDir, "--full"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	for _, expected := range []string{
+		"P0 smoke passed",
+		"Governed note intake passed",
+		"proposal_created_pending_draft",
+		"approved_apply_writes_note",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("expected full smoke output to contain %q, got %q", expected, stdout.String())
+		}
+	}
+}
+
 func TestRunConsoleOnceStatus(t *testing.T) {
 	workDir := t.TempDir()
 	configureLLMTestEnv(t)

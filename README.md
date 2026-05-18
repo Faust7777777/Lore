@@ -82,7 +82,7 @@ The repo exposes both `./cmd/lore` and `./cmd/obsidian-harness`. `lore` is the p
 - `bootstrap [workdir]`
 - `demo-p0a [workdir]`
 - `demo-p0b [workdir]`
-- `smoke p0 --workdir <dir>`
+- `smoke p0 --workdir <dir> [--full]`
 - `console --workdir <dir> [--once "<request>"]`
 - `tui --workdir <dir> [--agent <id>] [--day YYYY-MM-DD] [--once "<request>"]`
 - `daemon run --workdir <dir> [--once] [--poll 2s] [--debounce 500ms] [--codex-jsonl <session.jsonl>]`
@@ -97,18 +97,21 @@ The repo exposes both `./cmd/lore` and `./cmd/obsidian-harness`. `lore` is the p
 Use the repo-managed Go toolchain on Windows PowerShell:
 
 ```powershell
+.\scripts\release-gate.ps1
 .\scripts\verify.ps1
 .\.tools\go\bin\go.exe run ./cmd/lore smoke p0 --workdir .\tmp\p0-smoke
 .\.tools\go\bin\go.exe run ./cmd/lore tui --workdir .\tmp\p0-smoke --once "show current status"
 ```
 
+`release-gate.ps1` is the targeted governance gate for release candidates. It locks MCP boundary/contract tests, daemon watcher and post-scan guardrails, governed note smoke, CLI smoke, and TUI approval state tests. Use `.\scripts\release-gate.ps1 -Full` to append the full `verify.ps1` suite.
+
 Run the opt-in SDK end-to-end smoke with:
 
 ```powershell
-.\scripts\verify.ps1 -E2E
+.\scripts\release-gate.ps1 -E2E
 ```
 
-`smoke p0` verifies the current P0 chain: managed core bootstrap, managed document draft/apply, checkpoint materialization, daily report write, and audit records.
+`smoke p0` verifies the current P0 chain: managed core bootstrap, managed document draft/apply, checkpoint materialization, daily report write, and audit records. Add `--full` to also run governed markdown note intake.
 It requires a configured model provider via `LORE_LLM_BASE_URL`, `LORE_LLM_API_KEY`, and `LORE_LLM_MODEL` because checkpoint and daily report summarization are model-backed.
 
 ## Toolchain
