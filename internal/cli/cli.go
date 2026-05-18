@@ -71,6 +71,13 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 		for _, ref := range created {
 			fmt.Fprintf(stdout, "- %s (%s)\n", ref.Path, ref.Class)
 		}
+		fmt.Fprintf(stdout, "\nNext steps:\n")
+		fmt.Fprintf(stdout, "  1. Open %s/00-系统/系统说明.md and fill in your vault goals.\n", runtime.Config.Paths.VaultRoot)
+		fmt.Fprintf(stdout, "  2. Open %s/03-画像/人物画像.md and add your profile.\n", runtime.Config.Paths.VaultRoot)
+		fmt.Fprintf(stdout, "  3. Run: lore tui --workdir %s\n", workDir)
+		if len(created) == 0 {
+			fmt.Fprintf(stdout, "(All managed docs already existed. No files were created.)\n")
+		}
 		return 0
 	case "demo-p0a":
 		workDir, err := resolveWorkDir(args[1:])
