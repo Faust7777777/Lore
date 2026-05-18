@@ -63,14 +63,22 @@ func OpenRuntimeWithConfigOptions(workDir string, opts config.LoadOptions) (*Run
 		return nil, err
 	}
 	processSinkSummarizer, processSinkErr := defaultProcessSinkSummarizer()
-	return &Runtime{
+	runtime := &Runtime{
 		Config:                   cfg,
 		ConfigDiagnostics:        diagnostics,
 		Harness:                  h,
 		Store:                    st,
 		ProcessSinkSummarizer:    processSinkSummarizer,
 		processSinkSummarizerErr: processSinkErr,
-	}, nil
+	}
+	// Second-phase wiring: route summarizer cost records into the
+	// runtime's usage store. The sink is a no-op for non-model-backed
+	// summarizers (e.g. fakes used in tests), so tests that wire their
+	// own summarizer via runtime.ProcessSinkSummarizer = ... still work.
+	attachUsageSink(processSinkSummarizer, func(rec model.UsageRecord) error {
+		return runtime.RecordUsage([]model.UsageRecord{rec})
+	})
+	return runtime, nil
 }
 
 func (r *Runtime) Close() error {
