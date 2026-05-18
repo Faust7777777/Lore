@@ -12,6 +12,10 @@ import (
 	"obsidian-harness/internal/app"
 )
 
+var governedNoteSmokeTargetPath = func(now time.Time) string {
+	return filepath.ToSlash(filepath.Join("03-notes", "smoke", fmt.Sprintf("governed-note-intake-full-%d.md", now.UTC().UnixNano())))
+}
+
 func runSmokeCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "smoke: missing subcommand")
@@ -84,7 +88,8 @@ func runSmokeCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func runGovernedNoteSmoke(runtime *app.Runtime, stdout io.Writer, stderr io.Writer) error {
 	fmt.Fprintln(stdout, "\nRunning governed note intake smoke...")
-	noteResult, err := runtime.SmokeGovernedMarkdownNoteIntake(time.Now())
+	now := time.Now()
+	noteResult, err := runtime.SmokeGovernedMarkdownNoteIntakeWithTarget(now, governedNoteSmokeTargetPath(now))
 	if err != nil {
 		fmt.Fprintf(stderr, "governed note smoke: %v\n", err)
 		return err

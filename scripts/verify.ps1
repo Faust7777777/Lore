@@ -8,7 +8,11 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Go = Join-Path $RepoRoot ".tools\go\bin\go.exe"
 
 if (-not (Test-Path $Go)) {
-    throw "Go toolchain not found at $Go"
+    $GoCommand = Get-Command go.exe -ErrorAction SilentlyContinue
+    if ($null -eq $GoCommand) {
+        throw "Go toolchain not found at $Go and go.exe is not on PATH"
+    }
+    $Go = $GoCommand.Source
 }
 
 function Invoke-GoTest {

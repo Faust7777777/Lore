@@ -124,11 +124,21 @@ func (r *Runtime) SmokeP0(now time.Time) (P0SmokeResult, error) {
 }
 
 func (r *Runtime) SmokeGovernedMarkdownNoteIntake(now time.Time) (GovernedNoteSmokeResult, error) {
+	return r.smokeGovernedMarkdownNoteIntake(now, "03-notes/smoke/governed-note-intake.md")
+}
+
+func (r *Runtime) SmokeGovernedMarkdownNoteIntakeWithTarget(now time.Time, targetPath string) (GovernedNoteSmokeResult, error) {
+	if strings.TrimSpace(targetPath) == "" {
+		return GovernedNoteSmokeResult{}, fmt.Errorf("empty target path")
+	}
+	return r.smokeGovernedMarkdownNoteIntake(now, targetPath)
+}
+
+func (r *Runtime) smokeGovernedMarkdownNoteIntake(now time.Time, targetPath string) (GovernedNoteSmokeResult, error) {
 	if _, err := r.Bootstrap(now); err != nil {
 		return GovernedNoteSmokeResult{}, fmt.Errorf("bootstrap: %w", err)
 	}
 
-	targetPath := "03-notes/smoke/governed-note-intake.md"
 	proposal := model.MarkdownNoteProposal{
 		TargetPath:  targetPath,
 		Title:       "Governed Note Intake Smoke",
