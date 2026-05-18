@@ -146,6 +146,31 @@ func (r *Recorder) RecordError(message string, recoverable bool) error {
 	return r.appendAndIndex(Event{Type: EventError, Timestamp: time.Now(), Error: truncateString(message, r.limits.MaxToolErrorBytes), Recoverable: recoverable})
 }
 
+// RecordModelUsage appends one model_usage event per usage entry. An
+// empty slice is a no-op. The event's Timestamp is the wall time of
+// the recording itself; StartedAt preserves when the LLM request was
+// originally issued (they differ by retries or batched writes). Older
+// readers tolerate the new event because applyEvent silently skips
+// unknown event types, and unknown JSON fields are dropped by Go's
+// json package.
+func (r *Recorder) RecordModelUsage(usage []operatoragent.ModelCallUsage) error {
+	for _, u := range usage {
+		event := Event{
+			Type:             EventModelUsage,
+			Timestamp:        time.Now(),
+			Provider:         strings.TrimSpace(u.Provider),
+			Model:            strings.TrimSpace(u.Model),
+			PromptTokens:     u.PromptTokens,
+			CompletionTokens: u.CompletionTokens,
+			StartedAt:        u.StartedAt,
+		}
+		if err := r.appendAndIndex(event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Recorder) Close(reason string) error {
 	return r.appendAndIndex(Event{Type: EventSessionEnd, Timestamp: time.Now(), Reason: strings.TrimSpace(reason)})
 }

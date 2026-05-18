@@ -126,6 +126,119 @@ func TestResumeRefreshesIndexTurnCount(t *testing.T) {
 	}
 }
 
+func TestRecordModelUsageWritesOneEventPerCall(t *testing.T) {
+	root := t.TempDir()
+	started := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	recorder, err := Start(root, Meta{SessionID: "lore-usage", AgentID: "codex", Model: "gpt-x", StartedAt: started})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	requestStart := time.Date(2026, 4, 25, 10, 0, 5, 0, time.UTC)
+	usage := []operatoragent.ModelCallUsage{
+		{Provider: "openai-compatible", Model: "gpt-x", PromptTokens: 31, CompletionTokens: 9, StartedAt: requestStart},
+		{Provider: "openai-compatible", Model: "gpt-x", PromptTokens: 55, CompletionTokens: 12, StartedAt: requestStart.Add(2 * time.Second)},
+	}
+	if err := recorder.RecordModelUsage(usage); err != nil {
+		t.Fatalf("RecordModelUsage() error = %v", err)
+	}
+
+	path := filepath.Join(root, "lore-usage.jsonl")
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open transcript error = %v", err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxJSONLLineBytes)
+	var usageEvents []Event
+	for scanner.Scan() {
+		var event Event
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatalf("decode line: %v", err)
+		}
+		if event.Type == EventModelUsage {
+			usageEvents = append(usageEvents, event)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan error = %v", err)
+	}
+	if len(usageEvents) != 2 {
+		t.Fatalf("usage events = %d, want 2", len(usageEvents))
+	}
+	first := usageEvents[0]
+	if first.Provider != "openai-compatible" || first.Model != "gpt-x" {
+		t.Fatalf("event[0] provider/model = %q/%q", first.Provider, first.Model)
+	}
+	if first.PromptTokens != 31 || first.CompletionTokens != 9 {
+		t.Fatalf("event[0] tokens = %d/%d, want 31/9", first.PromptTokens, first.CompletionTokens)
+	}
+	if !first.StartedAt.Equal(requestStart) {
+		t.Fatalf("event[0] StartedAt = %v, want %v", first.StartedAt, requestStart)
+	}
+	if first.Timestamp.IsZero() {
+		t.Fatal("event[0] Timestamp should not be zero")
+	}
+	if usageEvents[1].PromptTokens != 55 || usageEvents[1].CompletionTokens != 12 {
+		t.Fatalf("event[1] tokens = %d/%d, want 55/12", usageEvents[1].PromptTokens, usageEvents[1].CompletionTokens)
+	}
+
+	// Reloading a session containing model_usage events must succeed
+	// without polluting history or working set.
+	snapshot, err := Load(root, "lore-usage")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(snapshot.History) != 0 {
+		t.Fatalf("history = %+v, want empty after only usage events", snapshot.History)
+	}
+	if len(snapshot.WorkingSet) != 0 {
+		t.Fatalf("working set = %+v, want empty", snapshot.WorkingSet)
+	}
+}
+
+func TestRecordModelUsageEmptyIsNoOp(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := Start(root, Meta{SessionID: "lore-usage-empty", StartedAt: time.Now()})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := recorder.RecordModelUsage(nil); err != nil {
+		t.Fatalf("RecordModelUsage(nil) error = %v", err)
+	}
+	if err := recorder.RecordModelUsage([]operatoragent.ModelCallUsage{}); err != nil {
+		t.Fatalf("RecordModelUsage([]) error = %v", err)
+	}
+}
+
+func TestLoadIgnoresUnknownEventTypesForBackwardsCompatibility(t *testing.T) {
+	// Simulates an older binary reading a JSONL written by a newer
+	// binary that emits an unknown event type. applyEvent silently
+	// skips unknown types so the session still loads cleanly.
+	root := t.TempDir()
+	path := filepath.Join(root, "lore-future.jsonl")
+	content := strings.Join([]string{
+		`{"type":"session_meta","session_id":"lore-future","timestamp":"2026-04-25T10:00:00Z"}`,
+		`{"type":"user_message","timestamp":"2026-04-25T10:00:01Z","text":"hello"}`,
+		`{"type":"model_usage","timestamp":"2026-04-25T10:00:02Z","provider":"x","model":"y","prompt_tokens":3,"completion_tokens":1}`,
+		`{"type":"future_event_v2","timestamp":"2026-04-25T10:00:03Z","novel_field":"value"}`,
+		`{"type":"assistant_message","timestamp":"2026-04-25T10:00:04Z","text":"world"}`,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	snapshot, err := Load(root, "lore-future")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(snapshot.History) != 2 {
+		t.Fatalf("history = %+v, want 2 turns", snapshot.History)
+	}
+	if len(snapshot.Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none for known/unknown types", snapshot.Warnings)
+	}
+}
+
 func TestLoadSkipsCorruptedLines(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "lore-corrupt.jsonl")

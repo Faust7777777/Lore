@@ -16,6 +16,7 @@ const (
 	EventLocalCommand     = "local_command"
 	EventError            = "error"
 	EventSessionEnd       = "session_end"
+	EventModelUsage       = "model_usage"
 )
 
 const (
@@ -51,6 +52,15 @@ type Event struct {
 	Command     string                         `json:"command,omitempty"`
 	Reason      string                         `json:"reason,omitempty"`
 	Recoverable bool                           `json:"recoverable,omitempty"`
+	// Model-usage event fields. Provider/Model reuse semantics from
+	// session_meta; StartedAt is when the LLM request was issued
+	// (distinct from Timestamp which is when the event was recorded).
+	// All fields are omitempty so older JSONL files (no usage events)
+	// remain valid Event records when re-read.
+	Provider         string    `json:"provider,omitempty"`
+	PromptTokens     int       `json:"prompt_tokens,omitempty"`
+	CompletionTokens int       `json:"completion_tokens,omitempty"`
+	StartedAt        time.Time `json:"started_at,omitempty"`
 }
 
 type Summary struct {

@@ -431,7 +431,8 @@ func TestSessionHandlePersistsLoopAgentUsage(t *testing.T) {
 	}
 	session := NewSessionWithAgent("test", agent)
 	session.DefaultAgentID = "codex"
-	session.Recorder = &recordingRecorder{}
+	recorder := &recordingRecorder{}
+	session.Recorder = recorder
 	session.Now = func() time.Time { return time.Date(2026, 4, 22, 9, 0, 0, 0, time.Local) }
 
 	runtime := &fakeRuntime{
@@ -443,6 +444,12 @@ func TestSessionHandlePersistsLoopAgentUsage(t *testing.T) {
 	}
 	if len(runtime.usageRecords) != 2 {
 		t.Fatalf("usage records = %d, want 2; got %+v", len(runtime.usageRecords), runtime.usageRecords)
+	}
+	if len(recorder.usages) != 1 || len(recorder.usages[0]) != 2 {
+		t.Fatalf("recorder usages = %+v, want one batch of 2", recorder.usages)
+	}
+	if recorder.usages[0][0].PromptTokens != 30 || recorder.usages[0][1].PromptTokens != 55 {
+		t.Fatalf("recorder usage tokens = %+v", recorder.usages[0])
 	}
 	first := runtime.usageRecords[0]
 	if first.Provider != "openai-compatible" || first.Model != "gpt-x" {
