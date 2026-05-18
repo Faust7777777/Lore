@@ -695,10 +695,13 @@ func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 	}
 	runtime.Config.Vault.DebounceWindow = 50 * time.Millisecond
 
+	secondEventAt := time.Now().In(loc).Add(-time.Minute).Truncate(time.Second)
+	firstEventAt := secondEventAt.Truncate(30 * time.Minute).Add(-25 * time.Minute)
+	secondWindowStart := secondEventAt.Truncate(30 * time.Minute)
 	transcriptPath := filepath.Join(workDir, "daemon-codex-watch.jsonl")
 	writeCodexJSONL(t, transcriptPath,
-		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-daemon-watch","agent_nickname":"Codex"}}`,
-		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"first watcher sync"}}`,
+		`{"timestamp":"`+firstEventAt.Format(time.RFC3339)+`","type":"session_meta","payload":{"id":"session-daemon-watch","agent_nickname":"Codex"}}`,
+		`{"timestamp":"`+firstEventAt.Format(time.RFC3339)+`","type":"event_msg","payload":{"type":"user_message","message":"first watcher sync"}}`,
 	)
 	fakeWatcher := newFakeFileEventWatcher(transcriptPath)
 	previousWatcherFactory := newSingleFileWatcherFunc
@@ -740,7 +743,7 @@ func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFile(append) error = %v", err)
 	}
-	if _, err := file.WriteString("{\"timestamp\":\"2026-04-22T09:35:00+08:00\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"phase\":\"commentary\",\"message\":\"second watcher sync\"}}\n"); err != nil {
+	if _, err := file.WriteString(`{"timestamp":"` + secondEventAt.Format(time.RFC3339) + `","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"second watcher sync"}}` + "\n"); err != nil {
 		file.Close()
 		t.Fatalf("WriteString(append) error = %v", err)
 	}
@@ -754,9 +757,11 @@ func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 	fakeWatcher.Emit(fsnotify.Event{Name: transcriptPath, Op: fsnotify.Write})
 	fakeWatcher.WaitMatched(t)
 
-	waitForCondition(t, 4*time.Second, func() bool {
+	if !waitForConditionOK(4*time.Second, func() bool {
 		return strings.Count(output.String(), "Codex JSONL synced") >= 2
-	})
+	}) {
+		t.Fatalf("timed out waiting for second Codex JSONL sync; output:\n%s", output.String())
+	}
 
 	cancel()
 	select {
@@ -768,19 +773,19 @@ func TestRunVaultDaemonWatcherSyncsCodexJSONLBeforePoll(t *testing.T) {
 		t.Fatal("RunVaultDaemon() did not stop after cancel")
 	}
 
-	view, err := runtime.ProcessSinkDay("codex", time.Date(2026, 4, 22, 12, 0, 0, 0, loc))
+	view, err := runtime.ProcessSinkDay("codex", model.NormalizeDay(secondEventAt))
 	if err != nil {
 		t.Fatalf("ProcessSinkDay() error = %v", err)
 	}
 	foundWatcherWindow := false
 	for _, checkpoint := range view.Checkpoints {
-		if checkpoint.Window.WindowStart.Equal(time.Date(2026, 4, 22, 9, 30, 0, 0, loc)) {
+		if checkpoint.Window.WindowStart.Equal(secondWindowStart) {
 			foundWatcherWindow = true
 			break
 		}
 	}
 	if !foundWatcherWindow {
-		t.Fatalf("expected watcher-triggered 09:30 checkpoint, got %+v", view.Checkpoints)
+		t.Fatalf("expected watcher-triggered %s checkpoint, got %+v", secondWindowStart.Format(time.RFC3339), view.Checkpoints)
 	}
 
 	if elapsed := time.Since(startedAt); elapsed >= 5*time.Second {
@@ -894,15 +899,21 @@ func (f *fakeVaultEventWatcher) WaitCollected(t *testing.T) {
 
 func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool) {
 	t.Helper()
+	if waitForConditionOK(timeout, condition) {
+		return
+	}
+	t.Fatalf("condition was not met within %s", timeout)
+}
 
+func waitForConditionOK(timeout time.Duration, condition func() bool) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if condition() {
-			return
+			return true
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	t.Fatalf("condition was not met within %s", timeout)
+	return false
 }
 
 type lockedBuffer struct {
