@@ -36,6 +36,11 @@ func loadWorkbenchViewModel(version string, runtime console.Runtime, session *co
 		return tui.WorkbenchViewModel{}, err
 	}
 
+	findings, err := runtime.ListFindings(64)
+	if err != nil {
+		return tui.WorkbenchViewModel{}, err
+	}
+
 	var focusedReview *app.DraftReview
 	if strings.TrimSpace(session.CurrentDraftID) != "" {
 		review, err := runtime.ReviewDraft(session.CurrentDraftID)
@@ -50,6 +55,7 @@ func loadWorkbenchViewModel(version string, runtime console.Runtime, session *co
 		drafts,
 		processSink,
 		focusedReview,
+		findings,
 		session.LastToolTrace,
 		session.History,
 		localExec,

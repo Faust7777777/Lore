@@ -126,6 +126,7 @@ func TestNewWorkbenchViewModelFiltersPendingDraftsAndPreservesConversation(t *te
 		app.ProcessSinkDayView{AgentID: "codex", Day: day},
 		nil,
 		nil,
+		nil,
 		[]operatoragent.ConversationTurn{
 			{Role: "user", Content: "hello"},
 			{Role: "assistant", Content: "world"},

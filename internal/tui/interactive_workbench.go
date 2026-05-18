@@ -33,6 +33,8 @@ const (
 	focusInput interactiveFocus = iota
 	focusConversation
 	focusStatus
+	focusFindings
+	focusProcessSink
 	focusApproval
 )
 
@@ -67,6 +69,12 @@ type interactiveWorkbenchModel struct {
 	approvalCursor  int
 	approvalDetail  bool
 	approvalOffset  int
+	findingsCursor  int
+	findingsOffset  int
+	findingsDetail  bool
+	sinkCursor      int
+	sinkOffset      int
+	sinkDetail      bool
 }
 
 func RunInteractiveWorkbench(input io.Reader, output io.Writer, driver InteractiveWorkbenchDriver) error {
@@ -159,6 +167,8 @@ func (m interactiveWorkbenchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case approvalResultMsg:
 		return m.handleApprovalResult(msg)
+	case findingsResultMsg:
+		return m.handleFindingsResult(msg)
 	case tea.MouseMsg:
 		return m.handleMouse(tea.MouseEvent(msg))
 	case tea.KeyMsg:
@@ -176,6 +186,16 @@ func (m interactiveWorkbenchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			if m.selection.active {
 				m.selection = textSelection{}
+				m.refreshContent(false)
+				return m, nil
+			}
+			if m.findingsDetail {
+				m.findingsDetail = false
+				m.refreshContent(false)
+				return m, nil
+			}
+			if m.sinkDetail {
+				m.sinkDetail = false
 				m.refreshContent(false)
 				return m, nil
 			}
@@ -201,6 +221,10 @@ func (m interactiveWorkbenchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.statusViewport, cmd = m.statusViewport.Update(msg)
 			return m, cmd
+		case focusFindings:
+			return m.handleFindingsKeys(msg)
+		case focusProcessSink:
+			return m.handleSinkKeys(msg)
 		case focusApproval:
 			return m.handleApprovalKeys(msg)
 		default:
@@ -310,7 +334,7 @@ func (m *interactiveWorkbenchModel) resize() {
 
 func (m *interactiveWorkbenchModel) applyFocus() tea.Cmd {
 	switch m.focus {
-	case focusConversation, focusStatus, focusApproval:
+	case focusConversation, focusStatus, focusFindings, focusProcessSink, focusApproval:
 		m.input.Blur()
 		return nil
 	default:
@@ -432,6 +456,10 @@ func nextFocus(current interactiveFocus) interactiveFocus {
 	case focusConversation:
 		return focusStatus
 	case focusStatus:
+		return focusFindings
+	case focusFindings:
+		return focusProcessSink
+	case focusProcessSink:
 		return focusApproval
 	default:
 		return focusInput
@@ -443,6 +471,10 @@ func previousFocus(current interactiveFocus) interactiveFocus {
 	case focusInput:
 		return focusApproval
 	case focusApproval:
+		return focusProcessSink
+	case focusProcessSink:
+		return focusFindings
+	case focusFindings:
 		return focusStatus
 	case focusStatus:
 		return focusConversation
@@ -546,6 +578,189 @@ func (m interactiveWorkbenchModel) handleApprovalDetailKeys(msg tea.KeyMsg) (tea
 			return m, nil
 		}
 		return m.executeApprovalAction("apply", draft.ID)
+	}
+	return m, nil
+}
+
+// --- Findings pane keyboard handler ---
+
+func (m interactiveWorkbenchModel) handleFindingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	findings := m.viewModel.Findings
+
+	if m.findingsDetail {
+		return m.handleFindingsDetailKeys(msg)
+	}
+
+	switch msg.String() {
+	case "up", "k":
+		if m.findingsCursor > 0 {
+			m.findingsCursor--
+			m.clampFindingsOffset()
+		}
+		m.refreshContent(false)
+		return m, nil
+	case "down", "j":
+		if m.findingsCursor < len(findings)-1 {
+			m.findingsCursor++
+			m.clampFindingsOffset()
+		}
+		m.refreshContent(false)
+		return m, nil
+	case "enter":
+		if len(findings) > 0 {
+			m.findingsDetail = true
+			m.refreshContent(false)
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *interactiveWorkbenchModel) clampFindingsOffset() {
+	visibleHeight := m.approvalViewport.Height
+	if visibleHeight < 1 {
+		visibleHeight = 5
+	}
+	listHeight := visibleHeight - 1
+	if listHeight < 1 {
+		listHeight = 1
+	}
+	if m.findingsCursor < m.findingsOffset {
+		m.findingsOffset = m.findingsCursor
+	}
+	if m.findingsCursor >= m.findingsOffset+listHeight {
+		m.findingsOffset = m.findingsCursor - listHeight + 1
+	}
+}
+
+func (m interactiveWorkbenchModel) handleFindingsDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	findings := m.viewModel.Findings
+	if len(findings) == 0 || m.findingsCursor >= len(findings) {
+		m.findingsDetail = false
+		return m, nil
+	}
+
+	finding := findings[m.findingsCursor]
+
+	switch msg.String() {
+	case "esc":
+		m.findingsDetail = false
+		m.refreshContent(false)
+		return m, nil
+	case "x":
+		if finding.State != model.FindingOpen {
+			return m, nil
+		}
+		return m.executeFindingsAction("resolve", finding.ID)
+	case "i":
+		if finding.State != model.FindingOpen {
+			return m, nil
+		}
+		return m.executeFindingsAction("ignore", finding.ID)
+	}
+	return m, nil
+}
+
+type findingsResultMsg struct {
+	action    string
+	findingID string
+	viewModel WorkbenchViewModel
+	lastOutput string
+	err       error
+}
+
+func (m interactiveWorkbenchModel) executeFindingsAction(action string, findingID string) (tea.Model, tea.Cmd) {
+	return m, func() tea.Msg {
+		line := "/findings " + action + " " + findingID
+		update, err := m.driver.Execute(line, m.lastOutput)
+		return findingsResultMsg{
+			action:     action,
+			findingID:  findingID,
+			viewModel:  update.ViewModel,
+			lastOutput: update.LastOutput,
+			err:        err,
+		}
+	}
+}
+
+func (m interactiveWorkbenchModel) handleFindingsResult(msg findingsResultMsg) (tea.Model, tea.Cmd) {
+	m.findingsDetail = false
+	if msg.err != nil {
+		m.lastOutput = "Findings error: " + msg.err.Error()
+	} else {
+		m.viewModel = msg.viewModel
+		m.lastOutput = msg.lastOutput
+	}
+	if len(m.viewModel.Findings) == 0 {
+		m.findingsCursor = 0
+		m.findingsOffset = 0
+	} else {
+		if m.findingsCursor >= len(m.viewModel.Findings) {
+			m.findingsCursor = maxInt(0, len(m.viewModel.Findings)-1)
+		}
+		m.clampFindingsOffset()
+	}
+	m.refreshContent(true)
+	return m, nil
+}
+
+// --- Process-sink timeline keyboard handler ---
+
+func (m interactiveWorkbenchModel) handleSinkKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	checkpoints := m.viewModel.ProcessSink.Checkpoints
+
+	if m.sinkDetail {
+		return m.handleSinkDetailKeys(msg)
+	}
+
+	switch msg.String() {
+	case "up", "k":
+		if m.sinkCursor > 0 {
+			m.sinkCursor--
+			m.clampSinkOffset()
+		}
+		m.refreshContent(false)
+		return m, nil
+	case "down", "j":
+		if m.sinkCursor < len(checkpoints)-1 {
+			m.sinkCursor++
+			m.clampSinkOffset()
+		}
+		m.refreshContent(false)
+		return m, nil
+	case "enter":
+		if len(checkpoints) > 0 {
+			m.sinkDetail = true
+			m.refreshContent(false)
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *interactiveWorkbenchModel) clampSinkOffset() {
+	visibleHeight := m.approvalViewport.Height
+	if visibleHeight < 1 {
+		visibleHeight = 5
+	}
+	listHeight := visibleHeight - 1
+	if listHeight < 1 {
+		listHeight = 1
+	}
+	if m.sinkCursor < m.sinkOffset {
+		m.sinkOffset = m.sinkCursor
+	}
+	if m.sinkCursor >= m.sinkOffset+listHeight {
+		m.sinkOffset = m.sinkCursor - listHeight + 1
+	}
+}
+
+func (m interactiveWorkbenchModel) handleSinkDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.sinkDetail = false
+		m.refreshContent(false)
+		return m, nil
 	}
 	return m, nil
 }

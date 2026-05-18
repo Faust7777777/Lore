@@ -17,6 +17,7 @@ type WorkbenchViewModel struct {
 	PendingDrafts []model.Draft
 	FocusedReview *app.DraftReview
 	ProcessSink   app.ProcessSinkDayView
+	Findings      []model.Finding
 	ToolTrace     []operatoragent.ToolCallTrace
 	Conversation  WorkbenchConversation
 	QuickActions  []string
@@ -54,7 +55,7 @@ type WorkbenchConversation struct {
 	LastOutput string
 }
 
-func NewWorkbenchViewModel(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, toolTrace []operatoragent.ToolCallTrace, history []operatoragent.ConversationTurn, localExec bool, shellEnabled bool, lastOutput string, sessionID string, transcriptPath string) WorkbenchViewModel {
+func NewWorkbenchViewModel(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, findings []model.Finding, toolTrace []operatoragent.ToolCallTrace, history []operatoragent.ConversationTurn, localExec bool, shellEnabled bool, lastOutput string, sessionID string, transcriptPath string) WorkbenchViewModel {
 	pendingDrafts := filterDraftsByStates(drafts, model.DraftPendingReview, model.DraftApproved)
 	dailyReportPath := "missing"
 	if processSink.Report != nil {
@@ -90,6 +91,7 @@ func NewWorkbenchViewModel(version string, managed model.ManagedStatusView, draf
 		PendingDrafts: append([]model.Draft(nil), pendingDrafts...),
 		FocusedReview: focusedReview,
 		ProcessSink:   processSink,
+		Findings:      append([]model.Finding(nil), findings...),
 		ToolTrace:     append([]operatoragent.ToolCallTrace(nil), toolTrace...),
 		Conversation: WorkbenchConversation{
 			Turns:      append([]operatoragent.ConversationTurn(nil), history...),

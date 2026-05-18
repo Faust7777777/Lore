@@ -53,6 +53,10 @@ func (s workbenchRuntimeStub) ProcessSinkDay(agentID string, day time.Time) (app
 	return s.processSink, nil
 }
 
+func (s workbenchRuntimeStub) ListFindings(limit int) ([]model.Finding, error) {
+	return nil, nil
+}
+
 func (s workbenchRuntimeStub) SystemDocGet(name string) (model.VaultDocument, error) {
 	return model.VaultDocument{}, nil
 }

@@ -22,6 +22,7 @@ type Runtime interface {
 	SupersedeDraft(id string, update model.DraftSupersedeUpdate) (model.Draft, error)
 	ApplyDraft(id string) (model.Draft, error)
 	ProcessSinkDay(agentID string, day time.Time) (app.ProcessSinkDayView, error)
+	ListFindings(limit int) ([]model.Finding, error)
 	SystemDocGet(name string) (model.VaultDocument, error)
 	VaultRead(relPath string) (model.VaultDocument, error)
 	VaultList(relDir string) ([]model.VaultEntry, error)
@@ -49,6 +50,7 @@ type TranscriptRecorder interface {
 	RecordWorkingSet(items []operatoragent.WorkingSetItem) error
 	RecordLocalCommand(command string) error
 	RecordError(message string, recoverable bool) error
+	RecordModelUsage(usage []operatoragent.ModelCallUsage) error
 	SessionID() string
 	Path() string
 }
@@ -486,6 +488,11 @@ func (s *Session) persistResponseUsage(runtime Runtime, usage []operatoragent.Mo
 	sessionID := ""
 	if s.Recorder != nil {
 		sessionID = s.Recorder.SessionID()
+		// Record usage to the transcript before persisting to the store
+		// so that even if the store write fails the JSONL retains
+		// evidence of the model call. Transcript errors are
+		// non-blocking by the same convention as recordToolTrace.
+		_ = s.Recorder.RecordModelUsage(usage)
 	}
 	records := make([]model.UsageRecord, 0, len(usage))
 	for _, u := range usage {

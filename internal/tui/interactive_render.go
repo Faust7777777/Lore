@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"obsidian-harness/internal/app"
 	"obsidian-harness/internal/model"
 )
 
@@ -39,10 +40,31 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 	} else {
 		approvalTitle = "Reviewable Drafts"
 	}
-	approvalPane := paneStyle(model.focus == focusApproval).Width(rightWidth).Height(rightBottomHeight).Render(
-		renderPaneTitle(approvalTitle, model.focus == focusApproval, false, "", "") + "\n" + renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalOffset, model.approvalDetail, rightWidth-4, rightBottomHeight-4),
+
+	// Right-bottom pane switches content based on focus
+	var rightBottomContent string
+	var rightBottomTitle string
+	switch model.focus {
+	case focusFindings:
+		rightBottomTitle = "Findings"
+		rightBottomContent = renderFindingsPane(model.viewModel.Findings, model.findingsCursor, model.findingsOffset, model.findingsDetail, rightWidth-4, rightBottomHeight-4)
+	case focusProcessSink:
+		if narrow {
+			rightBottomTitle = "Sink Timeline"
+		} else {
+			rightBottomTitle = "Process-sink Timeline"
+		}
+		rightBottomContent = renderSinkTimelinePane(model.viewModel.ProcessSink, model.sinkCursor, model.sinkOffset, model.sinkDetail, rightWidth-4, rightBottomHeight-4)
+	default:
+		// focusApproval (and any other) shows drafts
+		rightBottomTitle = approvalTitle
+		rightBottomContent = renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalOffset, model.approvalDetail, rightWidth-4, rightBottomHeight-4)
+	}
+
+	rightBottomPane := paneStyle(model.focus == focusApproval || model.focus == focusFindings || model.focus == focusProcessSink).Width(rightWidth).Height(rightBottomHeight).Render(
+		renderPaneTitle(rightBottomTitle, model.focus == focusApproval || model.focus == focusFindings || model.focus == focusProcessSink, false, "", "") + "\n" + rightBottomContent,
 	)
-	rightColumn := lipgloss.JoinVertical(lipgloss.Left, statusPane, approvalPane)
+	rightColumn := lipgloss.JoinVertical(lipgloss.Left, statusPane, rightBottomPane)
 
 	inputPane := inputPaneStyle(model.focus == focusInput).Width(w).Render(
 		renderInputHeader(model.focus == focusInput, model.running) + "\n" + model.input.View(),
@@ -341,4 +363,247 @@ func renderInputHeader(focused bool, running bool) string {
 		label = glyphFocus + " Input"
 	}
 	return focusedTitleStyle.Render(label) + "  " + styleMutedText.Render("Enter send "+glyphSep+" Ctrl+J newline "+glyphSep+" Ctrl+C copy "+glyphSep+" Ctrl+Q quit")
+}
+
+// --- Findings pane ---
+
+func renderFindingsPane(findings []model.Finding, cursor int, offset int, detail bool, width int, height int) string {
+	if len(findings) == 0 {
+		return styleMutedText.Render("No findings.") + "\n" +
+			styleMutedText.Render("Governance findings appear here.")
+	}
+
+	if detail && cursor < len(findings) {
+		return renderFindingsDetail(findings[cursor], width, height)
+	}
+
+	return renderFindingsList(findings, cursor, offset, width, height)
+}
+
+func renderFindingsList(findings []model.Finding, cursor int, offset int, width int, height int) string {
+	var builder strings.Builder
+
+	listHeight := height - 1
+	if listHeight < 1 {
+		listHeight = 1
+	}
+
+	end := offset + listHeight
+	if end > len(findings) {
+		end = len(findings)
+	}
+
+	for i := offset; i < end; i++ {
+		f := findings[i]
+		prefix := "  "
+		titleStyle := styleMutedText
+		if i == cursor {
+			prefix = styleWarn.Render(glyphFocus+" ")
+			titleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
+		}
+
+		var sevBadge string
+		switch f.Severity {
+		case model.FindingSeverityCritical:
+			sevBadge = styleErr.Render("crit")
+		case model.FindingSeverityWarning:
+			sevBadge = styleWarn.Render("warn")
+		default:
+			sevBadge = styleOK.Render("info")
+		}
+
+		var stateBadge string
+		switch f.State {
+		case model.FindingResolved:
+			stateBadge = styleOK.Render("ok")
+		case model.FindingIgnored:
+			stateBadge = styleMutedText.Render("ign")
+		default:
+			stateBadge = styleWarn.Render("open")
+		}
+
+		title := oneLine(f.Title, maxInt(12, width-14))
+		builder.WriteString(prefix + sevBadge + " " + stateBadge + " " + titleStyle.Render(title))
+		builder.WriteString("\n")
+	}
+
+	builder.WriteString(styleMutedText.Render(fmt.Sprintf("[%d/%d] enter=detail", cursor+1, len(findings))))
+	builder.WriteString("\n")
+
+	return builder.String()
+}
+
+func renderFindingsDetail(f model.Finding, width int, height int) string {
+	var builder strings.Builder
+
+	builder.WriteString(styleSectionHead.Render("Finding Detail") + "\n")
+	builder.WriteString("  Kind     " + string(f.Kind) + "\n")
+	builder.WriteString("  Severity " + string(f.Severity) + "\n")
+	builder.WriteString("  State    " + string(f.State) + "\n")
+	builder.WriteString("  Target   " + oneLine(f.Target.Path, maxInt(10, width-10)) + "\n")
+	builder.WriteString("  Source   " + oneLine(f.Source, maxInt(10, width-10)) + "\n")
+	builder.WriteString("  Detected " + f.DetectedAt.Format("2006-01-02 15:04") + "\n")
+
+	if f.Summary != "" {
+		builder.WriteString("\n" + styleSectionHead.Render("Summary") + "\n")
+		summaryLines := maxInt(1, (height-10)/2)
+		summary := oneLine(f.Summary, width*summaryLines)
+		builder.WriteString("  " + wrapText(summary, maxInt(10, width-2)) + "\n")
+	}
+
+	if f.Detail != "" {
+		builder.WriteString("\n" + styleSectionHead.Render("Detail") + "\n")
+		detailLines := maxInt(1, (height-12)/2)
+		detail := oneLine(f.Detail, width*detailLines)
+		builder.WriteString("  " + wrapText(detail, maxInt(10, width-2)) + "\n")
+	}
+
+	builder.WriteString("\n")
+	switch f.State {
+	case model.FindingOpen:
+		builder.WriteString(styleOK.Render("x") + "=resolve " + styleMutedText.Render("i") + "=ignore " + styleMutedText.Render("esc=back"))
+	default:
+		builder.WriteString(styleMutedText.Render("esc=back"))
+	}
+
+	return builder.String()
+}
+
+// --- Process-sink timeline pane ---
+
+func renderSinkTimelinePane(sink app.ProcessSinkDayView, cursor int, offset int, detail bool, width int, height int) string {
+	if len(sink.Checkpoints) == 0 {
+		return styleMutedText.Render("No checkpoints today.") + "\n" +
+			styleMutedText.Render("Session checkpoints appear here.")
+	}
+
+	if detail && cursor < len(sink.Checkpoints) {
+		return renderSinkDetail(sink, cursor, width, height)
+	}
+
+	return renderSinkTimelineList(sink, cursor, offset, width, height)
+}
+
+func renderSinkTimelineList(sink app.ProcessSinkDayView, cursor int, offset int, width int, height int) string {
+	var builder strings.Builder
+
+	listHeight := height - 2
+	if listHeight < 1 {
+		listHeight = 1
+	}
+
+	end := offset + listHeight
+	if end > len(sink.Checkpoints) {
+		end = len(sink.Checkpoints)
+	}
+
+	for i := offset; i < end; i++ {
+		cp := sink.Checkpoints[i]
+		prefix := "  "
+		timeStyle := styleMutedText
+		titleStyle := styleMutedText
+		if i == cursor {
+			prefix = styleWarn.Render(glyphFocus+" ")
+			timeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
+			titleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
+		}
+
+		timeRange := cp.Window.WindowStart.Format("15:04") + glyphDash + cp.Window.WindowEnd.Format("15:04")
+		title := oneLine(cp.Title, maxInt(10, width-12))
+
+		var stateBadge string
+		switch cp.State {
+		case model.CheckpointMaterialized:
+			stateBadge = styleOK.Render("*")
+		default:
+			stateBadge = styleMutedText.Render("o")
+		}
+
+		builder.WriteString(prefix + timeStyle.Render(timeRange) + " " + stateBadge + " " + titleStyle.Render(title))
+		builder.WriteString("\n")
+	}
+
+	// Report status line
+	if sink.Report != nil {
+		builder.WriteString(styleMutedText.Render("report: " + oneLine(sink.Report.Title, maxInt(10, width-10))))
+		builder.WriteString("\n")
+	}
+
+	builder.WriteString(styleMutedText.Render(fmt.Sprintf("[%d/%d] enter=detail", cursor+1, len(sink.Checkpoints))))
+	builder.WriteString("\n")
+
+	return builder.String()
+}
+
+func renderSinkDetail(sink app.ProcessSinkDayView, idx int, width int, height int) string {
+	var builder strings.Builder
+	cp := sink.Checkpoints[idx]
+
+	builder.WriteString(styleSectionHead.Render("Checkpoint Detail") + "\n")
+	builder.WriteString("  Window  " + cp.Window.WindowStart.Format("15:04") + glyphDash + cp.Window.WindowEnd.Format("15:04") + "\n")
+	builder.WriteString("  State   " + string(cp.State) + "\n")
+	builder.WriteString("  Session " + oneLine(cp.Window.SessionID, maxInt(10, width-10)) + "\n")
+	builder.WriteString("  Path    " + oneLine(cp.Path, maxInt(10, width-10)) + "\n")
+
+	if cp.Title != "" {
+		builder.WriteString("\n" + styleSectionHead.Render("Title") + "\n")
+		builder.WriteString("  " + wrapText(cp.Title, maxInt(10, width-2)) + "\n")
+	}
+
+	if cp.Content != "" {
+		builder.WriteString("\n" + styleSectionHead.Render("Content") + "\n")
+		contentLines := maxInt(1, (height-12)/2)
+		content := oneLine(cp.Content, width*contentLines)
+		builder.WriteString("  " + wrapText(content, maxInt(10, width-2)) + "\n")
+	}
+
+	builder.WriteString("\n")
+	builder.WriteString(styleMutedText.Render("esc=back"))
+
+	return builder.String()
+}
+
+// --- Draft detail diff (enhanced approval detail) ---
+
+func renderApprovalDetailWithDiff(draft model.Draft, review *app.DraftReview, width int, height int) string {
+	var builder strings.Builder
+
+	builder.WriteString(styleSectionHead.Render("Draft Detail") + "\n")
+	builder.WriteString("  Kind   " + string(draft.Kind) + "\n")
+	builder.WriteString("  Target " + oneLine(draft.Target.Path, maxInt(10, width-10)) + "\n")
+	builder.WriteString("  State  " + string(draft.State) + "\n")
+
+	if draft.Summary != "" {
+		builder.WriteString("\n" + styleSectionHead.Render("Summary") + "\n")
+		summaryLines := maxInt(1, (height-12)/3)
+		summary := oneLine(draft.Summary, width*summaryLines)
+		builder.WriteString("  " + wrapText(summary, maxInt(10, width-2)) + "\n")
+	}
+
+	if draft.ProposedContent != "" {
+		builder.WriteString("\n" + styleSectionHead.Render("Proposed") + "\n")
+		contentLines := maxInt(1, (height-14)/3)
+		content := oneLine(draft.ProposedContent, width*contentLines)
+		builder.WriteString("  " + wrapText(content, maxInt(10, width-2)) + "\n")
+	}
+
+	// Show current target content for diff comparison
+	if review != nil && review.TargetDocument != nil && strings.TrimSpace(review.TargetDocument.Content) != "" {
+		builder.WriteString("\n" + styleSectionHead.Render("Current Target") + "\n")
+		diffLines := maxInt(1, (height-16)/3)
+		current := oneLine(review.TargetDocument.Content, width*diffLines)
+		builder.WriteString("  " + wrapText(current, maxInt(10, width-2)) + "\n")
+	}
+
+	builder.WriteString("\n")
+	switch draft.State {
+	case model.DraftPendingReview:
+		builder.WriteString(styleWarn.Render("a") + "=approve " + styleErr.Render("r") + "=reject " + styleMutedText.Render("esc=back"))
+	case model.DraftApproved:
+		builder.WriteString(styleOK.Render("p") + "=apply " + styleMutedText.Render("esc=back"))
+	default:
+		builder.WriteString(styleMutedText.Render("esc=back"))
+	}
+
+	return builder.String()
 }

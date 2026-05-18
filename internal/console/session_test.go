@@ -66,6 +66,10 @@ func (f *fakeRuntime) ProcessSinkDay(agentID string, day time.Time) (app.Process
 	return f.processSink, nil
 }
 
+func (f *fakeRuntime) ListFindings(limit int) ([]model.Finding, error) {
+	return nil, nil
+}
+
 func (f *fakeRuntime) SystemDocGet(name string) (model.VaultDocument, error) {
 	return model.VaultDocument{Path: name + ".md", Content: "# " + name}, nil
 }
@@ -330,6 +334,7 @@ type recordingRecorder struct {
 	worksets   [][]operatoragent.WorkingSetItem
 	errors     []string
 	commands   []string
+	usages     [][]operatoragent.ModelCallUsage
 }
 
 func (r *recordingRecorder) RecordUser(text string) error {
@@ -366,6 +371,11 @@ func (r *recordingRecorder) Path() string {
 }
 func (r *recordingRecorder) RecordError(message string, recoverable bool) error {
 	r.errors = append(r.errors, message)
+	return nil
+}
+
+func (r *recordingRecorder) RecordModelUsage(usage []operatoragent.ModelCallUsage) error {
+	r.usages = append(r.usages, append([]operatoragent.ModelCallUsage(nil), usage...))
 	return nil
 }
 func TestSessionHandleUsesLoopAgentResponseAndStoresHistory(t *testing.T) {
