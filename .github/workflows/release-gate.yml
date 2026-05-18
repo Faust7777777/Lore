@@ -31,8 +31,22 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Run release gate
+        if: github.event_name == 'pull_request'
         shell: powershell
-        run: .\scripts\release-gate.ps1 -Full
+        run: .\scripts\release-gate.ps1
+
+      - name: Run full release gate
+        if: github.event_name != 'pull_request'
+        shell: powershell
+        env:
+          LORE_LLM_BASE_URL: ${{ secrets.LORE_LLM_BASE_URL }}
+          LORE_LLM_API_KEY: ${{ secrets.LORE_LLM_API_KEY }}
+          LORE_LLM_MODEL: ${{ vars.LORE_LLM_MODEL }}
+        run: |
+          if (-not $env:LORE_LLM_BASE_URL -or -not $env:LORE_LLM_API_KEY -or -not $env:LORE_LLM_MODEL) {
+              throw "Full release gate requires LORE_LLM_BASE_URL, LORE_LLM_API_KEY, and LORE_LLM_MODEL"
+          }
+          .\scripts\release-gate.ps1 -Full
 
       - name: Assert release gate leaves repo clean
         shell: powershell
