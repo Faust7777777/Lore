@@ -23,6 +23,8 @@ type Runtime interface {
 	ApplyDraft(id string) (model.Draft, error)
 	ProcessSinkDay(agentID string, day time.Time) (app.ProcessSinkDayView, error)
 	ListFindings(limit int) ([]model.Finding, error)
+	ResolveFinding(id string) (model.Finding, error)
+	IgnoreFinding(id string) (model.Finding, error)
 	SystemDocGet(name string) (model.VaultDocument, error)
 	VaultRead(relPath string) (model.VaultDocument, error)
 	VaultList(relDir string) ([]model.VaultEntry, error)

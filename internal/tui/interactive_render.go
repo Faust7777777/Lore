@@ -58,7 +58,7 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 	default:
 		// focusApproval (and any other) shows drafts
 		rightBottomTitle = approvalTitle
-		rightBottomContent = renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalOffset, model.approvalDetail, rightWidth-4, rightBottomHeight-4)
+		rightBottomContent = renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalOffset, model.approvalDetail, model.viewModel.FocusedReview, rightWidth-4, rightBottomHeight-4)
 	}
 
 	rightBottomPane := paneStyle(model.focus == focusApproval || model.focus == focusFindings || model.focus == focusProcessSink).Width(rightWidth).Height(rightBottomHeight).Render(
@@ -226,14 +226,14 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 	return builder.String()
 }
 
-func renderApprovalPane(drafts []model.Draft, cursor int, offset int, detail bool, width int, height int) string {
+func renderApprovalPane(drafts []model.Draft, cursor int, offset int, detail bool, focusedReview *app.DraftReview, width int, height int) string {
 	if len(drafts) == 0 {
 		return styleMutedText.Render("No reviewable drafts.") + "\n" +
 			styleMutedText.Render("Proposals appear here for review.")
 	}
 
 	if detail && cursor < len(drafts) {
-		return renderApprovalDetail(drafts[cursor], width, height)
+		return renderApprovalDetailWithTarget(drafts[cursor], focusedReview, width, height)
 	}
 
 	return renderApprovalList(drafts, cursor, offset, width, height)
@@ -282,41 +282,6 @@ func renderApprovalList(drafts []model.Draft, cursor int, offset int, width int,
 
 	builder.WriteString(styleMutedText.Render(fmt.Sprintf("[%d/%d] enter=detail", cursor+1, len(drafts))))
 	builder.WriteString("\n")
-
-	return builder.String()
-}
-
-func renderApprovalDetail(draft model.Draft, width int, height int) string {
-	var builder strings.Builder
-
-	builder.WriteString(styleSectionHead.Render("Draft Detail") + "\n")
-	builder.WriteString("  Kind   " + string(draft.Kind) + "\n")
-	builder.WriteString("  Target " + oneLine(draft.Target.Path, maxInt(10, width-10)) + "\n")
-	builder.WriteString("  State  " + string(draft.State) + "\n")
-
-	if draft.Summary != "" {
-		builder.WriteString("\n" + styleSectionHead.Render("Summary") + "\n")
-		summaryLines := maxInt(1, (height-8)/2)
-		summary := oneLine(draft.Summary, width*summaryLines)
-		builder.WriteString("  " + wrapText(summary, maxInt(10, width-2)) + "\n")
-	}
-
-	if draft.ProposedContent != "" {
-		builder.WriteString("\n" + styleSectionHead.Render("Proposed") + "\n")
-		contentLines := maxInt(1, (height-10)/2)
-		content := oneLine(draft.ProposedContent, width*contentLines)
-		builder.WriteString("  " + wrapText(content, maxInt(10, width-2)) + "\n")
-	}
-
-	builder.WriteString("\n")
-	switch draft.State {
-	case model.DraftPendingReview:
-		builder.WriteString(styleWarn.Render("a") + "=approve " + styleErr.Render("r") + "=reject " + styleMutedText.Render("esc=back"))
-	case model.DraftApproved:
-		builder.WriteString(styleOK.Render("p") + "=apply " + styleMutedText.Render("esc=back"))
-	default:
-		builder.WriteString(styleMutedText.Render("esc=back"))
-	}
 
 	return builder.String()
 }
@@ -565,8 +530,7 @@ func renderSinkDetail(sink app.ProcessSinkDayView, idx int, width int, height in
 
 // --- Draft detail diff (enhanced approval detail) ---
 
-func renderApprovalDetailWithDiff(draft model.Draft, review *app.DraftReview, width int, height int) string {
-	var builder strings.Builder
+func renderApprovalDetailWithTarget(draft model.Draft, review *app.DraftReview, width int, height int) string {	var builder strings.Builder
 
 	builder.WriteString(styleSectionHead.Render("Draft Detail") + "\n")
 	builder.WriteString("  Kind   " + string(draft.Kind) + "\n")

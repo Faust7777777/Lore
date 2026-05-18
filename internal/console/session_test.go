@@ -70,6 +70,14 @@ func (f *fakeRuntime) ListFindings(limit int) ([]model.Finding, error) {
 	return nil, nil
 }
 
+func (f *fakeRuntime) ResolveFinding(id string) (model.Finding, error) {
+	return model.Finding{ID: id, State: model.FindingResolved}, nil
+}
+
+func (f *fakeRuntime) IgnoreFinding(id string) (model.Finding, error) {
+	return model.Finding{ID: id, State: model.FindingIgnored}, nil
+}
+
 func (f *fakeRuntime) SystemDocGet(name string) (model.VaultDocument, error) {
 	return model.VaultDocument{Path: name + ".md", Content: "# " + name}, nil
 }

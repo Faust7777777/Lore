@@ -136,6 +136,28 @@ func (d interactiveWorkbenchDriver) ExecuteApprovalAction(action string, draftID
 	return tui.InteractiveWorkbenchUpdate{ViewModel: viewModel, LastOutput: lastOutput}, err
 }
 
+func (d interactiveWorkbenchDriver) ExecuteFindingAction(action string, findingID string) (tui.InteractiveWorkbenchUpdate, error) {
+	var lastOutput string
+	switch action {
+	case "resolve":
+		finding, err := d.runtime.ResolveFinding(findingID)
+		if err != nil {
+			return tui.InteractiveWorkbenchUpdate{}, err
+		}
+		lastOutput = fmt.Sprintf("Finding %s resolved.", shortID(finding.ID, 8))
+	case "ignore":
+		finding, err := d.runtime.IgnoreFinding(findingID)
+		if err != nil {
+			return tui.InteractiveWorkbenchUpdate{}, err
+		}
+		lastOutput = fmt.Sprintf("Finding %s ignored.", shortID(finding.ID, 8))
+	default:
+		return tui.InteractiveWorkbenchUpdate{}, fmt.Errorf("unknown finding action: %s", action)
+	}
+	viewModel, err := d.Load(lastOutput)
+	return tui.InteractiveWorkbenchUpdate{ViewModel: viewModel, LastOutput: lastOutput}, err
+}
+
 func shortID(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s

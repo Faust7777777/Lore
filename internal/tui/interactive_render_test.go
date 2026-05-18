@@ -162,7 +162,7 @@ func TestRenderInputHeaderIdle(t *testing.T) {
 }
 
 func TestRenderApprovalPaneEmpty(t *testing.T) {
-	result := renderApprovalPane(nil, 0, 0, false, 30, 10)
+	result := renderApprovalPane(nil, 0, 0, false, nil, 30, 10)
 	if !strings.Contains(result, "No reviewable drafts") {
 		t.Errorf("approval pane empty state should show 'No reviewable drafts', got: %q", result)
 	}
@@ -173,7 +173,7 @@ func TestRenderApprovalListWithDrafts(t *testing.T) {
 		{ID: "d1", Kind: model.DraftKindMarkdownNoteWrite, Title: "Test note", State: model.DraftPendingReview},
 		{ID: "d2", Kind: model.DraftKindPersonaUpdate, Title: "Update persona", State: model.DraftApproved},
 	}
-	result := renderApprovalPane(drafts, 0, 0, false, 36, 10)
+	result := renderApprovalPane(drafts, 0, 0, false, nil, 36, 10)
 	if !strings.Contains(result, "Test note") {
 		t.Errorf("approval list should contain first draft title, got: %q", result)
 	}
@@ -194,7 +194,7 @@ func TestRenderApprovalDetailPendingReview(t *testing.T) {
 		ID: "d1", Kind: model.DraftKindMarkdownNoteWrite, Title: "Test note",
 		State: model.DraftPendingReview, Summary: "A summary here", ProposedContent: "Note content",
 	}
-	result := renderApprovalPane([]model.Draft{draft}, 0, 0, true, 36, 20)
+	result := renderApprovalPane([]model.Draft{draft}, 0, 0, true, nil, 36, 20)
 	if !strings.Contains(result, "Draft Detail") {
 		t.Errorf("approval detail should show 'Draft Detail', got: %q", result)
 	}
@@ -211,7 +211,7 @@ func TestRenderApprovalDetailApproved(t *testing.T) {
 		ID: "d1", Kind: model.DraftKindMarkdownNoteWrite, Title: "Test note",
 		State: model.DraftApproved, Summary: "A summary here", ProposedContent: "Note content",
 	}
-	result := renderApprovalPane([]model.Draft{draft}, 0, 0, true, 36, 20)
+	result := renderApprovalPane([]model.Draft{draft}, 0, 0, true, nil, 36, 20)
 	if !strings.Contains(result, "p=apply") {
 		t.Errorf("approved detail should show apply action, got: %q", result)
 	}
@@ -226,7 +226,7 @@ func TestRenderApprovalListScrolling(t *testing.T) {
 		drafts[i] = model.Draft{ID: fmt.Sprintf("d%d", i), Kind: model.DraftKindMarkdownNoteWrite, Title: fmt.Sprintf("Draft %d", i), State: model.DraftPendingReview}
 	}
 	// Only 3 visible lines, cursor at index 7, offset should make items 5-7 visible
-	result := renderApprovalPane(drafts, 7, 5, false, 36, 4)
+	result := renderApprovalPane(drafts, 7, 5, false, nil, 36, 4)
 	if !strings.Contains(result, "Draft 7") {
 		t.Errorf("scrolled list should show cursor item, got: %q", result)
 	}

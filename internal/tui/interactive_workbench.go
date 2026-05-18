@@ -19,6 +19,7 @@ type InteractiveWorkbenchDriver interface {
 	Load(lastOutput string) (WorkbenchViewModel, error)
 	Execute(line string, lastOutput string) (InteractiveWorkbenchUpdate, error)
 	ExecuteApprovalAction(action string, draftID string) (InteractiveWorkbenchUpdate, error)
+	ExecuteFindingAction(action string, findingID string) (InteractiveWorkbenchUpdate, error)
 }
 
 type InteractiveWorkbenchUpdate struct {
@@ -671,8 +672,7 @@ type findingsResultMsg struct {
 
 func (m interactiveWorkbenchModel) executeFindingsAction(action string, findingID string) (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg {
-		line := "/findings " + action + " " + findingID
-		update, err := m.driver.Execute(line, m.lastOutput)
+		update, err := m.driver.ExecuteFindingAction(action, findingID)
 		return findingsResultMsg{
 			action:     action,
 			findingID:  findingID,

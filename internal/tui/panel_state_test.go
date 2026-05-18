@@ -126,6 +126,86 @@ func TestFindingsResolveAction(t *testing.T) {
 	if msg.findingID != "f1" {
 		t.Fatalf("findingID = %q, want f1", msg.findingID)
 	}
+
+	// Process result — verify finding state changed
+	updated, _ = m.Update(msg)
+	m = updated.(interactiveWorkbenchModel)
+	if len(m.viewModel.Findings) != 1 {
+		t.Fatalf("findings count = %d, want 1", len(m.viewModel.Findings))
+	}
+	if m.viewModel.Findings[0].State != model.FindingResolved {
+		t.Fatalf("finding state = %s, want resolved", m.viewModel.Findings[0].State)
+	}
+	if m.findingsDetail {
+		t.Fatal("detail should close after action")
+	}
+}
+
+func TestFindingsIgnoreAction(t *testing.T) {
+	findings := []model.Finding{
+		{ID: "f1", Title: "Finding A", State: model.FindingOpen, Severity: model.FindingSeverityWarning},
+	}
+	driver := &panelDriverStub{findings: findings}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+	m.focus = focusFindings
+	m.findingsDetail = true
+
+	// Press i to ignore
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	m = updated.(interactiveWorkbenchModel)
+
+	if cmd == nil {
+		t.Fatal("expected a command after pressing 'i'")
+	}
+
+	result := cmd()
+	msg, ok := result.(findingsResultMsg)
+	if !ok {
+		t.Fatalf("expected findingsResultMsg, got %T", result)
+	}
+	if msg.action != "ignore" {
+		t.Fatalf("action = %q, want ignore", msg.action)
+	}
+
+	// Process result — verify finding state changed
+	updated, _ = m.Update(msg)
+	m = updated.(interactiveWorkbenchModel)
+	if m.viewModel.Findings[0].State != model.FindingIgnored {
+		t.Fatalf("finding state = %s, want ignored", m.viewModel.Findings[0].State)
+	}
+}
+
+func TestFindingsNoOpOnNonOpenState(t *testing.T) {
+	findings := []model.Finding{
+		{ID: "f1", Title: "Finding A", State: model.FindingResolved, Severity: model.FindingSeverityWarning},
+	}
+	driver := &panelDriverStub{findings: findings}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+	m.focus = focusFindings
+	m.findingsDetail = true
+
+	// Press x on already-resolved — should be no-op
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = updated.(interactiveWorkbenchModel)
+	if cmd != nil {
+		t.Fatal("x on resolved finding should be no-op (nil cmd)")
+	}
+	// Press i on already-resolved — should be no-op
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	m = updated.(interactiveWorkbenchModel)
+	if cmd != nil {
+		t.Fatal("i on resolved finding should be no-op (nil cmd)")
+	}
 }
 
 // --- Process-sink timeline state machine tests ---
@@ -269,4 +349,24 @@ func (d *panelDriverStub) Execute(line string, lastOutput string) (InteractiveWo
 func (d *panelDriverStub) ExecuteApprovalAction(action string, draftID string) (InteractiveWorkbenchUpdate, error) {
 	vm, _ := d.Load("")
 	return InteractiveWorkbenchUpdate{ViewModel: vm, LastOutput: action + " " + draftID}, nil
+}
+
+func (d *panelDriverStub) ExecuteFindingAction(action string, findingID string) (InteractiveWorkbenchUpdate, error) {
+	// Simulate state transition on findings
+	for i, f := range d.findings {
+		if f.ID != findingID {
+			continue
+		}
+		switch action {
+		case "resolve":
+			f.State = model.FindingResolved
+			d.findings[i] = f
+		case "ignore":
+			f.State = model.FindingIgnored
+			d.findings[i] = f
+		}
+		break
+	}
+	vm, _ := d.Load("")
+	return InteractiveWorkbenchUpdate{ViewModel: vm, LastOutput: action + " " + findingID}, nil
 }

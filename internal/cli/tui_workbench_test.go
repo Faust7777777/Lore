@@ -57,6 +57,14 @@ func (s workbenchRuntimeStub) ListFindings(limit int) ([]model.Finding, error) {
 	return nil, nil
 }
 
+func (s workbenchRuntimeStub) ResolveFinding(id string) (model.Finding, error) {
+	return model.Finding{ID: id, State: model.FindingResolved}, nil
+}
+
+func (s workbenchRuntimeStub) IgnoreFinding(id string) (model.Finding, error) {
+	return model.Finding{ID: id, State: model.FindingIgnored}, nil
+}
+
 func (s workbenchRuntimeStub) SystemDocGet(name string) (model.VaultDocument, error) {
 	return model.VaultDocument{}, nil
 }
