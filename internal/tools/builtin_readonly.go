@@ -5,10 +5,9 @@ package tools
 // a small struct that holds the Harness handle and translates a generic
 // arguments map into the typed Harness call.
 //
-// Names, descriptions, argument schemas, and registration order match
-// internal/mcp/tool_contract.go's toolContracts() entries exactly. Commit
-// 2 of the registry refactor preserves byte-equivalent MCP tools/list
-// output while routing tools/call dispatch through the registry.
+// Names, descriptions, argument schemas, and registration order are the
+// canonical live MCP read-only contract. The MCP server derives tools/list
+// and tools/call dispatch from this registry data.
 //
 // All read-only tools live on SurfaceMCP|SurfaceConsole. They have no
 // session dependency (Harness alone is sufficient) which is why they
@@ -16,9 +15,8 @@ package tools
 
 const readOnlySurfaces = SurfaceMCP | SurfaceConsole
 
-// RegisterReadOnly registers the 9 built-in read-only tools into reg in
-// the same order they appear in internal/mcp/tool_contract.go. The order
-// is the externally observable order in MCP tools/list output and must
+// RegisterReadOnly registers the 9 built-in read-only tools into reg. The
+// order is the externally observable order in MCP tools/list output and must
 // remain stable.
 func RegisterReadOnly(reg *Registry, h Harness) error {
 	tools := []Tool{
@@ -42,12 +40,14 @@ func RegisterReadOnly(reg *Registry, h Harness) error {
 
 type managedStatusTool struct{ h Harness }
 
-func (t managedStatusTool) Name() string                          { return "managed_status" }
-func (t managedStatusTool) Description() string                   { return "Return managed mode and core document status." }
-func (t managedStatusTool) Surfaces() Surface                     { return readOnlySurfaces }
-func (t managedStatusTool) Arguments() []Argument                 { return nil }
-func (t managedStatusTool) Required() []string                    { return nil }
-func (t managedStatusTool) Call(_ map[string]any) (any, error)    { return t.h.ManagedStatus() }
+func (t managedStatusTool) Name() string { return "managed_status" }
+func (t managedStatusTool) Description() string {
+	return "Return managed mode and core document status."
+}
+func (t managedStatusTool) Surfaces() Surface                  { return readOnlySurfaces }
+func (t managedStatusTool) Arguments() []Argument              { return nil }
+func (t managedStatusTool) Required() []string                 { return nil }
+func (t managedStatusTool) Call(_ map[string]any) (any, error) { return t.h.ManagedStatus() }
 
 type systemDocGetTool struct{ h Harness }
 
@@ -149,9 +149,11 @@ func (t vaultBacklinksTool) Call(args map[string]any) (any, error) {
 
 type docClassifyTool struct{ h Harness }
 
-func (t docClassifyTool) Name() string        { return "doc_classify" }
-func (t docClassifyTool) Description() string { return "Classify a vault document by the current rules." }
-func (t docClassifyTool) Surfaces() Surface   { return readOnlySurfaces }
+func (t docClassifyTool) Name() string { return "doc_classify" }
+func (t docClassifyTool) Description() string {
+	return "Classify a vault document by the current rules."
+}
+func (t docClassifyTool) Surfaces() Surface { return readOnlySurfaces }
 func (t docClassifyTool) Arguments() []Argument {
 	return []Argument{{Name: "path", Type: ArgString}}
 }
@@ -164,9 +166,11 @@ func (t docClassifyTool) Call(args map[string]any) (any, error) {
 
 type contextPackTool struct{ h Harness }
 
-func (t contextPackTool) Name() string        { return "context_pack" }
-func (t contextPackTool) Description() string { return "Assemble a read-only context pack for a task or document." }
-func (t contextPackTool) Surfaces() Surface   { return readOnlySurfaces }
+func (t contextPackTool) Name() string { return "context_pack" }
+func (t contextPackTool) Description() string {
+	return "Assemble a read-only context pack for a task or document."
+}
+func (t contextPackTool) Surfaces() Surface { return readOnlySurfaces }
 func (t contextPackTool) Arguments() []Argument {
 	return []Argument{
 		{Name: "target_path", Type: ArgString},

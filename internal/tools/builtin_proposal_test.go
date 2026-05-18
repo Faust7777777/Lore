@@ -226,12 +226,9 @@ func TestParseObservedAtRejectsEmptyAndInvalid(t *testing.T) {
 }
 
 // proposalLegacyDefinitions returns the byte-equivalent expected MCP
-// definitions for the 2 proposal tools, derived from the entries that
-// previously lived in internal/mcp/tool_contract.go's toolContracts()
-// table. Used to confirm RegisterProposal produces an identical
-// tools/list payload to the legacy code path. If this fixture and the
-// SDK contract snapshot at docs/contracts/mcp-sdk-tools-v0.json drift,
-// commit 3a has changed observable MCP behavior.
+// definitions for the 2 proposal tools, derived from the historical static
+// MCP contract table. Used to confirm RegisterProposal preserves the
+// externally visible tools/list payload while dispatch lives in internal/tools.
 func proposalLegacyDefinitions() []map[string]any {
 	return []map[string]any{
 		{

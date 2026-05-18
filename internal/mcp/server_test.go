@@ -20,29 +20,61 @@ import (
 	"obsidian-harness/internal/vault"
 )
 
-func TestToolDefinitionsExposeSDKContract(t *testing.T) {
-	tools := toolDefinitionsByName(t)
-	contracts := allToolContractsForTesting(t)
-	if len(tools) != len(contracts) {
-		t.Fatalf("tool count = %d, want %d", len(tools), len(contracts))
+func TestToolDefinitionsExposeRegistryContract(t *testing.T) {
+	toolDefs := toolDefinitionsByName(t)
+	server := NewServer(nil, "test")
+	contracts := server.registry.ListBySurface(tools.SurfaceMCP)
+	if len(toolDefs) != len(contracts) {
+		t.Fatalf("tool count = %d, want %d", len(toolDefs), len(contracts))
 	}
 	for _, contract := range contracts {
-		tool, ok := tools[contract.Name]
+		toolDef, ok := toolDefs[contract.Name()]
 		if !ok {
-			t.Fatalf("tools/list missing %s", contract.Name)
+			t.Fatalf("tools/list missing %s", contract.Name())
 		}
-		if tool["description"] != contract.Description {
-			t.Fatalf("%s description = %q, want %q", contract.Name, tool["description"], contract.Description)
+		if toolDef["description"] != contract.Description() {
+			t.Fatalf("%s description = %q, want %q", contract.Name(), toolDef["description"], contract.Description())
 		}
-		wantProperties := make([]string, 0, len(contract.Arguments))
-		for _, argument := range contract.Arguments {
+		wantProperties := make([]string, 0, len(contract.Arguments()))
+		for _, argument := range contract.Arguments() {
 			wantProperties = append(wantProperties, argument.Name)
 			if argument.DeprecatedAlias != "" {
-				assertDeprecatedAlias(t, tools, contract.Name, argument.Name, argument.DeprecatedAlias)
+				assertDeprecatedAlias(t, toolDefs, contract.Name(), argument.Name, argument.DeprecatedAlias)
 			}
 		}
-		assertToolProperties(t, tools, contract.Name, wantProperties)
-		assertRequired(t, tools, contract.Name, contract.Required)
+		assertToolProperties(t, toolDefs, contract.Name(), wantProperties)
+		assertRequired(t, toolDefs, contract.Name(), contract.Required())
+	}
+}
+
+func TestLiveMCPToolContractV1Snapshot(t *testing.T) {
+	orderedTools := toolDefinitionsOrdered(t)
+	snapshot := loadLiveMCPToolContractSnapshot(t)
+	if len(orderedTools) != len(snapshot) {
+		t.Fatalf("live tool count = %d, want %d", len(orderedTools), len(snapshot))
+	}
+	toolDefs := toolDefinitionsByName(t)
+	for index, want := range snapshot {
+		if want.Category != "read" && want.Category != "proposal" {
+			t.Fatalf("%s category = %q, want read or proposal", want.Name, want.Category)
+		}
+		gotName, _ := orderedTools[index]["name"].(string)
+		if gotName != want.Name {
+			t.Fatalf("tool order[%d] = %q, want %q", index, gotName, want.Name)
+		}
+		assertExactToolProperties(t, toolDefs, want.Name, want.Properties)
+		assertRequired(t, toolDefs, want.Name, want.Required)
+		for alias, target := range want.AliasFor {
+			assertDeprecatedAlias(t, toolDefs, want.Name, alias, target)
+		}
+		for property, values := range want.Enum {
+			assertEnum(t, toolDefs, want.Name, property, values)
+		}
+		for _, forbidden := range want.Forbidden {
+			if _, ok := toolProperties(t, toolDefs, want.Name)[forbidden]; ok {
+				t.Fatalf("%s unexpectedly exposes forbidden property %s", want.Name, forbidden)
+			}
+		}
 	}
 }
 
@@ -595,11 +627,10 @@ func decodeFrames(t *testing.T, raw []byte) []map[string]any {
 
 func toolDefinitionsByName(t *testing.T) map[string]map[string]any {
 	t.Helper()
-	// After the tool-registry refactor (commit 2), the canonical tools/list
-	// source is Server.toolListDefinitions which merges registry-driven
-	// read-only tools with the legacy proposal table. The Harness pointer
-	// is unused by tools/list (metadata-only path), so a typed nil keeps
-	// the test helper free of an orchestrator setup.
+	// The canonical tools/list source is Server.toolListDefinitions, which is
+	// fully registry-driven. The Harness pointer is unused by tools/list
+	// (metadata-only path), so a typed nil keeps the test helper free of an
+	// orchestrator setup.
 	s := NewServer(nil, "test")
 	out := make(map[string]map[string]any)
 	for _, tool := range s.toolListDefinitions() {
@@ -612,49 +643,10 @@ func toolDefinitionsByName(t *testing.T) map[string]map[string]any {
 	return out
 }
 
-// allToolContractsForTesting returns the full set of MCP-visible tool
-// contracts in legacy toolContract shape: registry-driven read-only tools
-// projected back into toolContract via tools.Tool inspection, followed by
-// the legacy proposal contracts. Used by TestToolDefinitionsExposeSDKContract
-// for an exhaustiveness check that survives the registry split. Will be
-// removed in commit 3 once proposal tools also live in the registry and
-// the legacy toolContracts() table is gone.
-func allToolContractsForTesting(t *testing.T) []toolContract {
+func toolDefinitionsOrdered(t *testing.T) []map[string]any {
 	t.Helper()
 	s := NewServer(nil, "test")
-	out := make([]toolContract, 0, 16)
-	// Registry tools already include proposal intake tools.
-	registryNames := make(map[string]bool, 16)
-	for _, tool := range s.registry.ListBySurface(tools.SurfaceMCP) {
-		tc := toolContractFromTool(tool)
-		out = append(out, tc)
-		registryNames[tc.Name] = true
-	}
-	// Add hardcoded contracts only if not already in registry.
-	for _, tc := range toolContracts() {
-		if !registryNames[tc.Name] {
-			out = append(out, tc)
-		}
-	}
-	return out
-}
-
-func toolContractFromTool(tool tools.Tool) toolContract {
-	args := make([]toolArgument, 0, len(tool.Arguments()))
-	for _, arg := range tool.Arguments() {
-		args = append(args, toolArgument{
-			Name:            arg.Name,
-			Type:            string(arg.Type),
-			Enum:            arg.Enum,
-			DeprecatedAlias: arg.DeprecatedAlias,
-		})
-	}
-	return toolContract{
-		Name:        tool.Name(),
-		Description: tool.Description(),
-		Arguments:   args,
-		Required:    tool.Required(),
-	}
+	return s.toolListDefinitions()
 }
 
 func toolNames(tools map[string]map[string]any) []string {
@@ -673,6 +665,16 @@ type sdkToolContractSnapshot struct {
 	Forbidden  []string          `json:"forbidden,omitempty"`
 }
 
+type liveMCPToolContractSnapshot struct {
+	Name       string              `json:"name"`
+	Category   string              `json:"category"`
+	Properties []string            `json:"properties"`
+	Required   []string            `json:"required,omitempty"`
+	AliasFor   map[string]string   `json:"alias_for,omitempty"`
+	Enum       map[string][]string `json:"enum,omitempty"`
+	Forbidden  []string            `json:"forbidden,omitempty"`
+}
+
 func loadSDKToolContractSnapshot(t *testing.T) []sdkToolContractSnapshot {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "contracts", "mcp-sdk-tools-v0.json"))
@@ -682,6 +684,19 @@ func loadSDKToolContractSnapshot(t *testing.T) []sdkToolContractSnapshot {
 	var snapshot []sdkToolContractSnapshot
 	if err := json.Unmarshal(data, &snapshot); err != nil {
 		t.Fatalf("json.Unmarshal(mcp-sdk-tools-v0.json) error = %v", err)
+	}
+	return snapshot
+}
+
+func loadLiveMCPToolContractSnapshot(t *testing.T) []liveMCPToolContractSnapshot {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "contracts", "mcp-tools-v1.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(mcp-tools-v1.json) error = %v", err)
+	}
+	var snapshot []liveMCPToolContractSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatalf("json.Unmarshal(mcp-tools-v1.json) error = %v", err)
 	}
 	return snapshot
 }

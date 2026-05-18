@@ -9,7 +9,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"obsidian-harness/internal/orchestrator"
 	"obsidian-harness/internal/tools"
@@ -19,7 +18,6 @@ const protocolVersion = "2024-11-05"
 const maxFrameContentLength = 1 * 1024 * 1024
 
 type Server struct {
-	harness  *orchestrator.Harness
 	version  string
 	registry *tools.Registry
 }
@@ -60,7 +58,6 @@ func NewServer(harness *orchestrator.Harness, version string) *Server {
 		panic(fmt.Errorf("mcp: register proposal tools: %w", err))
 	}
 	return &Server{
-		harness:  harness,
 		version:  version,
 		registry: registry,
 	}
@@ -170,10 +167,9 @@ func (s *Server) handle(_ context.Context, method string, rawParams json.RawMess
 	}
 }
 
-// toolListDefinitions returns the tools/list definitions surfaced over
-// MCP. After commit 3a the registry is the sole source of truth: the 9
-// read-only and 2 proposal-intake tools all live there in their
-// historical order.
+// toolListDefinitions returns the tools/list definitions surfaced over MCP.
+// The registry is the sole source of truth for both schema and dispatch: the
+// 9 read-only and 2 proposal-intake tools all live there in historical order.
 func (s *Server) toolListDefinitions() []map[string]any {
 	return tools.MCPDefinitions(s.registry.ListBySurface(tools.SurfaceMCP))
 }
@@ -260,39 +256,6 @@ func writeResponse(writer io.Writer, response responseEnvelope) error {
 	}
 	_, err = writer.Write(payload)
 	return err
-}
-
-func getIntArg(args map[string]any, key string, fallback int) int {
-	value, ok := args[key]
-	if !ok {
-		return fallback
-	}
-	switch value := value.(type) {
-	case float64:
-		return int(value)
-	case int:
-		return value
-	case string:
-		parsed, err := strconv.Atoi(strings.TrimSpace(value))
-		if err == nil {
-			return parsed
-		}
-	}
-	return fallback
-}
-
-func parseObservedAt(raw string) (time.Time, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return time.Time{}, fmt.Errorf("observed_at is required")
-	}
-	if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
-		return parsed, nil
-	}
-	if parsed, err := time.Parse("2006-01-02", raw); err == nil {
-		return parsed, nil
-	}
-	return time.Time{}, fmt.Errorf("observed_at must be RFC3339 or YYYY-MM-DD")
 }
 
 func paramsOrObject(raw json.RawMessage) []byte {

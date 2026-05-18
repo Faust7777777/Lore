@@ -19,11 +19,9 @@ import (
 
 const proposalSurfaces = SurfaceMCP | SurfaceConsole | SurfaceProposal
 
-// RegisterProposal registers the 2 proposal-intake tools into reg in the
-// same order they appeared in the legacy internal/mcp/tool_contract.go
-// table. MCP tools/list output continues to surface them in the order
-// persona_update_propose, markdown_note_propose, immediately after the 9
-// read-only tools.
+// RegisterProposal registers the 2 proposal-intake tools into reg. MCP
+// tools/list output surfaces them in the order persona_update_propose,
+// markdown_note_propose, immediately after the 9 read-only tools.
 func RegisterProposal(reg *Registry, h Harness) error {
 	tools := []Tool{
 		personaUpdateProposeTool{h: h, now: time.Now},

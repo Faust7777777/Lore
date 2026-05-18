@@ -201,9 +201,10 @@ Each error should be testable with `errors.As` or sentinel classification helper
 
 ### P1.5: MCP Contract Source of Truth
 
-- Centralize MCP read-only tool contracts in `internal/mcp/tool_contract.go`.
-- Generate `tools/list` schemas from that contract instead of maintaining a separate hand-written map.
-- Publish the SDK-facing v0 contract as `docs/contracts/mcp-sdk-tools-v0.json` so external SDK consumers have a stable contract sample without importing `internal/*`.
+- Centralize live MCP tool schemas and dispatch metadata in `internal/tools.Registry`.
+- Generate `tools/list` schemas from registry metadata instead of maintaining a separate hand-written table.
+- Publish the SDK-facing v0 read-only contract as `docs/contracts/mcp-sdk-tools-v0.json` so SDK consumers have a stable typed-method baseline without importing `internal/*`.
+- Publish the live MCP v1 surface as `docs/contracts/mcp-tools-v1.json`; this includes read tools plus proposal-intake tools and must stay separate from the SDK v0 artifact.
 - Keep alias behavior tests separate from schema-generation tests.
 
 ### P1: Stdio Transport

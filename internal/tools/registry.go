@@ -85,9 +85,8 @@ const (
 	ArgBoolean ArgumentType = "boolean"
 )
 
-// Argument describes one input parameter of a tool. It mirrors the existing
-// internal/mcp/tool_contract.go shape so the registry can produce
-// byte-equivalent JSON schemas during the migration.
+// Argument describes one input parameter of a tool. It is the canonical
+// source used to render live MCP schemas and other future tool surfaces.
 type Argument struct {
 	// Name is the JSON property name as seen by callers.
 	Name string

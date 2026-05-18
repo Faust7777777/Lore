@@ -1,8 +1,7 @@
 package tools
 
 // MCPInputSchema renders a Tool's argument list as a JSON-serializable
-// inputSchema map matching the live MCP shape produced by
-// internal/mcp/tool_contract.go:138 (toolDefinition).
+// inputSchema map matching the live MCP tools/list shape.
 //
 // Output shape:
 //
@@ -37,7 +36,8 @@ func MCPInputSchema(tool Tool) map[string]any {
 	}
 	if required := tool.Required(); len(required) > 0 {
 		// Copy to avoid leaking the registry's backing slice into the
-		// JSON-bound map. Matches the existing mcp/tool_contract.go behavior.
+		// JSON-bound map. This keeps MCP schema output stable and prevents
+		// callers from mutating registry-owned slices.
 		copied := make([]string, len(required))
 		copy(copied, required)
 		schema["required"] = copied
@@ -53,10 +53,9 @@ func MCPInputSchema(tool Tool) map[string]any {
 //	  "inputSchema": { ... as MCPInputSchema ... }
 //	}
 //
-// Used by internal/mcp/server.go in commit 2 to replace the static
-// toolDefinitions() output. The shape must remain byte-identical to the
-// existing one so external MCP callers and the existing snapshot tests
-// (server_test.go) do not perceive a change.
+// Used by internal/mcp/server.go as the only live MCP schema source. The
+// shape must remain stable so external MCP callers and snapshot tests do not
+// perceive unintended drift.
 func MCPDefinition(tool Tool) map[string]any {
 	return map[string]any{
 		"name":        tool.Name(),
@@ -79,7 +78,8 @@ func MCPDefinitions(toolList []Tool) []map[string]any {
 func mcpArgumentSchema(arg Argument) map[string]any {
 	schema := map[string]any{"type": string(arg.Type)}
 	if len(arg.Enum) > 0 {
-		// Defensive copy; identical to the existing mcp/tool_contract.go behavior.
+		// Defensive copy; callers should not observe or mutate registry-owned
+		// enum slices through the JSON schema map.
 		copied := make([]string, len(arg.Enum))
 		copy(copied, arg.Enum)
 		schema["enum"] = copied

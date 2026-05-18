@@ -1,0 +1,88 @@
+[
+  {
+    "name": "managed_status",
+    "category": "read",
+    "properties": []
+  },
+  {
+    "name": "system_doc_get",
+    "category": "read",
+    "properties": ["name"],
+    "required": ["name"],
+    "enum": {
+      "name": ["system", "progress", "persona", "agent", "identity"]
+    }
+  },
+  {
+    "name": "vault_read",
+    "category": "read",
+    "properties": ["path"],
+    "required": ["path"]
+  },
+  {
+    "name": "vault_list",
+    "category": "read",
+    "properties": ["dir", "path"],
+    "alias_for": {
+      "path": "dir"
+    }
+  },
+  {
+    "name": "vault_search_text",
+    "category": "read",
+    "properties": ["query", "dir", "path", "limit"],
+    "required": ["query"],
+    "alias_for": {
+      "path": "dir"
+    }
+  },
+  {
+    "name": "vault_resolve",
+    "category": "read",
+    "properties": ["query", "dir", "path", "limit"],
+    "required": ["query"],
+    "alias_for": {
+      "path": "dir"
+    }
+  },
+  {
+    "name": "vault_backlinks",
+    "category": "read",
+    "properties": ["path", "limit"],
+    "required": ["path"]
+  },
+  {
+    "name": "doc_classify",
+    "category": "read",
+    "properties": ["path"],
+    "required": ["path"]
+  },
+  {
+    "name": "context_pack",
+    "category": "read",
+    "properties": ["target_path", "path", "task", "limit"],
+    "alias_for": {
+      "path": "target_path"
+    }
+  },
+  {
+    "name": "persona_update_propose",
+    "category": "proposal",
+    "properties": ["field", "current_value", "proposed_value", "evidence", "confidence", "reason", "source", "observed_at"],
+    "required": ["field", "proposed_value", "evidence", "confidence", "reason", "source", "observed_at"],
+    "enum": {
+      "confidence": ["low", "medium", "high"]
+    },
+    "forbidden": ["apply", "approve", "content", "overwrite", "path"]
+  },
+  {
+    "name": "markdown_note_propose",
+    "category": "proposal",
+    "properties": ["target_path", "title", "content", "source_kind", "evidence", "reason", "source", "observed_at", "task_context", "course", "topic", "dedupe_key"],
+    "required": ["target_path", "title", "content", "source_kind", "evidence", "reason", "source", "observed_at"],
+    "enum": {
+      "source_kind": ["class", "meeting", "development", "conversation", "research", "other"]
+    },
+    "forbidden": ["overwrite", "apply", "approve", "shell", "tags", "related_paths"]
+  }
+]

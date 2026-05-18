@@ -281,15 +281,9 @@ func TestReadOnlyToolPropagatesError(t *testing.T) {
 	}
 }
 
-// readOnlyLegacyDefinitions returns the byte-equivalent expected output
-// for the 9 read-only tools, derived from the legacy
-// internal/mcp/tool_contract.go:toolContracts() entries. Tests in this
-// file compare the registry's MCPDefinitions output against this fixture.
-//
-// If this fixture and internal/mcp/tool_contract.go drift, commit 2 has
-// changed observable MCP behavior and the test in
-// internal/mcp/server_test.go (TestServerToolsListAndCall) is expected
-// to also fail.
+// readOnlyLegacyDefinitions returns the expected historical live MCP output
+// for the 9 read-only tools. Tests in this file compare the registry's
+// MCPDefinitions output against this fixture so schema drift is explicit.
 func readOnlyLegacyDefinitions() []map[string]any {
 	return []map[string]any{
 		{
