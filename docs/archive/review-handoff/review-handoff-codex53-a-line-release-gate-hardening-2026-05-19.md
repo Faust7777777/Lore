@@ -31,6 +31,7 @@ Explicitly out of scope:
 0c93d99 test: isolate sdk e2e in verify script
 3c9185d ci: assert release gate worktree cleanliness
 39430dd test: fix tui approval driver stub
+d3d84be test: avoid masking release gate failures
 ```
 
 ## What changed
@@ -72,7 +73,10 @@ Both scripts now avoid accidental SDK E2E execution from inherited shell env:
 - rejects repo-local `.smoke-workdir`;
 - rejects any `git status --short` output;
 - used by CI PR and full gates;
-- not used by default local dirty-worktree runs.
+- not used by default local dirty-worktree runs;
+- runs after gate commands succeed, not in `finally`, so it does not mask the
+  original failing test command. The workflow's final `if: always()` cleanliness
+  step remains the failure-path fallback.
 
 ### 5. Clean worktree blocker fixed
 
@@ -117,6 +121,8 @@ git worktree remove --force <temp>
 ```
 
 Both clean-worktree gates passed.
+
+The clean full gate was re-run after `d3d84be`; it still passed.
 
 ## Current working tree note
 
