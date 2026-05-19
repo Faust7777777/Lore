@@ -29,6 +29,11 @@ func (d *approvalDriverStub) Execute(line string, lastOutput string) (Interactiv
 	return InteractiveWorkbenchUpdate{ViewModel: vm, LastOutput: lastOutput}, nil
 }
 
+func (d *approvalDriverStub) ExecuteFindingAction(action string, findingID string) (InteractiveWorkbenchUpdate, error) {
+	vm, _ := d.Load("")
+	return InteractiveWorkbenchUpdate{ViewModel: vm, LastOutput: action + " " + findingID}, nil
+}
+
 func (d *approvalDriverStub) ExecuteApprovalAction(action string, draftID string) (InteractiveWorkbenchUpdate, error) {
 	d.actions = append(d.actions, action)
 	d.lastID = draftID
