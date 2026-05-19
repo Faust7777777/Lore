@@ -188,10 +188,11 @@ try {
         Invoke-NativeChecked -Label "full verify.ps1" -FilePath "powershell.exe" -Arguments $verifyArgs
     }
 
-    Write-Host "[gate] release gate passed"
-} finally {
     if ($AssertClean) {
         Assert-RepoClean
     }
+
+    Write-Host "[gate] release gate passed"
+} finally {
     Pop-Location
 }
