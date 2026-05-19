@@ -84,11 +84,36 @@ type ModelCallUsage struct {
 	StartedAt        time.Time `json:"started_at"`
 }
 
+// TurnStopReason names why an operator-agent turn terminated. Values
+// are stable across releases; consumers (console, sessionlog, future
+// TUI progress UI) compare against these constants.
+//
+// Today's coverage:
+//   - TurnStopFinal      - terminal success (final envelope, legacy
+//                          decision, or shell-confirm short circuit).
+//   - TurnStopMaxSteps   - loop hit maxLoopSteps without terminating.
+//   - TurnStopModelError - model response could not be parsed,
+//                          validated, or completed (includes
+//                          ChatCompletion API failures).
+//   - TurnStopToolError  - reserved for B5; not emitted by Respond
+//                          yet. Defined now so the enum stays stable
+//                          when bounded tool-failure recovery lands.
+type TurnStopReason string
+
+const (
+	TurnStopFinal      TurnStopReason = "final"
+	TurnStopMaxSteps   TurnStopReason = "max_steps"
+	TurnStopToolError  TurnStopReason = "tool_error"
+	TurnStopModelError TurnStopReason = "model_error"
+)
+
 type Response struct {
-	Final    string
-	Decision *Decision
-	Trace    []ToolCallTrace
-	Usage    []ModelCallUsage
+	Final      string
+	Decision   *Decision
+	Trace      []ToolCallTrace
+	Usage      []ModelCallUsage
+	StopReason TurnStopReason
+	StepCount  int
 }
 
 // UsageError wraps an error returned by Respond after one or more

@@ -252,16 +252,21 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 	// fails AFTER at least one successful ChatCompletion. It wraps the
 	// underlying error with *UsageError so console.Session can still
 	// bill the model calls that were already paid for, and also seeds
-	// Response.Usage so callers that ignore the wrapper still see the
-	// records on the value side. Pre-ChatCompletion failures (the call
-	// itself errored, before any tokens were billed) should use the
-	// bare `return Response{}, err` form instead.
-	failWithUsage := func(err error) (Response, error) {
+	// Response.Usage and Response.StopReason / StepCount so callers
+	// that ignore the wrapper still see the records on the value side.
+	// Pre-ChatCompletion failures (the call itself errored, before any
+	// tokens were billed) should use the bare `return Response{...},
+	// err` form instead, which also stamps StopReason.
+	failWithUsage := func(reason TurnStopReason, err error) (Response, error) {
 		if len(usage) == 0 {
-			return Response{}, err
+			return Response{StopReason: reason}, err
 		}
 		snapshot := append([]ModelCallUsage(nil), usage...)
-		return Response{Usage: snapshot}, &UsageError{Err: err, Usage: snapshot}
+		return Response{
+			Usage:      snapshot,
+			StopReason: reason,
+			StepCount:  len(snapshot),
+		}, &UsageError{Err: err, Usage: snapshot}
 	}
 	for step := 0; step < maxLoopSteps; step++ {
 		startedAt := time.Now().UTC()
@@ -271,7 +276,7 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 			Temperature: 0,
 		})
 		if err != nil {
-			return Response{}, fmt.Errorf("operator agent: model request failed: %w", err)
+			return Response{StopReason: TurnStopModelError}, fmt.Errorf("operator agent: model request failed: %w", err)
 		}
 		usage = append(usage, ModelCallUsage{
 			Provider:         a.provider,
@@ -283,20 +288,20 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 
 		if len(resp.ToolCalls) > 0 {
 			if len(resp.ToolCalls) > 1 {
-				return failWithUsage(fmt.Errorf("operator agent: model returned %d tool calls; Lore supports one tool call per loop step", len(resp.ToolCalls)))
+				return failWithUsage(TurnStopModelError, fmt.Errorf("operator agent: model returned %d tool calls; Lore supports one tool call per loop step", len(resp.ToolCalls)))
 			}
 			toolCall := resp.ToolCalls[0]
 			toolName := strings.TrimSpace(toolCall.Name)
 			if toolName == "" {
-				return failWithUsage(fmt.Errorf("operator agent: tool_call.name is required"))
+				return failWithUsage(TurnStopModelError, fmt.Errorf("operator agent: tool_call.name is required"))
 			}
 			callSignature := toolCallSignature(toolName, toolCall.Arguments)
 			toolHistory = append(toolHistory, callSignature)
 			if hasRepeatedToolLoop(toolHistory, callSignature, repeatedToolCallAbortThreshold) {
-				return failWithUsage(fmt.Errorf("operator agent: repeated tool loop detected for %s", toolName))
+				return failWithUsage(TurnStopModelError, fmt.Errorf("operator agent: repeated tool loop detected for %s", toolName))
 			}
 			if hasPingPongToolLoop(toolHistory) {
-				return failWithUsage(fmt.Errorf("operator agent: alternating tool loop detected"))
+				return failWithUsage(TurnStopModelError, fmt.Errorf("operator agent: alternating tool loop detected"))
 			}
 
 			toolResult, toolErr := runtime.CallTool(toolName, toolCall.Arguments)
@@ -309,9 +314,11 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 			})
 			if isShellConfirmationResult(toolName, toolContent, toolErr) {
 				return Response{
-					Final: toolContent,
-					Trace: append([]ToolCallTrace(nil), trace...),
-					Usage: append([]ModelCallUsage(nil), usage...),
+					Final:      toolContent,
+					Trace:      append([]ToolCallTrace(nil), trace...),
+					Usage:      append([]ModelCallUsage(nil), usage...),
+					StopReason: TurnStopFinal,
+					StepCount:  len(usage),
 				}, nil
 			}
 			if toolErr != nil && toolContent != "" {
@@ -327,13 +334,15 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 
 		envelope, legacyDecision, err := parseLoopResponse(resp.Content, ctx)
 		if err != nil {
-			return failWithUsage(fmt.Errorf("operator agent: invalid loop response: %w", err))
+			return failWithUsage(TurnStopModelError, fmt.Errorf("operator agent: invalid loop response: %w", err))
 		}
 		if legacyDecision != nil {
 			return Response{
-				Decision: legacyDecision,
-				Trace:    append([]ToolCallTrace(nil), trace...),
-				Usage:    append([]ModelCallUsage(nil), usage...),
+				Decision:   legacyDecision,
+				Trace:      append([]ToolCallTrace(nil), trace...),
+				Usage:      append([]ModelCallUsage(nil), usage...),
+				StopReason: TurnStopFinal,
+				StepCount:  len(usage),
 			}, nil
 		}
 
@@ -341,25 +350,27 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 		case "final":
 			final := strings.TrimSpace(envelope.Message)
 			if final == "" {
-				return failWithUsage(fmt.Errorf("operator agent: final response is empty"))
+				return failWithUsage(TurnStopModelError, fmt.Errorf("operator agent: final response is empty"))
 			}
 			return Response{
-				Final: final,
-				Trace: append([]ToolCallTrace(nil), trace...),
-				Usage: append([]ModelCallUsage(nil), usage...),
+				Final:      final,
+				Trace:      append([]ToolCallTrace(nil), trace...),
+				Usage:      append([]ModelCallUsage(nil), usage...),
+				StopReason: TurnStopFinal,
+				StepCount:  len(usage),
 			}, nil
 		case "tool_call":
 			toolName := strings.TrimSpace(envelope.Tool)
 			if toolName == "" {
-				return failWithUsage(fmt.Errorf("operator agent: tool_call.tool is required"))
+				return failWithUsage(TurnStopModelError, fmt.Errorf("operator agent: tool_call.tool is required"))
 			}
 			callSignature := toolCallSignature(toolName, envelope.Arguments)
 			toolHistory = append(toolHistory, callSignature)
 			if hasRepeatedToolLoop(toolHistory, callSignature, repeatedToolCallAbortThreshold) {
-				return failWithUsage(fmt.Errorf("operator agent: repeated tool loop detected for %s", toolName))
+				return failWithUsage(TurnStopModelError, fmt.Errorf("operator agent: repeated tool loop detected for %s", toolName))
 			}
 			if hasPingPongToolLoop(toolHistory) {
-				return failWithUsage(fmt.Errorf("operator agent: alternating tool loop detected"))
+				return failWithUsage(TurnStopModelError, fmt.Errorf("operator agent: alternating tool loop detected"))
 			}
 
 			toolResult, toolErr := runtime.CallTool(toolName, envelope.Arguments)
@@ -372,9 +383,11 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 			})
 			if isShellConfirmationResult(toolName, toolContent, toolErr) {
 				return Response{
-					Final: toolContent,
-					Trace: append([]ToolCallTrace(nil), trace...),
-					Usage: append([]ModelCallUsage(nil), usage...),
+					Final:      toolContent,
+					Trace:      append([]ToolCallTrace(nil), trace...),
+					Usage:      append([]ModelCallUsage(nil), usage...),
+					StopReason: TurnStopFinal,
+					StepCount:  len(usage),
 				}, nil
 			}
 			if toolErr != nil && toolContent != "" {
@@ -386,11 +399,11 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 				Content: buildToolResultPrompt(toolName, toolContent, toolErr),
 			})
 		default:
-			return failWithUsage(fmt.Errorf("operator agent: unsupported response type %q", envelope.Type))
+			return failWithUsage(TurnStopModelError, fmt.Errorf("operator agent: unsupported response type %q", envelope.Type))
 		}
 	}
 
-	return failWithUsage(fmt.Errorf("operator agent: exceeded max loop steps (%d)", maxLoopSteps))
+	return failWithUsage(TurnStopMaxSteps, fmt.Errorf("operator agent: exceeded max loop steps (%d)", maxLoopSteps))
 }
 
 func (a ErrorAgent) Decide(_ string, _ Context) (Decision, error) {

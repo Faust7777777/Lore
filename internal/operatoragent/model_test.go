@@ -505,6 +505,146 @@ func TestModelAgentRespondReportsUsagePerLoopStep(t *testing.T) {
 	}
 }
 
+func TestModelAgentRespondStopReasonFinalOnSingleStep(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{
+			Content:          `{"type":"final","message":"ok"}`,
+			PromptTokens:     1,
+			CompletionTokens: 1,
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}}}
+
+	response, err := agent.Respond("ok", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if response.StopReason != TurnStopFinal {
+		t.Fatalf("StopReason = %q, want %q", response.StopReason, TurnStopFinal)
+	}
+	if response.StepCount != 1 {
+		t.Fatalf("StepCount = %d, want 1", response.StepCount)
+	}
+}
+
+func TestModelAgentRespondStopReasonFinalAfterToolCall(t *testing.T) {
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{
+				ToolCalls:        []openai.ToolCall{{Name: "managed_status", Arguments: map[string]any{}}},
+				PromptTokens:     5,
+				CompletionTokens: 1,
+			},
+			{
+				Content:          `{"type":"final","message":"done"}`,
+				PromptTokens:     7,
+				CompletionTokens: 2,
+			},
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools:   []ToolDefinition{{Name: "managed_status", Description: "show status"}},
+		results: map[string]ToolResult{"managed_status": {Content: "ok"}},
+	}
+
+	response, err := agent.Respond("show", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if response.StopReason != TurnStopFinal {
+		t.Fatalf("StopReason = %q, want %q", response.StopReason, TurnStopFinal)
+	}
+	if response.StepCount != 2 {
+		t.Fatalf("StepCount = %d, want 2", response.StepCount)
+	}
+}
+
+func TestModelAgentRespondStopReasonMaxStepsWhenLoopBudgetExhausted(t *testing.T) {
+	// Build maxLoopSteps tool_call responses with shifting arguments
+	// so neither repeated-tool nor ping-pong loop protection fires;
+	// the loop must hit the step ceiling.
+	responses := make([]openai.ChatCompletionResponse, maxLoopSteps)
+	for i := range responses {
+		responses[i] = openai.ChatCompletionResponse{
+			Content:          fmt.Sprintf(`{"type":"tool_call","tool":"managed_status","arguments":{"step":%d}}`, i),
+			PromptTokens:     1,
+			CompletionTokens: 1,
+		}
+	}
+	client := &fakeCompletionClient{responses: responses}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools:   []ToolDefinition{{Name: "managed_status", Description: "show status"}},
+		results: map[string]ToolResult{"managed_status": {Content: "ok"}},
+	}
+
+	response, err := agent.Respond("loop forever", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err == nil {
+		t.Fatal("Respond() error = nil, want max-loop-steps error")
+	}
+	if response.StopReason != TurnStopMaxSteps {
+		t.Fatalf("StopReason = %q, want %q", response.StopReason, TurnStopMaxSteps)
+	}
+	if response.StepCount != maxLoopSteps {
+		t.Fatalf("StepCount = %d, want %d", response.StepCount, maxLoopSteps)
+	}
+	// Usage must still carry every billed step.
+	if len(response.Usage) != maxLoopSteps {
+		t.Fatalf("len(Usage) = %d, want %d", len(response.Usage), maxLoopSteps)
+	}
+	// The error chain must still surface UsageError for billing.
+	var usageErr *UsageError
+	if !errors.As(err, &usageErr) {
+		t.Fatalf("error chain missing *UsageError; got %T %v", err, err)
+	}
+}
+
+func TestModelAgentRespondStopReasonModelErrorOnParseFailure(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{
+			Content:          `definitely not json`,
+			PromptTokens:     2,
+			CompletionTokens: 1,
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}}}
+
+	response, err := agent.Respond("ok", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err == nil {
+		t.Fatal("Respond() error = nil, want parse failure")
+	}
+	if response.StopReason != TurnStopModelError {
+		t.Fatalf("StopReason = %q, want %q", response.StopReason, TurnStopModelError)
+	}
+	if response.StepCount != 1 {
+		t.Fatalf("StepCount = %d, want 1", response.StepCount)
+	}
+}
+
+func TestModelAgentRespondStopReasonModelErrorWhenChatCompletionFails(t *testing.T) {
+	client := &fakeCompletionClient{err: errors.New("upstream timeout")}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}}}
+
+	response, err := agent.Respond("ok", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err == nil {
+		t.Fatal("Respond() error = nil, want upstream error")
+	}
+	if response.StopReason != TurnStopModelError {
+		t.Fatalf("StopReason = %q, want %q", response.StopReason, TurnStopModelError)
+	}
+	// No usage was billed -- the call itself failed.
+	if response.StepCount != 0 {
+		t.Fatalf("StepCount = %d, want 0 (no successful ChatCompletion)", response.StepCount)
+	}
+	if len(response.Usage) != 0 {
+		t.Fatalf("len(Usage) = %d, want 0", len(response.Usage))
+	}
+}
+
 func TestModelAgentRespondIncludesWorkingSetInUserPrompt(t *testing.T) {
 	client := &fakeCompletionClient{
 		response: openai.ChatCompletionResponse{Content: `{"type":"final","message":"ok"}`},
