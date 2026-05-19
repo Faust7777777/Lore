@@ -598,13 +598,10 @@ func TestRunTUIInteractiveSurfacesActionErrorsInWorkbench(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
 	}
-	// Verify workbench renders twice (initial + after command) and contains core sections
+	// Verify action errors are surfaced in the workbench output
 	output := stdout.String()
-	if !strings.Contains(output, "Lore Workbench") {
-		t.Fatalf("expected tui output to contain workbench header, got %q", output)
-	}
-	if !strings.Contains(output, "Runtime Snapshot") {
-		t.Fatalf("expected tui output to contain runtime snapshot, got %q", output)
+	if !strings.Contains(output, "Error:") {
+		t.Fatalf("expected interactive tui to surface action error, got %q", output)
 	}
 }
 

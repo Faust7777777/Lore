@@ -144,6 +144,14 @@ func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput stri
 		builder.WriteString("\n")
 	}
 
+	// Show error/status line only when lastOutput is an error
+	if strings.HasPrefix(strings.TrimSpace(lastOutput), "Error:") {
+		builder.WriteString(thinRule(40) + "\n")
+		builder.WriteString(styleSectionHead.Render("Status") + "\n")
+		builder.WriteString(styleErr.Render("  " + wrapText(strings.TrimSpace(unescapeLiteralNewlines(lastOutput)), contentWidth)))
+		builder.WriteString("\n")
+	}
+
 	return builder.String()
 }
 

@@ -27,6 +27,7 @@ func RenderWorkbenchViewModel(viewModel WorkbenchViewModel) string {
 	renderProcessSinkSection(&builder, viewModel.ProcessSink)
 	renderToolTraceSection(&builder, viewModel.ToolTrace)
 	renderConversationSection(&builder, viewModel.Conversation)
+	renderErrorStatusSection(&builder, viewModel.Conversation.LastOutput)
 	renderQuickActionsSection(&builder, viewModel.QuickActions)
 	renderControlsSection(&builder, viewModel.Controls)
 
@@ -174,6 +175,16 @@ func renderConversationSection(builder *strings.Builder, conversation WorkbenchC
 	}
 }
 
+func renderErrorStatusSection(builder *strings.Builder, lastOutput string) {
+	if !strings.HasPrefix(strings.TrimSpace(lastOutput), "Error:") {
+		return
+	}
+	builder.WriteString("\nStatus\n")
+	builder.WriteString("------\n")
+	builder.WriteString(indentBlock(strings.TrimSpace(excerpt(lastOutput, 1200)), "  "))
+	builder.WriteString("\n")
+}
+
 func renderQuickActionsSection(builder *strings.Builder, actions []string) {
 	builder.WriteString("\nQuick Actions\n")
 	builder.WriteString("-------------\n")
@@ -244,6 +255,16 @@ func conversationLines(conversation WorkbenchConversation) []string {
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("%-10s %s", role, oneLine(content, 120)))
+	}
+
+	// Append error status line if lastOutput is an error
+	lastOutput := strings.TrimSpace(conversation.LastOutput)
+	if strings.HasPrefix(lastOutput, "Error:") {
+		renderedError := fmt.Sprintf("%-10s %s", "STATUS", oneLine(lastOutput, 120))
+		// Deduplicate: skip if identical to last visible line
+		if len(lines) == 0 || lines[len(lines)-1] != renderedError {
+			lines = append(lines, renderedError)
+		}
 	}
 
 	return lines
