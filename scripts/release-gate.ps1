@@ -95,6 +95,11 @@ try {
         -Run "TestRun(SmokeP0|SmokeP0FullIncludesGovernedNoteIntake|DaemonOnceTriggersDraftAfterStablePlanChange|DaemonOnceSyncsCodexJSONLWhenConfigured|DaemonOnceMissingCodexJSONLRemainsNonFatal)$"
 
     Invoke-GoGate `
+        -Label "preferred lore CLI wrapper guardrails" `
+        -Package "./cmd/lore" `
+        -Run "TestRunVersion$"
+
+    Invoke-GoGate `
         -Label "console resolve-read-final and task-turn guardrails" `
         -Package "./internal/console" `
         -Run "Test(EndToEndResolveReadFinalFileInspectionTurn|SessionHandleEmitsTaskTurnEndOnSuccess|SessionHandleEmitsTaskTurnEndOnFailure|SessionHandleSkipsTaskTurnEndForLegacyDecidePath)$"
