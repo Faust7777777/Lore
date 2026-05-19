@@ -150,7 +150,7 @@ try {
     Invoke-GoGate `
         -Label "CLI smoke and daemon command guardrails" `
         -Package "./cmd/obsidian-harness" `
-        -Run "TestRun(SmokeP0|SmokeP0FullIncludesGovernedNoteIntake|DaemonOnceTriggersDraftAfterStablePlanChange|DaemonOnceSyncsCodexJSONLWhenConfigured|DaemonOnceMissingCodexJSONLRemainsNonFatal)$"
+        -Run "TestRun(SmokeP0|SmokeP0FullIncludesGovernedNoteIntake|TUIOnceShowsResolveReadFinalTaskVisibility|DaemonOnceTriggersDraftAfterStablePlanChange|DaemonOnceSyncsCodexJSONLWhenConfigured|DaemonOnceMissingCodexJSONLRemainsNonFatal)$"
 
     Invoke-GoGate `
         -Label "preferred lore CLI wrapper guardrails" `

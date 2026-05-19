@@ -600,7 +600,6 @@ func TestRunTUIOnceStatus(t *testing.T) {
 }
 
 func TestRunTUIOnceShowsResolveReadFinalTaskVisibility(t *testing.T) {
-	t.Skip("requires B/TUI task-step rendering; kept as acceptance scaffold")
 	workDir := t.TempDir()
 	configureLLMTestEnv(t)
 
@@ -622,11 +621,13 @@ func TestRunTUIOnceShowsResolveReadFinalTaskVisibility(t *testing.T) {
 
 	output := stdout.String()
 	for _, expected := range []string{
-		"Tool Trace",
+		"Task Steps",
 		"vault_resolve",
 		"vault_read",
 		"query=人物背景",
 		"path=03-画像/人物背景.md",
+		"obs:",
+		"海边自习",
 		"Conversation Lane",
 		"03-画像/人物背景.md",
 		"最终散文",
