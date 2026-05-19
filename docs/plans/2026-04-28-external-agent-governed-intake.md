@@ -1092,7 +1092,7 @@ This task must preserve bounded input behavior at two layers. First, `readMessag
 
 **Files:**
 
-- Modify: `internal/mcp/tool_contract.go`
+- Modify: `internal/tools/`
 - Modify: `internal/mcp/server.go`
 - Modify: `internal/mcp/server_test.go`
 - Modify: `docs/integrations/mcp-client-setup.md`
@@ -1144,7 +1144,7 @@ Allowed tools become:
 
 **Step 3: Implement contract**
 
-Add a `toolContract` entry in `internal/mcp/tool_contract.go`.
+Add a `Tool` entry in `internal/tools/` and let `internal/mcp/server.go` derive `tools/list` from the registry.
 
 **Step 4: Implement handler**
 
@@ -1213,7 +1213,7 @@ Expected: PASS.
 **Step 9: Commit**
 
 ```powershell
-git add internal/mcp/tool_contract.go internal/mcp/server.go internal/mcp/server_test.go docs/integrations/mcp-client-setup.md docs/review-handoff-codex53-mcp-markdown-note-propose.md
+git add internal/tools/ internal/mcp/server.go internal/mcp/server_test.go docs/integrations/mcp-client-setup.md docs/review-handoff-codex53-mcp-markdown-note-propose.md
 git commit -m "feat: expose markdown note proposal intake"
 ```
 
