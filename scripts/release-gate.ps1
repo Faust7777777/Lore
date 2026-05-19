@@ -75,6 +75,11 @@ try {
     }
 
     Invoke-GoGate `
+        -Label "ToolRegistry schema and dispatch source-of-truth" `
+        -Package "./internal/tools" `
+        -Run "Test"
+
+    Invoke-GoGate `
         -Label "MCP registry contract and external boundary" `
         -Package "./internal/mcp" `
         -Run "Test(LiveMCPToolContractV1Snapshot|SDKFacingToolContractSnapshot|MCPV1ExposesOnlyReadAndProposalTools|ExternalMCPDoesNotExposeDirectWrites)$"
@@ -88,6 +93,16 @@ try {
         -Label "CLI smoke and daemon command guardrails" `
         -Package "./cmd/obsidian-harness" `
         -Run "TestRun(SmokeP0|SmokeP0FullIncludesGovernedNoteIntake|DaemonOnceTriggersDraftAfterStablePlanChange|DaemonOnceSyncsCodexJSONLWhenConfigured|DaemonOnceMissingCodexJSONLRemainsNonFatal)$"
+
+    Invoke-GoGate `
+        -Label "console resolve-read-final and task-turn guardrails" `
+        -Package "./internal/console" `
+        -Run "Test(EndToEndResolveReadFinalFileInspectionTurn|SessionHandleEmitsTaskTurnEndOnSuccess|SessionHandleEmitsTaskTurnEndOnFailure|SessionHandleSkipsTaskTurnEndForLegacyDecidePath)$"
+
+    Invoke-GoGate `
+        -Label "sessionlog task-turn persistence guardrails" `
+        -Package "./internal/sessionlog" `
+        -Run "TestRecordTaskTurnEnd(WritesEvent|EmptyReasonIsNoOp)$"
 
     Invoke-GoGate `
         -Label "TUI approval state guardrails" `
