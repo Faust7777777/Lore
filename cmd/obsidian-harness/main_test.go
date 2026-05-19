@@ -93,6 +93,12 @@ func newOperatorAgentTestServer(t *testing.T) *httptest.Server {
 				content = `{"title":"codex checkpoint 09:00-09:30","content":"## Summary\n- checkpoint summary from test provider"}`
 			case strings.Contains(systemPrompt, "day of external coding-agent checkpoints"):
 				content = `{"title":"codex daily report","content":"## Summary\n- daily summary from test provider"}`
+			case strings.Contains(userPrompt, "Tool result for vault_read"):
+				content = `{"type":"final","message":"Observation: 03-画像/人物背景.md\n- 海边自习\n- 电子商务\n- 长期写作目标\n\n最终散文\n\n海风把他的学习计划吹得很轻。人物背景里的海边自习、电子商务和长期写作目标，像几根清晰的线，把他从零散的日程牵回一个更安静的方向。"}`
+			case strings.Contains(userPrompt, "Tool result for vault_resolve"):
+				content = `{"type":"tool_call","tool":"vault_read","arguments":{"path":"03-画像/人物背景.md"}}`
+			case strings.Contains(userPrompt, "打开人物背景"):
+				content = `{"type":"tool_call","tool":"vault_resolve","arguments":{"query":"人物背景","dir":"","limit":5}}`
 			case strings.Contains(userPrompt, "Tool result for vault_write_low"):
 				content = `{"type":"final","message":"Diary written to 03-notes/diary.md"}`
 			case strings.Contains(userPrompt, "write a diary"):
@@ -131,6 +137,12 @@ func newOperatorAgentTestServer(t *testing.T) *httptest.Server {
 				content = `{"title":"codex checkpoint 09:00-09:30","content":"## Summary\n- checkpoint summary from test provider"}`
 			case strings.Contains(systemPrompt, "day of external coding-agent checkpoints"):
 				content = `{"title":"codex daily report","content":"## Summary\n- daily summary from test provider"}`
+			case strings.Contains(userPrompt, "Tool result for vault_read"):
+				content = `{"type":"final","message":"Observation: 03-画像/人物背景.md\n- 海边自习\n- 电子商务\n- 长期写作目标\n\n最终散文\n\n海风把他的学习计划吹得很轻。人物背景里的海边自习、电子商务和长期写作目标，像几根清晰的线，把他从零散的日程牵回一个更安静的方向。"}`
+			case strings.Contains(userPrompt, "Tool result for vault_resolve"):
+				content = `{"type":"tool_call","tool":"vault_read","arguments":{"path":"03-画像/人物背景.md"}}`
+			case strings.Contains(userPrompt, "打开人物背景"):
+				content = `{"type":"tool_call","tool":"vault_resolve","arguments":{"query":"人物背景","dir":"","limit":5}}`
 			case strings.Contains(userPrompt, "Tool result for vault_write_low"):
 				content = `{"type":"final","message":"Diary written to 03-notes/diary.md"}`
 			case strings.Contains(userPrompt, "write a diary"):
@@ -583,6 +595,44 @@ func TestRunTUIOnceStatus(t *testing.T) {
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("expected tui output to contain %q, got %q", expected, text)
+		}
+	}
+}
+
+func TestRunTUIOnceShowsResolveReadFinalTaskVisibility(t *testing.T) {
+	workDir := t.TempDir()
+	configureLLMTestEnv(t)
+
+	backgroundPath := filepath.Join(workDir, "vault", "03-画像", "人物背景.md")
+	if err := os.MkdirAll(filepath.Dir(backgroundPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(background dir) error = %v", err)
+	}
+	background := "# 人物背景\n\n- 海边自习\n- 电子商务\n- 长期写作目标\n"
+	if err := os.WriteFile(backgroundPath, []byte(background), 0o644); err != nil {
+		t.Fatalf("WriteFile(background) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"tui", "--workdir", workDir, "--once", "打开人物背景，基于它写一篇散文。"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+
+	output := stdout.String()
+	for _, expected := range []string{
+		"Task Steps",
+		"vault_resolve",
+		"vault_read",
+		"query=人物背景",
+		"path=03-画像/人物背景.md",
+		"Conversation Lane",
+		"Observation: 03-画像/人物背景.md",
+		"最终散文",
+		"最终散文",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("TUI task visibility output missing %q:\n%s", expected, output)
 		}
 	}
 }
