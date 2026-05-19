@@ -114,7 +114,14 @@ Acceptance rules:
 
 ### A2: Deterministic E2E
 
-Add a fake-model e2e that drives a fixed sequence:
+Current scaffold:
+
+- `cmd/obsidian-harness/main_test.go`
+- `TestRunTUIOnceShowsResolveReadFinalTaskVisibility`
+- The test is intentionally skipped until B/TUI exposes stable task-step
+  rendering with observation excerpts.
+
+The fake-model e2e drives a fixed sequence:
 
 ```text
 vault_resolve -> vault_read -> final
@@ -134,6 +141,17 @@ Suggested placement:
 - command-level or workbench-level test under `cmd/obsidian-harness` or
   `internal/cli`;
 - no real model dependency in PR gate.
+
+Activation checklist:
+
+- remove the `t.Skip(...)` from
+  `TestRunTUIOnceShowsResolveReadFinalTaskVisibility`;
+- update expected labels if the final UI uses `Task Steps` instead of the
+  legacy `Tool Trace` label;
+- assert that output includes a bounded observation excerpt, not just tool
+  names and arguments;
+- run the test without a real model provider;
+- only then wire the test into `scripts/release-gate.ps1` PR gate.
 
 ### A3: Release-Gate Integration
 
@@ -252,7 +270,8 @@ Forbidden in TUI line:
 
 1. B line lands turn-step / observation excerpt backend data.
 2. TUI line renders post-turn task timeline from that data.
-3. A line adds deterministic fake-model e2e to prevent regressions.
+3. A line activates the existing deterministic fake-model e2e scaffold and
+   wires it into the PR release gate.
 4. Optional later work: live streaming progress events.
 
 Do not start with live streaming. Post-turn visibility solves the immediate
