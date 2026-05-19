@@ -54,6 +54,7 @@ type TranscriptRecorder interface {
 	RecordLocalCommand(command string) error
 	RecordError(message string, recoverable bool) error
 	RecordModelUsage(usage []operatoragent.ModelCallUsage) error
+	RecordTaskTurnEnd(stopReason string, stepCount int) error
 	SessionID() string
 	Path() string
 }
@@ -101,6 +102,16 @@ func (s *Session) Handle(input string, runtime Runtime) (string, error) {
 	}
 	if loopAgent, ok := s.Agent.(operatoragent.LoopAgent); ok {
 		response, err := loopAgent.Respond(input, s.agentContext(runtime), newToolRuntime(s, runtime))
+		// Emit the task_turn_end transcript event once for this
+		// loop-agent turn, regardless of which terminal Handle ends
+		// at. Response.StopReason / StepCount are populated by B2 at
+		// every Respond return path; the helper no-ops on empty
+		// reason so legacy / pre-loop paths stay clean. Deferred
+		// here (rather than inlined at each return) keeps the
+		// existing control flow intact and guarantees the event
+		// fires even when later steps (executeDecision,
+		// persistResponseUsage) error out.
+		defer s.recordTaskTurnEnd(response.StopReason, response.StepCount)
 		if err != nil {
 			// Failed turns may still carry usage from already-billed
 			// ChatCompletion calls. Best-effort persist on the error
@@ -486,6 +497,19 @@ func (s *Session) recordError(err error, recoverable bool) {
 	if s.Recorder != nil && err != nil {
 		_ = s.Recorder.RecordError(err.Error(), recoverable)
 	}
+}
+
+// recordTaskTurnEnd emits a task_turn_end transcript event marking the
+// completion of one loop-agent turn. Empty stop reason is a no-op so
+// that legacy decide paths (which never populate Response.StopReason)
+// produce no event. Recorder failures are intentionally swallowed:
+// the event is observability metadata, not governance, and must not
+// interfere with the user-facing Handle outcome.
+func (s *Session) recordTaskTurnEnd(stopReason operatoragent.TurnStopReason, stepCount int) {
+	if s.Recorder == nil || strings.TrimSpace(string(stopReason)) == "" {
+		return
+	}
+	_ = s.Recorder.RecordTaskTurnEnd(string(stopReason), stepCount)
 }
 
 // persistResponseUsage translates per-loop-step ModelCallUsage entries

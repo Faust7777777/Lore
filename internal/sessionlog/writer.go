@@ -146,6 +146,26 @@ func (r *Recorder) RecordError(message string, recoverable bool) error {
 	return r.appendAndIndex(Event{Type: EventError, Timestamp: time.Now(), Error: truncateString(message, r.limits.MaxToolErrorBytes), Recoverable: recoverable})
 }
 
+// RecordTaskTurnEnd appends one task_turn_end event marking the end of
+// a single user task in the operator-agent loop. stopReason mirrors
+// operatoragent.TurnStopReason ("final" / "max_steps" / "model_error"
+// / "tool_error"); stepCount is the number of successful
+// ChatCompletion calls billed during the turn. Empty stopReason is a
+// no-op so callers can guard at the source without branching here.
+// Older readers tolerate the new event because applyEvent silently
+// skips unknown event types.
+func (r *Recorder) RecordTaskTurnEnd(stopReason string, stepCount int) error {
+	if strings.TrimSpace(stopReason) == "" {
+		return nil
+	}
+	return r.appendAndIndex(Event{
+		Type:       EventTaskTurnEnd,
+		Timestamp:  time.Now(),
+		StopReason: strings.TrimSpace(stopReason),
+		StepCount:  stepCount,
+	})
+}
+
 // RecordModelUsage appends one model_usage event per usage entry. An
 // empty slice is a no-op. The event's Timestamp is the wall time of
 // the recording itself; StartedAt preserves when the LLM request was

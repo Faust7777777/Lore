@@ -17,6 +17,7 @@ const (
 	EventError            = "error"
 	EventSessionEnd       = "session_end"
 	EventModelUsage       = "model_usage"
+	EventTaskTurnEnd      = "task_turn_end"
 )
 
 const (
@@ -61,6 +62,12 @@ type Event struct {
 	PromptTokens     int       `json:"prompt_tokens,omitempty"`
 	CompletionTokens int       `json:"completion_tokens,omitempty"`
 	StartedAt        time.Time `json:"started_at,omitempty"`
+	// Task-turn-end event fields. Emitted once per loop-agent turn
+	// with the StopReason and StepCount surfaced by
+	// operatoragent.Response (see B2). omitempty so older readers
+	// see zero values and skip the unknown event type cleanly.
+	StopReason string `json:"stop_reason,omitempty"`
+	StepCount  int    `json:"step_count,omitempty"`
 }
 
 type Summary struct {

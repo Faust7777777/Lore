@@ -197,6 +197,76 @@ func TestRecordModelUsageWritesOneEventPerCall(t *testing.T) {
 	}
 }
 
+func TestRecordTaskTurnEndWritesEvent(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := Start(root, Meta{SessionID: "lore-turn", AgentID: "codex", StartedAt: time.Now()})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := recorder.RecordTaskTurnEnd("final", 3); err != nil {
+		t.Fatalf("RecordTaskTurnEnd() error = %v", err)
+	}
+
+	path := filepath.Join(root, "lore-turn.jsonl")
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open transcript error = %v", err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxJSONLLineBytes)
+	var turnEnds []Event
+	for scanner.Scan() {
+		var event Event
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatalf("decode line: %v", err)
+		}
+		if event.Type == EventTaskTurnEnd {
+			turnEnds = append(turnEnds, event)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan error = %v", err)
+	}
+	if len(turnEnds) != 1 {
+		t.Fatalf("task_turn_end events = %d, want 1", len(turnEnds))
+	}
+	got := turnEnds[0]
+	if got.StopReason != "final" || got.StepCount != 3 {
+		t.Fatalf("event fields = %s / %d, want final / 3", got.StopReason, got.StepCount)
+	}
+
+	// Load must not promote a task_turn_end event into history or
+	// working set.
+	snapshot, err := Load(root, "lore-turn")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(snapshot.History) != 0 || len(snapshot.WorkingSet) != 0 {
+		t.Fatalf("snapshot history=%+v workingSet=%+v should both be empty", snapshot.History, snapshot.WorkingSet)
+	}
+}
+
+func TestRecordTaskTurnEndEmptyReasonIsNoOp(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := Start(root, Meta{SessionID: "lore-turn-empty", StartedAt: time.Now()})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := recorder.RecordTaskTurnEnd("", 1); err != nil {
+		t.Fatalf("RecordTaskTurnEnd(empty) error = %v", err)
+	}
+
+	path := filepath.Join(root, "lore-turn-empty.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile error = %v", err)
+	}
+	if strings.Contains(string(data), EventTaskTurnEnd) {
+		t.Fatalf("transcript should not contain task_turn_end when reason is empty:\n%s", data)
+	}
+}
+
 func TestRecordModelUsageEmptyIsNoOp(t *testing.T) {
 	root := t.TempDir()
 	recorder, err := Start(root, Meta{SessionID: "lore-usage-empty", StartedAt: time.Now()})

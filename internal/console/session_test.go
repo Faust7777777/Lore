@@ -343,6 +343,12 @@ type recordingRecorder struct {
 	errors     []string
 	commands   []string
 	usages     [][]operatoragent.ModelCallUsage
+	turnEnds   []turnEndRecord
+}
+
+type turnEndRecord struct {
+	StopReason string
+	StepCount  int
 }
 
 func (r *recordingRecorder) RecordUser(text string) error {
@@ -384,6 +390,11 @@ func (r *recordingRecorder) RecordError(message string, recoverable bool) error 
 
 func (r *recordingRecorder) RecordModelUsage(usage []operatoragent.ModelCallUsage) error {
 	r.usages = append(r.usages, append([]operatoragent.ModelCallUsage(nil), usage...))
+	return nil
+}
+
+func (r *recordingRecorder) RecordTaskTurnEnd(stopReason string, stepCount int) error {
+	r.turnEnds = append(r.turnEnds, turnEndRecord{StopReason: stopReason, StepCount: stepCount})
 	return nil
 }
 func TestSessionHandleUsesLoopAgentResponseAndStoresHistory(t *testing.T) {
@@ -561,6 +572,80 @@ func TestSessionHandleRecordsErrorWhenUsagePersistenceFailsOnRespondError(t *tes
 	}
 	if !foundDiskFull {
 		t.Fatalf("recorder.errors = %+v, want disk-full message recorded", recorder.errors)
+	}
+}
+
+func TestSessionHandleEmitsTaskTurnEndOnSuccess(t *testing.T) {
+	agent := &fakeLoopAgent{
+		response: operatoragent.Response{
+			Final:      "ok\n",
+			StopReason: operatoragent.TurnStopFinal,
+			StepCount:  3,
+		},
+	}
+	session := NewSessionWithAgent("test", agent)
+	recorder := &recordingRecorder{}
+	session.Recorder = recorder
+	session.Now = func() time.Time { return time.Date(2026, 5, 19, 9, 0, 0, 0, time.Local) }
+
+	runtime := &fakeRuntime{}
+	if _, err := session.Handle("show me status", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if len(recorder.turnEnds) != 1 {
+		t.Fatalf("turnEnds = %+v, want exactly one entry", recorder.turnEnds)
+	}
+	if recorder.turnEnds[0].StopReason != "final" || recorder.turnEnds[0].StepCount != 3 {
+		t.Fatalf("turnEnds[0] = %+v, want final / 3", recorder.turnEnds[0])
+	}
+}
+
+func TestSessionHandleEmitsTaskTurnEndOnFailure(t *testing.T) {
+	billed := []operatoragent.ModelCallUsage{{PromptTokens: 5, CompletionTokens: 1}}
+	originalErr := fmt.Errorf("operator agent: invalid loop response: parse failure")
+	agent := &fakeLoopAgent{
+		response: operatoragent.Response{
+			Usage:      billed,
+			StopReason: operatoragent.TurnStopModelError,
+			StepCount:  1,
+		},
+		err: &operatoragent.UsageError{Err: originalErr, Usage: billed},
+	}
+	session := NewSessionWithAgent("test", agent)
+	recorder := &recordingRecorder{}
+	session.Recorder = recorder
+	session.Now = func() time.Time { return time.Date(2026, 5, 19, 9, 0, 0, 0, time.Local) }
+
+	runtime := &fakeRuntime{}
+	if _, err := session.Handle("show me status", runtime); err == nil {
+		t.Fatal("Handle() error = nil, want surfaced parse failure")
+	}
+	if len(recorder.turnEnds) != 1 {
+		t.Fatalf("turnEnds = %+v, want exactly one entry even on failure", recorder.turnEnds)
+	}
+	if recorder.turnEnds[0].StopReason != "model_error" || recorder.turnEnds[0].StepCount != 1 {
+		t.Fatalf("turnEnds[0] = %+v, want model_error / 1", recorder.turnEnds[0])
+	}
+}
+
+func TestSessionHandleSkipsTaskTurnEndForLegacyDecidePath(t *testing.T) {
+	// fakeAgent satisfies Agent but NOT LoopAgent. Handle takes the
+	// legacy Decide branch which never populates Response.StopReason,
+	// so no task_turn_end event should be emitted.
+	agent := &fakeAgent{
+		decisions: []operatoragent.Decision{{Action: operatoragent.ActionShowStatus}},
+	}
+	session := NewSessionWithAgent("test", agent)
+	recorder := &recordingRecorder{}
+	session.Recorder = recorder
+	session.Now = func() time.Time { return time.Date(2026, 5, 19, 9, 0, 0, 0, time.Local) }
+
+	runtime := &fakeRuntime{managed: model.ManagedStatusView{Ready: true, WorkDir: "w", VaultRoot: "v"}}
+	if _, err := session.Handle("show status", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if len(recorder.turnEnds) != 0 {
+		t.Fatalf("legacy decide path emitted turnEnds = %+v, want none", recorder.turnEnds)
 	}
 }
 
