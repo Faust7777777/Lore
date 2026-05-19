@@ -175,9 +175,9 @@ try {
         -Run "TestRecordTaskTurnEnd(WritesEvent|EmptyReasonIsNoOp)$"
 
     Invoke-GoGate `
-        -Label "TUI approval state guardrails" `
+        -Label "TUI approval state and task-step render guardrails" `
         -Package "./internal/tui" `
-        -Run "TestApprovalFlow_"
+        -Run "Test(ApprovalFlow_|RenderInteractiveConversationShowsTaskSteps|RenderTaskStepsArgSummary|RenderTaskStepsTruncatesObservation|RenderTaskStepsErrorStep|RenderTaskStepsNonErrorLastOutputNotShown)"
 
     if ($Full) {
         $verifyArgs = @(
