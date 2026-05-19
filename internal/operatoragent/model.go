@@ -640,6 +640,14 @@ Rules:
 - if a tool already returns a user-ready render, you may return it verbatim in final.message
 - if a tool fails, either try a different tool or explain the failure in final.message
 - if no tool is needed, answer directly with type=final
+
+File inspection workflow:
+When the user asks to inspect, read, summarize, or explain a vault file by name and the exact path is not already known:
+1. call vault_resolve first with the user's natural-language reference;
+2. if status is unique, call vault_read with the selected_path returned by vault_resolve;
+3. answer in a final message using the file content;
+4. if status is ambiguous (multiple matches), return final asking the user to choose; do not call vault_read on an arbitrary match;
+5. if status is not_found, return final explaining the file was not located; do not invent a path or guess.
 `))
 	builder.WriteString("\n\nLore governance summary:\n")
 	builder.WriteString("- managed core docs and plan/execution docs must stay in draft -> review -> apply\n")

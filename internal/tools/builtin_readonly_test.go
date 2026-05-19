@@ -310,7 +310,7 @@ func readOnlyLegacyDefinitions() []map[string]any {
 		},
 		{
 			"name":        "vault_read",
-			"description": "Read a markdown document from the vault.",
+			"description": "Read a markdown document from the vault. If the exact path is unknown, call vault_resolve first to map a name to a vault path.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -346,7 +346,7 @@ func readOnlyLegacyDefinitions() []map[string]any {
 		},
 		{
 			"name":        "vault_resolve",
-			"description": "Resolve a natural-language note reference to vault markdown paths. Returns unique, ambiguous, or not_found.",
+			"description": "Resolve a natural-language note reference to vault markdown paths. Returns unique, ambiguous, or not_found. When status is unique, pass selected_path to vault_read.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

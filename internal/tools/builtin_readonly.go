@@ -66,8 +66,10 @@ func (t systemDocGetTool) Call(args map[string]any) (any, error) {
 
 type vaultReadTool struct{ h Harness }
 
-func (t vaultReadTool) Name() string        { return "vault_read" }
-func (t vaultReadTool) Description() string { return "Read a markdown document from the vault." }
+func (t vaultReadTool) Name() string { return "vault_read" }
+func (t vaultReadTool) Description() string {
+	return "Read a markdown document from the vault. If the exact path is unknown, call vault_resolve first to map a name to a vault path."
+}
 func (t vaultReadTool) Surfaces() Surface   { return readOnlySurfaces }
 func (t vaultReadTool) Arguments() []Argument {
 	return []Argument{{Name: "path", Type: ArgString}}
@@ -115,7 +117,7 @@ type vaultResolveTool struct{ h Harness }
 
 func (t vaultResolveTool) Name() string { return "vault_resolve" }
 func (t vaultResolveTool) Description() string {
-	return "Resolve a natural-language note reference to vault markdown paths. Returns unique, ambiguous, or not_found."
+	return "Resolve a natural-language note reference to vault markdown paths. Returns unique, ambiguous, or not_found. When status is unique, pass selected_path to vault_read."
 }
 func (t vaultResolveTool) Surfaces() Surface { return readOnlySurfaces }
 func (t vaultResolveTool) Arguments() []Argument {

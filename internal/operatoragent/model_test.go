@@ -232,6 +232,114 @@ func TestModelAgentDecideErrorsOnInvalidModelOutput(t *testing.T) {
 	}
 }
 
+func TestLoopSystemPromptIncludesFileInspectionDiscipline(t *testing.T) {
+	tools := []ToolDefinition{
+		{Name: "vault_resolve", Description: "x"},
+		{Name: "vault_read", Description: "y"},
+	}
+	prompt := loopSystemPrompt(tools, nil, Context{DefaultAgentID: "codex"})
+
+	for _, want := range []string{
+		"File inspection workflow",
+		"call vault_resolve first",
+		"selected_path",
+		"if status is ambiguous",
+		"do not call vault_read on an arbitrary match",
+		"do not invent a path",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("loopSystemPrompt missing %q; got:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestModelAgentRespondCompletesResolveReadFinal(t *testing.T) {
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{Content: `{"type":"tool_call","tool":"vault_resolve","arguments":{"query":"target"}}`, PromptTokens: 4, CompletionTokens: 2},
+			{Content: `{"type":"tool_call","tool":"vault_read","arguments":{"path":"03-notes/target.md"}}`, PromptTokens: 6, CompletionTokens: 2},
+			{Content: `{"type":"final","message":"this file explains project onboarding"}`, PromptTokens: 8, CompletionTokens: 5},
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{
+			{Name: "vault_resolve", Description: "x"},
+			{Name: "vault_read", Description: "y"},
+		},
+		results: map[string]ToolResult{
+			"vault_resolve": {Content: `{"query":"target","status":"unique","selected_path":"03-notes/target.md"}`},
+			"vault_read":    {Content: `{"path":"03-notes/target.md","content":"# Target\n\nThis file explains project onboarding."}`},
+		},
+	}
+
+	response, err := agent.Respond("看看 target 这个文件讲什么", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if response.StopReason != TurnStopFinal {
+		t.Fatalf("StopReason = %q, want %q", response.StopReason, TurnStopFinal)
+	}
+	if response.StepCount != 3 {
+		t.Fatalf("StepCount = %d, want 3", response.StepCount)
+	}
+	if len(response.Trace) != 2 {
+		t.Fatalf("len(Trace) = %d, want 2", len(response.Trace))
+	}
+	if response.Trace[0].Name != "vault_resolve" || response.Trace[1].Name != "vault_read" {
+		t.Fatalf("trace order = %v / %v, want vault_resolve then vault_read", response.Trace[0].Name, response.Trace[1].Name)
+	}
+	if !strings.Contains(response.Final, "project onboarding") {
+		t.Fatalf("final = %q, want content from the file", response.Final)
+	}
+	if got := runtime.calls; len(got) != 2 || got[0] != "vault_resolve" || got[1] != "vault_read" {
+		t.Fatalf("runtime.calls = %+v, want [vault_resolve vault_read]", got)
+	}
+}
+
+func TestModelAgentRespondAsksUserOnAmbiguousResolve(t *testing.T) {
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{Content: `{"type":"tool_call","tool":"vault_resolve","arguments":{"query":"target"}}`, PromptTokens: 4, CompletionTokens: 2},
+			{Content: `{"type":"final","message":"Multiple candidates found: please choose one"}`, PromptTokens: 6, CompletionTokens: 3},
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{
+			{Name: "vault_resolve", Description: "x"},
+			{Name: "vault_read", Description: "y"},
+		},
+		results: map[string]ToolResult{
+			// ambiguous status: model must NOT pick one and call vault_read.
+			"vault_resolve": {Content: `{"query":"target","status":"ambiguous","matches":[{"path":"a.md"},{"path":"b.md"}]}`},
+			"vault_read":    {Content: `{"unused":true}`},
+		},
+	}
+
+	response, err := agent.Respond("看看 target", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if response.StopReason != TurnStopFinal {
+		t.Fatalf("StopReason = %q, want %q", response.StopReason, TurnStopFinal)
+	}
+	if response.StepCount != 2 {
+		t.Fatalf("StepCount = %d, want 2", response.StepCount)
+	}
+	if len(response.Trace) != 1 || response.Trace[0].Name != "vault_resolve" {
+		t.Fatalf("trace = %+v, want exactly one vault_resolve step", response.Trace)
+	}
+	for _, name := range runtime.calls {
+		if name == "vault_read" {
+			t.Fatalf("runtime.calls contained vault_read on ambiguous resolve; full calls = %+v", runtime.calls)
+		}
+	}
+	if !strings.Contains(strings.ToLower(response.Final), "choose") && !strings.Contains(strings.ToLower(response.Final), "candidate") {
+		t.Fatalf("final = %q, want guidance to choose between candidates", response.Final)
+	}
+}
+
 func TestModelAgentRespondRunsToolLoopThenFinal(t *testing.T) {
 	client := &fakeCompletionClient{
 		responses: []openai.ChatCompletionResponse{
