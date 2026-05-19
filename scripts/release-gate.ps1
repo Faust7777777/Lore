@@ -95,6 +95,22 @@ function Invoke-GoModuleGate {
     }
 }
 
+function Invoke-SDKGate {
+    $previousE2E = $env:LORE_SDK_E2E
+    try {
+        Remove-Item Env:LORE_SDK_E2E -ErrorAction SilentlyContinue
+        Invoke-GoModuleGate `
+            -Label "Go SDK v0 contract and transport guardrails" `
+            -ModulePath "sdk\go\lore"
+    } finally {
+        if ($null -eq $previousE2E) {
+            Remove-Item Env:LORE_SDK_E2E -ErrorAction SilentlyContinue
+        } else {
+            $env:LORE_SDK_E2E = $previousE2E
+        }
+    }
+}
+
 Push-Location $RepoRoot
 try {
     if (-not $SkipDiffCheck) {
@@ -126,9 +142,7 @@ try {
         -Package "./cmd/lore" `
         -Run "TestRunVersion$"
 
-    Invoke-GoModuleGate `
-        -Label "Go SDK v0 contract and transport guardrails" `
-        -ModulePath "sdk\go\lore"
+    Invoke-SDKGate
 
     Invoke-GoGate `
         -Label "console resolve-read-final and task-turn guardrails" `
