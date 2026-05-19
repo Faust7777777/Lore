@@ -67,11 +67,19 @@ type Session struct {
 	PendingShellCommand  *pendingShellCommand
 	LastInput            string
 	LastToolTrace        []operatoragent.ToolCallTrace
-	History              []operatoragent.ConversationTurn
-	WorkingSet           []operatoragent.WorkingSetItem
-	Now                  func() time.Time
-	Agent                operatoragent.Agent
-	Recorder             TranscriptRecorder
+	// LastTurnSteps holds an isolated snapshot of the structured
+	// per-step record from the most recent loop-agent turn, suitable
+	// for UI rendering by callers that read Session state rather than
+	// re-invoke the agent. Cleared at the start of every Handle and
+	// repopulated after Respond returns -- on both success and error
+	// paths, so a failed turn still surfaces any tool calls that did
+	// execute. The legacy non-loop Decide path leaves this empty.
+	LastTurnSteps []operatoragent.TurnStep
+	History       []operatoragent.ConversationTurn
+	WorkingSet    []operatoragent.WorkingSetItem
+	Now           func() time.Time
+	Agent         operatoragent.Agent
+	Recorder      TranscriptRecorder
 }
 type pendingShellCommand struct {
 	Command        string
@@ -97,11 +105,25 @@ func NewSessionWithAgent(version string, agent operatoragent.Agent) *Session {
 func (s *Session) Handle(input string, runtime Runtime) (string, error) {
 	s.LastInput = strings.TrimSpace(input)
 	s.LastToolTrace = nil
+	// Clear LastTurnSteps at the top so that a turn which never
+	// reaches the loop agent (legacy Decide, shell-confirmation
+	// continuation, or a pre-LoopAgent early return) leaves the
+	// field empty rather than displaying stale steps from a prior
+	// successful turn.
+	s.LastTurnSteps = nil
 	if output, handled, err := s.handlePendingShellConfirmation(runtime); handled {
 		return output, err
 	}
 	if loopAgent, ok := s.Agent.(operatoragent.LoopAgent); ok {
 		response, err := loopAgent.Respond(input, s.agentContext(runtime), newToolRuntime(s, runtime))
+		// Snapshot the turn's structured steps before any further
+		// branching so error and success paths both leave consumers
+		// with an accurate view. operatoragent guarantees Steps is
+		// populated on both *UsageError post-tool-call failures and
+		// on terminal final/decision returns. CloneTurnSteps deep
+		// copies Arguments so subsequent UI rendering cannot leak
+		// mutations back into the response value.
+		s.LastTurnSteps = operatoragent.CloneTurnSteps(response.Steps)
 		// Emit the task_turn_end transcript event once for this
 		// loop-agent turn, regardless of which terminal Handle ends
 		// at. Response.StopReason / StepCount are populated by B2 at

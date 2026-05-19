@@ -162,12 +162,12 @@ try {
     Invoke-GoGate `
         -Label "operator-agent turn-step observation guardrails" `
         -Package "./internal/operatoragent" `
-        -Run "Test(ModelAgentRespondAppendsTurnStepPerToolCall|ModelAgentRespondTurnStepTruncatesLongObservation|ModelAgentRespondTurnStepRedactsBinaryObservation|ModelAgentRespondTurnStepCapturesToolError|ModelAgentRespondTurnStepsCarriedThroughUsageError|CloneTurnStepsDeepCopiesArguments)$"
+        -Run "Test(ModelAgentRespondAppendsTurnStepPerToolCall|ModelAgentRespondTurnStepTruncatesLongObservation|ModelAgentRespondTurnStepRedactsBinaryObservation|ModelAgentRespondTurnStepCapturesToolError|ModelAgentRespondTurnStepsCarriedThroughUsageError|CloneTurnStepsDeepCopiesArguments|ModelAgentRespondStepsAreIsolatedFromTraceAndOtherSnapshots|BuildObservationExcerptRuneBoundaryTruncation)$"
 
     Invoke-GoGate `
         -Label "console resolve-read-final and task-turn guardrails" `
         -Package "./internal/console" `
-        -Run "Test(EndToEndResolveReadFinalFileInspectionTurn|SessionHandleEmitsTaskTurnEndOnSuccess|SessionHandleEmitsTaskTurnEndOnFailure|SessionHandleSkipsTaskTurnEndForLegacyDecidePath)$"
+        -Run "Test(EndToEndResolveReadFinalFileInspectionTurn|SessionHandleEmitsTaskTurnEndOnSuccess|SessionHandleEmitsTaskTurnEndOnFailure|SessionHandleSkipsTaskTurnEndForLegacyDecidePath|SessionHandlePopulatesLastTurnStepsFromLoopAgentResponse|SessionHandleLastTurnStepsEmptyForFinalOnlyTurn|SessionHandleLastTurnStepsPreservedOnUsageErrorPath|SessionHandleClearsLastTurnStepsBetweenTurns|SessionHandleLastTurnStepsEmptyForLegacyDecidePath|SessionHandleLastTurnStepsIsolatedFromAgentResponse)$"
 
     Invoke-GoGate `
         -Label "sessionlog task-turn persistence guardrails" `

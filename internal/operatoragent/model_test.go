@@ -938,7 +938,7 @@ func TestCloneTurnStepsDeepCopiesArguments(t *testing.T) {
 		},
 	}
 
-	clone := cloneTurnSteps(source)
+	clone := CloneTurnSteps(source)
 	if len(clone) != len(source) {
 		t.Fatalf("clone length = %d, want %d", len(clone), len(source))
 	}
@@ -954,8 +954,8 @@ func TestCloneTurnStepsDeepCopiesArguments(t *testing.T) {
 	// Producing two snapshots from the same source must also keep
 	// them independent: mutating one snapshot must not change the
 	// other.
-	a := cloneTurnSteps(source)
-	b := cloneTurnSteps(source)
+	a := CloneTurnSteps(source)
+	b := CloneTurnSteps(source)
 	a[1].Arguments["path"] = "tampered.md"
 	if b[1].Arguments["path"] != "03-notes/target.md" {
 		t.Fatalf("sibling snapshot mutated: b[1].Arguments = %+v", b[1].Arguments)

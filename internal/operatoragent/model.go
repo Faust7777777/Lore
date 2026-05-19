@@ -270,7 +270,7 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 			return Response{StopReason: reason}, err
 		}
 		usageSnapshot := append([]ModelCallUsage(nil), usage...)
-		stepsSnapshot := cloneTurnSteps(steps)
+		stepsSnapshot := CloneTurnSteps(steps)
 		return Response{
 			Usage:      usageSnapshot,
 			StopReason: reason,
@@ -339,7 +339,7 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 					Usage:      append([]ModelCallUsage(nil), usage...),
 					StopReason: TurnStopFinal,
 					StepCount:  len(usage),
-					Steps:      cloneTurnSteps(steps),
+					Steps:      CloneTurnSteps(steps),
 				}, nil
 			}
 			if toolErr != nil && toolContent != "" {
@@ -364,7 +364,7 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 				Usage:      append([]ModelCallUsage(nil), usage...),
 				StopReason: TurnStopFinal,
 				StepCount:  len(usage),
-				Steps:      cloneTurnSteps(steps),
+				Steps:      CloneTurnSteps(steps),
 			}, nil
 		}
 
@@ -380,7 +380,7 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 				Usage:      append([]ModelCallUsage(nil), usage...),
 				StopReason: TurnStopFinal,
 				StepCount:  len(usage),
-				Steps:      cloneTurnSteps(steps),
+				Steps:      CloneTurnSteps(steps),
 			}, nil
 		case "tool_call":
 			toolName := strings.TrimSpace(envelope.Tool)
@@ -421,7 +421,7 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 					Usage:      append([]ModelCallUsage(nil), usage...),
 					StopReason: TurnStopFinal,
 					StepCount:  len(usage),
-					Steps:      cloneTurnSteps(steps),
+					Steps:      CloneTurnSteps(steps),
 				}, nil
 			}
 			if toolErr != nil && toolContent != "" {
@@ -999,13 +999,18 @@ func toolTraceError(err error) string {
 	return strings.TrimSpace(err.Error())
 }
 
-// cloneTurnSteps returns an independent snapshot of a TurnStep slice.
+// CloneTurnSteps returns an independent snapshot of a TurnStep slice.
 // Each step's Arguments map is deep-copied so callers receive a
 // defensible snapshot: mutating any returned step (slice index or
-// nested Arguments key) cannot leak into the internal accumulator or
-// into any other snapshot produced from the same source. This is the
-// same level of isolation Trace and Usage snapshots already provide.
-func cloneTurnSteps(steps []TurnStep) []TurnStep {
+// nested Arguments key) cannot leak into the source slice or into any
+// other snapshot produced from the same source. This is the same
+// level of isolation Trace and Usage snapshots already provide.
+//
+// Exported so consumers that need to retain Steps across turn
+// boundaries (for example, console.Session.LastTurnSteps for UI
+// rendering) can reuse the same isolation logic rather than risk a
+// shallow copy that aliases the operatoragent return path's maps.
+func CloneTurnSteps(steps []TurnStep) []TurnStep {
 	if len(steps) == 0 {
 		return nil
 	}

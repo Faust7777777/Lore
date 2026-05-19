@@ -649,6 +649,167 @@ func TestSessionHandleSkipsTaskTurnEndForLegacyDecidePath(t *testing.T) {
 	}
 }
 
+func TestSessionHandlePopulatesLastTurnStepsFromLoopAgentResponse(t *testing.T) {
+	agent := &fakeLoopAgent{
+		response: operatoragent.Response{
+			Final: "done\n",
+			Steps: []operatoragent.TurnStep{
+				{Index: 1, Tool: "vault_resolve", Arguments: map[string]any{"query": "target"}, Status: "ok", ObservationExcerpt: "selected=03-notes/target.md"},
+				{Index: 2, Tool: "vault_read", Arguments: map[string]any{"path": "03-notes/target.md"}, Status: "ok", ObservationExcerpt: "# Target"},
+			},
+			StopReason: operatoragent.TurnStopFinal,
+			StepCount:  3,
+		},
+	}
+	session := NewSessionWithAgent("test", agent)
+	session.Now = func() time.Time { return time.Date(2026, 5, 19, 9, 0, 0, 0, time.Local) }
+
+	runtime := &fakeRuntime{}
+	if _, err := session.Handle("inspect target", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if len(session.LastTurnSteps) != 2 {
+		t.Fatalf("LastTurnSteps len = %d, want 2", len(session.LastTurnSteps))
+	}
+	if session.LastTurnSteps[0].Tool != "vault_resolve" || session.LastTurnSteps[1].Tool != "vault_read" {
+		t.Fatalf("LastTurnSteps tools = %q / %q, want vault_resolve / vault_read",
+			session.LastTurnSteps[0].Tool, session.LastTurnSteps[1].Tool)
+	}
+}
+
+func TestSessionHandleLastTurnStepsEmptyForFinalOnlyTurn(t *testing.T) {
+	agent := &fakeLoopAgent{
+		response: operatoragent.Response{
+			Final:      "ok\n",
+			StopReason: operatoragent.TurnStopFinal,
+			StepCount:  1,
+		},
+	}
+	session := NewSessionWithAgent("test", agent)
+	session.Now = func() time.Time { return time.Date(2026, 5, 19, 9, 0, 0, 0, time.Local) }
+
+	runtime := &fakeRuntime{}
+	if _, err := session.Handle("hello", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if len(session.LastTurnSteps) != 0 {
+		t.Fatalf("LastTurnSteps = %+v, want empty for final-only turn", session.LastTurnSteps)
+	}
+}
+
+func TestSessionHandleLastTurnStepsPreservedOnUsageErrorPath(t *testing.T) {
+	executedStep := operatoragent.TurnStep{
+		Index: 1, Tool: "vault_resolve",
+		Arguments: map[string]any{"query": "target"},
+		Status:    "ok", ObservationExcerpt: "selected=03-notes/target.md",
+	}
+	billed := []operatoragent.ModelCallUsage{{PromptTokens: 4, CompletionTokens: 1}}
+	originalErr := fmt.Errorf("operator agent: invalid loop response: parse failure")
+	agent := &fakeLoopAgent{
+		response: operatoragent.Response{
+			Steps:      []operatoragent.TurnStep{executedStep},
+			Usage:      billed,
+			StopReason: operatoragent.TurnStopModelError,
+			StepCount:  2,
+		},
+		err: &operatoragent.UsageError{Err: originalErr, Usage: billed},
+	}
+	session := NewSessionWithAgent("test", agent)
+	session.Now = func() time.Time { return time.Date(2026, 5, 19, 9, 0, 0, 0, time.Local) }
+
+	if _, err := session.Handle("inspect target", &fakeRuntime{}); err == nil {
+		t.Fatal("Handle() error = nil, want surfaced parse failure")
+	}
+	if len(session.LastTurnSteps) != 1 {
+		t.Fatalf("LastTurnSteps len = %d, want 1 (failed turn must keep executed steps)", len(session.LastTurnSteps))
+	}
+	if session.LastTurnSteps[0].Tool != "vault_resolve" {
+		t.Fatalf("LastTurnSteps[0].Tool = %q, want vault_resolve", session.LastTurnSteps[0].Tool)
+	}
+}
+
+func TestSessionHandleClearsLastTurnStepsBetweenTurns(t *testing.T) {
+	agent := &fakeLoopAgent{
+		responses: []operatoragent.Response{
+			{
+				Final: "first\n",
+				Steps: []operatoragent.TurnStep{
+					{Index: 1, Tool: "vault_resolve", Arguments: map[string]any{"query": "x"}, Status: "ok"},
+				},
+				StopReason: operatoragent.TurnStopFinal,
+				StepCount:  2,
+			},
+			// Second turn produces no steps; LastTurnSteps from turn 1
+			// must not leak into the user-visible state.
+			{Final: "second\n", StopReason: operatoragent.TurnStopFinal, StepCount: 1},
+		},
+	}
+	session := NewSessionWithAgent("test", agent)
+	session.Now = func() time.Time { return time.Date(2026, 5, 19, 9, 0, 0, 0, time.Local) }
+	runtime := &fakeRuntime{}
+
+	if _, err := session.Handle("turn 1", runtime); err != nil {
+		t.Fatalf("Handle(turn 1) error = %v", err)
+	}
+	if len(session.LastTurnSteps) != 1 {
+		t.Fatalf("LastTurnSteps after turn 1 = %+v, want 1 step", session.LastTurnSteps)
+	}
+	if _, err := session.Handle("turn 2", runtime); err != nil {
+		t.Fatalf("Handle(turn 2) error = %v", err)
+	}
+	if len(session.LastTurnSteps) != 0 {
+		t.Fatalf("LastTurnSteps after turn 2 = %+v, want empty (turn 1 steps must clear)", session.LastTurnSteps)
+	}
+}
+
+func TestSessionHandleLastTurnStepsEmptyForLegacyDecidePath(t *testing.T) {
+	// fakeAgent satisfies Agent but NOT LoopAgent; Handle takes the
+	// legacy Decide branch. LastTurnSteps must remain empty there
+	// because Decide does not produce structured per-step records.
+	agent := &fakeAgent{decisions: []operatoragent.Decision{{Action: operatoragent.ActionShowStatus}}}
+	session := NewSessionWithAgent("test", agent)
+	session.Now = func() time.Time { return time.Date(2026, 5, 19, 9, 0, 0, 0, time.Local) }
+
+	runtime := &fakeRuntime{managed: model.ManagedStatusView{Ready: true, WorkDir: "w", VaultRoot: "v"}}
+	if _, err := session.Handle("show status", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if len(session.LastTurnSteps) != 0 {
+		t.Fatalf("legacy decide path LastTurnSteps = %+v, want empty", session.LastTurnSteps)
+	}
+}
+
+func TestSessionHandleLastTurnStepsIsolatedFromAgentResponse(t *testing.T) {
+	originalArgs := map[string]any{"query": "target"}
+	agentResponse := operatoragent.Response{
+		Final: "ok\n",
+		Steps: []operatoragent.TurnStep{
+			{Index: 1, Tool: "vault_resolve", Arguments: originalArgs, Status: "ok"},
+		},
+		StopReason: operatoragent.TurnStopFinal,
+		StepCount:  2,
+	}
+	agent := &fakeLoopAgent{response: agentResponse}
+	session := NewSessionWithAgent("test", agent)
+	session.Now = func() time.Time { return time.Date(2026, 5, 19, 9, 0, 0, 0, time.Local) }
+
+	if _, err := session.Handle("inspect target", &fakeRuntime{}); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if len(session.LastTurnSteps) != 1 {
+		t.Fatalf("LastTurnSteps len = %d, want 1", len(session.LastTurnSteps))
+	}
+	// Mutating the stored snapshot must not leak into the canned
+	// agent response that the fake still holds.
+	session.LastTurnSteps[0].Arguments["query"] = "tampered"
+	if agent.response.Steps[0].Arguments["query"] != "target" {
+		t.Fatalf("mutation leaked into agent response: %+v", agent.response.Steps[0].Arguments)
+	}
+	if originalArgs["query"] != "target" {
+		t.Fatalf("mutation leaked into original Arguments map: %+v", originalArgs)
+	}
+}
+
 func TestSessionHandleSkipsUsageWhenLoopResponseHasNone(t *testing.T) {
 	agent := &fakeLoopAgent{response: operatoragent.Response{Final: "ok\n"}}
 	session := NewSessionWithAgent("test", agent)
