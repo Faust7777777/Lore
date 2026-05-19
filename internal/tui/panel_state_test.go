@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"obsidian-harness/internal/app"
@@ -324,6 +326,71 @@ func TestTabCycleIncludesNewPanels(t *testing.T) {
 	}
 }
 
+// --- Error prefix regression tests ---
+
+func TestFindingsActionErrorSurfacedWithCorrectPrefix(t *testing.T) {
+	findings := []model.Finding{
+		{ID: "f1", Title: "Finding A", State: model.FindingOpen, Severity: model.FindingSeverityWarning},
+	}
+	driver := &errorDriverStub{findings: findings}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+	m.focus = focusFindings
+	m.findingsDetail = true
+
+	// Press x — the error driver will return an error
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = updated.(interactiveWorkbenchModel)
+	if cmd == nil {
+		t.Fatal("expected a command")
+	}
+
+	result := cmd()
+	msg := result.(findingsResultMsg)
+	updated, _ = m.Update(msg)
+	m = updated.(interactiveWorkbenchModel)
+
+	// lastOutput must start with "Error:" so the renderer surfaces it
+	if !strings.HasPrefix(m.lastOutput, "Error:") {
+		t.Fatalf("findings error lastOutput = %q, want Error: prefix", m.lastOutput)
+	}
+}
+
+func TestApprovalActionErrorSurfacedWithCorrectPrefix(t *testing.T) {
+	drafts := []model.Draft{
+		{ID: "d1", Title: "Draft A", State: model.DraftPendingReview},
+	}
+	driver := &errorDriverStub{drafts: drafts}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+	m.focus = focusApproval
+	m.approvalDetail = true
+
+	// Press a — the error driver will return an error
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = updated.(interactiveWorkbenchModel)
+	if cmd == nil {
+		t.Fatal("expected a command")
+	}
+
+	result := cmd()
+	msg := result.(approvalResultMsg)
+	updated, _ = m.Update(msg)
+	m = updated.(interactiveWorkbenchModel)
+
+	if !strings.HasPrefix(m.lastOutput, "Error:") {
+		t.Fatalf("approval error lastOutput = %q, want Error: prefix", m.lastOutput)
+	}
+}
+
 // --- Shared stub for panel tests ---
 
 type panelDriverStub struct {
@@ -369,4 +436,31 @@ func (d *panelDriverStub) ExecuteFindingAction(action string, findingID string) 
 	}
 	vm, _ := d.Load("")
 	return InteractiveWorkbenchUpdate{ViewModel: vm, LastOutput: action + " " + findingID}, nil
+}
+
+// errorDriverStub always returns errors from ExecuteFindingAction and ExecuteApprovalAction.
+type errorDriverStub struct {
+	findings []model.Finding
+	drafts   []model.Draft
+}
+
+func (d *errorDriverStub) Load(lastOutput string) (WorkbenchViewModel, error) {
+	return WorkbenchViewModel{
+		Findings:      d.findings,
+		PendingDrafts: d.drafts,
+		Snapshot:      WorkbenchSnapshot{},
+	}, nil
+}
+
+func (d *errorDriverStub) Execute(line string, lastOutput string) (InteractiveWorkbenchUpdate, error) {
+	vm, _ := d.Load(lastOutput)
+	return InteractiveWorkbenchUpdate{ViewModel: vm, LastOutput: lastOutput}, nil
+}
+
+func (d *errorDriverStub) ExecuteApprovalAction(action string, draftID string) (InteractiveWorkbenchUpdate, error) {
+	return InteractiveWorkbenchUpdate{}, fmt.Errorf("approval %s %s failed: stub error", action, draftID)
+}
+
+func (d *errorDriverStub) ExecuteFindingAction(action string, findingID string) (InteractiveWorkbenchUpdate, error) {
+	return InteractiveWorkbenchUpdate{}, fmt.Errorf("finding %s %s failed: stub error", action, findingID)
 }

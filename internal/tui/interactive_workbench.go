@@ -686,7 +686,7 @@ func (m interactiveWorkbenchModel) executeFindingsAction(action string, findingI
 func (m interactiveWorkbenchModel) handleFindingsResult(msg findingsResultMsg) (tea.Model, tea.Cmd) {
 	m.findingsDetail = false
 	if msg.err != nil {
-		m.lastOutput = "Findings error: " + msg.err.Error()
+		m.lastOutput = "Error: findings: " + msg.err.Error()
 	} else {
 		m.viewModel = msg.viewModel
 		m.lastOutput = msg.lastOutput
@@ -789,7 +789,7 @@ func (m interactiveWorkbenchModel) executeApprovalAction(action string, draftID 
 func (m interactiveWorkbenchModel) handleApprovalResult(msg approvalResultMsg) (tea.Model, tea.Cmd) {
 	m.approvalDetail = false
 	if msg.err != nil {
-		m.lastOutput = "Approval error: " + msg.err.Error()
+		m.lastOutput = "Error: approval: " + msg.err.Error()
 	} else {
 		m.viewModel = msg.viewModel
 		m.lastOutput = msg.lastOutput
