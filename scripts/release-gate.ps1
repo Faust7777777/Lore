@@ -2,7 +2,8 @@ param(
     [switch]$Full,
     [switch]$E2E,
     [int]$Repeat = 1,
-    [switch]$SkipDiffCheck
+    [switch]$SkipDiffCheck,
+    [switch]$AssertClean
 )
 
 $ErrorActionPreference = "Stop"
@@ -111,6 +112,20 @@ function Invoke-SDKGate {
     }
 }
 
+function Assert-RepoClean {
+    if (Test-Path -LiteralPath (Join-Path $RepoRoot ".smoke-workdir")) {
+        throw ".smoke-workdir was created in the repository"
+    }
+    $dirty = & git status --short
+    if ($LASTEXITCODE -ne 0) {
+        throw "git status --short failed with exit code $LASTEXITCODE"
+    }
+    if ($dirty) {
+        $dirty
+        throw "release gate left the worktree dirty"
+    }
+}
+
 Push-Location $RepoRoot
 try {
     if (-not $SkipDiffCheck) {
@@ -175,5 +190,8 @@ try {
 
     Write-Host "[gate] release gate passed"
 } finally {
+    if ($AssertClean) {
+        Assert-RepoClean
+    }
     Pop-Location
 }

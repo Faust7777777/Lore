@@ -39,7 +39,7 @@ jobs:
       - name: Run release gate
         if: github.event_name == 'pull_request'
         shell: powershell
-        run: .\scripts\release-gate.ps1
+        run: .\scripts\release-gate.ps1 -AssertClean
 
       - name: Run full release gate
         if: github.event_name != 'pull_request'
@@ -56,6 +56,7 @@ jobs:
           if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ github.event.inputs.e2e }}" -eq "true") {
               $args += "-E2E"
           }
+          $args += "-AssertClean"
           .\scripts\release-gate.ps1 @args
 
       - name: Assert release gate leaves repo clean
