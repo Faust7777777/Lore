@@ -27,7 +27,6 @@ func RenderWorkbenchViewModel(viewModel WorkbenchViewModel) string {
 	renderProcessSinkSection(&builder, viewModel.ProcessSink)
 	renderToolTraceSection(&builder, viewModel.ToolTrace)
 	renderConversationSection(&builder, viewModel.Conversation)
-	renderLatestOutputSection(&builder, viewModel.Conversation.LastOutput)
 	renderQuickActionsSection(&builder, viewModel.QuickActions)
 	renderControlsSection(&builder, viewModel.Controls)
 
@@ -175,18 +174,6 @@ func renderConversationSection(builder *strings.Builder, conversation WorkbenchC
 	}
 }
 
-func renderLatestOutputSection(builder *strings.Builder, lastOutput string) {
-	builder.WriteString("\nLatest Output\n")
-	builder.WriteString("-------------\n")
-	if strings.TrimSpace(lastOutput) == "" {
-		builder.WriteString("No active output.\n")
-		return
-	}
-
-	builder.WriteString(indentBlock(strings.TrimSpace(excerpt(lastOutput, 1200)), "  "))
-	builder.WriteString("\n")
-}
-
 func renderQuickActionsSection(builder *strings.Builder, actions []string) {
 	builder.WriteString("\nQuick Actions\n")
 	builder.WriteString("-------------\n")
@@ -257,18 +244,6 @@ func conversationLines(conversation WorkbenchConversation) []string {
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("%-10s %s", role, oneLine(content, 120)))
-	}
-
-	lastOutput := strings.TrimSpace(conversation.LastOutput)
-	if lastOutput != "" {
-		lastVisible := ""
-		if len(lines) > 0 {
-			lastVisible = lines[len(lines)-1]
-		}
-		renderedOutput := fmt.Sprintf("%-10s %s", "LATEST", oneLine(lastOutput, 120))
-		if lastVisible != renderedOutput {
-			lines = append(lines, renderedOutput)
-		}
 	}
 
 	return lines

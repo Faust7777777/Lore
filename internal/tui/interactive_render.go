@@ -144,15 +144,6 @@ func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput stri
 		builder.WriteString("\n")
 	}
 
-	builder.WriteString(thinRule(40) + "\n")
-	builder.WriteString(styleSectionHead.Render("Latest Output") + "\n")
-	if strings.TrimSpace(lastOutput) == "" {
-		builder.WriteString(styleMutedText.Render("  No active output.") + "\n")
-	} else {
-		builder.WriteString(indentBlock(wrapText(strings.TrimSpace(unescapeLiteralNewlines(lastOutput)), contentWidth), "  "))
-		builder.WriteString("\n")
-	}
-
 	return builder.String()
 }
 

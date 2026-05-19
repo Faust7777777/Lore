@@ -87,7 +87,6 @@ func TestRenderWorkbenchIncludesCorePanels(t *testing.T) {
 		"Conversation Lane",
 		"USER",
 		"ASSISTANT",
-		"Latest Output",
 		"Quick Actions",
 		"show git status for the local repo",
 		"Runtime Snapshot",

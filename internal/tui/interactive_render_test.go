@@ -54,9 +54,6 @@ func TestRenderInteractiveConversationEmptyState(t *testing.T) {
 	if !strings.Contains(result, "Ready.") {
 		t.Errorf("empty conversation should show ready prompt, got: %q", result)
 	}
-	if !strings.Contains(result, "No active output.") {
-		t.Errorf("empty conversation should show no active output, got: %q", result)
-	}
 }
 
 func TestRenderInteractiveConversationRendersAllTurns(t *testing.T) {
@@ -106,14 +103,12 @@ func TestRenderInteractiveConversationRunningState(t *testing.T) {
 	}
 }
 
-func TestRenderInteractiveConversationLastOutputUnescape(t *testing.T) {
+func TestRenderInteractiveConversationLastOutputNotRendered(t *testing.T) {
 	vm := WorkbenchViewModel{}
 	result := renderInteractiveConversation(vm, `line1\nline2`, false, "", 80)
-	if strings.Contains(result, `\n`) {
-		t.Errorf("lastOutput should have literal backslash-n unescaped, got: %q", result)
-	}
-	if !strings.Contains(result, "line1\n") {
-		t.Errorf("lastOutput should contain real newline, got: %q", result)
+	// lastOutput is no longer rendered in the conversation pane (it stays as internal state only)
+	if strings.Contains(result, "Latest Output") {
+		t.Errorf("conversation pane should not render Latest Output section, got: %q", result)
 	}
 }
 
