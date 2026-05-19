@@ -51,7 +51,7 @@ Read these documents in order:
 
 MCP and external boundary:
 
-- `internal/mcp/tool_contract.go`
+- `internal/tools/`
 - `internal/mcp/server.go`
 - `internal/mcp/server_test.go`
 
