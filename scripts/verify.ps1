@@ -71,7 +71,17 @@ try {
     if (Test-Path (Join-Path $RepoRoot "sdk\go\lore\go.mod")) {
         Push-Location (Join-Path $RepoRoot "sdk\go\lore")
         try {
-            Invoke-GoTest -Arguments @("test", "./...", "-count=1")
+            $previousSDKE2E = $env:LORE_SDK_E2E
+            try {
+                Remove-Item Env:LORE_SDK_E2E -ErrorAction SilentlyContinue
+                Invoke-GoTest -Arguments @("test", "./...", "-count=1")
+            } finally {
+                if ($null -eq $previousSDKE2E) {
+                    Remove-Item Env:LORE_SDK_E2E -ErrorAction SilentlyContinue
+                } else {
+                    $env:LORE_SDK_E2E = $previousSDKE2E
+                }
+            }
             if ($E2E) {
                 $previousE2E = $env:LORE_SDK_E2E
                 try {
