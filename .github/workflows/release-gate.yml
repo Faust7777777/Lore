@@ -6,6 +6,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      e2e:
+        description: "Run opt-in MCP/SDK E2E checks after the full gate"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -46,7 +52,11 @@ jobs:
           if (-not $env:LORE_LLM_BASE_URL -or -not $env:LORE_LLM_API_KEY -or -not $env:LORE_LLM_MODEL) {
               throw "Full release gate requires LORE_LLM_BASE_URL, LORE_LLM_API_KEY, and LORE_LLM_MODEL"
           }
-          .\scripts\release-gate.ps1 -Full
+          $args = @("-Full")
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ github.event.inputs.e2e }}" -eq "true") {
+              $args += "-E2E"
+          }
+          .\scripts\release-gate.ps1 @args
 
       - name: Assert release gate leaves repo clean
         if: always()

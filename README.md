@@ -111,6 +111,10 @@ Run the opt-in SDK end-to-end smoke with:
 .\scripts\release-gate.ps1 -E2E
 ```
 
+In GitHub Actions, pull requests run the deterministic release gate, pushes to
+`main` run the full gate, and manual `workflow_dispatch` runs can enable the
+`e2e` input to append the opt-in MCP/SDK E2E checks.
+
 `smoke p0` verifies the current P0 chain: managed core bootstrap, managed document draft/apply, checkpoint materialization, daily report write, and audit records. Add `--full` to also run governed markdown note intake.
 It requires a configured model provider via `LORE_LLM_BASE_URL`, `LORE_LLM_API_KEY`, and `LORE_LLM_MODEL` because checkpoint and daily report summarization are model-backed.
 
