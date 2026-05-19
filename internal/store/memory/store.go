@@ -272,10 +272,10 @@ func (s *Store) SummarizeUsage(day time.Time) (model.UsageSummary, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	normalized := model.NormalizeDay(day)
+	normalized := model.NormalizeUsageDay(day)
 	summary := model.UsageSummary{Day: normalized}
 	for _, record := range s.usage {
-		if !model.NormalizeDay(record.RecordedAt).Equal(normalized) {
+		if !model.NormalizeUsageDay(record.RecordedAt).Equal(normalized) {
 			continue
 		}
 		summary.Calls++

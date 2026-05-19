@@ -186,6 +186,53 @@ func TestStorePersistsAcrossReload(t *testing.T) {
 	}
 }
 
+// TestSummarizeUsageBucketsAcrossUTCBoundary covers the sqlite-side of
+// the timezone fix: usage rows are written with usageDayString
+// (local-day bucket) and queried with the same function, so a UTC
+// record falling on the previous UTC day is still counted against the
+// local "today" the CLI uses.
+func TestSummarizeUsageBucketsAcrossUTCBoundary(t *testing.T) {
+	originalLocal := time.Local
+	t.Cleanup(func() { time.Local = originalLocal })
+	time.Local = time.FixedZone("CST", 8*3600)
+
+	path := filepath.Join(t.TempDir(), "state", "store.db")
+	st, err := New(path)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	// 2026-05-17 16:30 UTC = 2026-05-18 00:30 +0800 local.
+	recordedUTC := time.Date(2026, 5, 17, 16, 30, 0, 0, time.UTC)
+	if err := st.AppendUsage(model.UsageRecord{
+		Provider: "openai-compatible", Model: "fake",
+		AgentID: "codex", SessionID: "s1",
+		PromptTokens: 30, CompletionTokens: 4,
+		RecordedAt: recordedUTC,
+	}); err != nil {
+		t.Fatalf("AppendUsage() error = %v", err)
+	}
+
+	queryToday := time.Date(2026, 5, 18, 0, 30, 0, 0, time.Local)
+	summary, err := st.SummarizeUsage(queryToday)
+	if err != nil {
+		t.Fatalf("SummarizeUsage(today) error = %v", err)
+	}
+	if summary.Calls != 1 || summary.PromptTokens != 30 || summary.CompletionTokens != 4 {
+		t.Fatalf("today summary = %+v, want 1 call / 30 prompt / 4 completion", summary)
+	}
+
+	queryYesterday := time.Date(2026, 5, 17, 12, 0, 0, 0, time.Local)
+	prev, err := st.SummarizeUsage(queryYesterday)
+	if err != nil {
+		t.Fatalf("SummarizeUsage(yesterday) error = %v", err)
+	}
+	if prev.Calls != 0 {
+		t.Fatalf("yesterday summary should be empty, got %+v", prev)
+	}
+}
+
 func TestOpenWithJSONMigrationImportsLegacyState(t *testing.T) {
 	workDir := t.TempDir()
 	legacyPath := filepath.Join(workDir, "state", "store.json")
@@ -344,5 +391,72 @@ func TestOpenWithJSONMigrationImportsLegacyState(t *testing.T) {
 	}
 	if cursor != "cursor-legacy" {
 		t.Fatalf("cursor = %q, want cursor-legacy", cursor)
+	}
+}
+
+// TestOpenWithJSONMigrationBucketsUsageByLocalDay covers the migration
+// path's share of the timezone fix: appendUsageTx must use
+// usageDayString so that a legacy JSON usage record with UTC RecordedAt
+// is bucketed against the user's local day, matching how
+// `lore usage` (which queries time.Now() in local) will look it up.
+//
+// Without this, an Asia/Shanghai user migrating a legacy JSON store
+// would silently lose usage that straddled UTC midnight from their
+// "today" totals.
+func TestOpenWithJSONMigrationBucketsUsageByLocalDay(t *testing.T) {
+	originalLocal := time.Local
+	t.Cleanup(func() { time.Local = originalLocal })
+	time.Local = time.FixedZone("CST", 8*3600)
+
+	workDir := t.TempDir()
+	legacyPath := filepath.Join(workDir, "state", "store.json")
+	dbPath := filepath.Join(workDir, "state", "store.db")
+
+	// 2026-05-17 16:30 UTC == 2026-05-18 00:30 +0800 local.
+	recordedUTC := time.Date(2026, 5, 17, 16, 30, 0, 0, time.UTC)
+	legacy := legacyJSONState{
+		Usage: []model.UsageRecord{{
+			Provider:         "openai-compatible",
+			Model:            "fake",
+			AgentID:          "codex",
+			SessionID:        "s1",
+			RecordedAt:       recordedUTC,
+			PromptTokens:     30,
+			CompletionTokens: 4,
+		}},
+	}
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data, err := json.MarshalIndent(legacy, "", "  ")
+	if err != nil {
+		t.Fatalf("json.MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(legacyPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy) error = %v", err)
+	}
+
+	st, err := OpenWithJSONMigration(dbPath, legacyPath)
+	if err != nil {
+		t.Fatalf("OpenWithJSONMigration() error = %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	queryToday := time.Date(2026, 5, 18, 0, 30, 0, 0, time.Local)
+	summary, err := st.SummarizeUsage(queryToday)
+	if err != nil {
+		t.Fatalf("SummarizeUsage(today) error = %v", err)
+	}
+	if summary.Calls != 1 || summary.PromptTokens != 30 || summary.CompletionTokens != 4 {
+		t.Fatalf("migrated today summary = %+v, want 1 call / 30 prompt / 4 completion", summary)
+	}
+
+	queryYesterday := time.Date(2026, 5, 17, 12, 0, 0, 0, time.Local)
+	prev, err := st.SummarizeUsage(queryYesterday)
+	if err != nil {
+		t.Fatalf("SummarizeUsage(yesterday) error = %v", err)
+	}
+	if prev.Calls != 0 {
+		t.Fatalf("migrated yesterday summary should be empty, got %+v", prev)
 	}
 }

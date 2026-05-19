@@ -385,7 +385,7 @@ func (s *Store) AppendUsage(record model.UsageRecord) error {
 	_, err = s.db.Exec(
 		`INSERT INTO usage_records (day, recorded_at, prompt_tokens, completion_tokens, payload)
 		 VALUES (?, ?, ?, ?, ?)`,
-		dayString(record.RecordedAt),
+		usageDayString(record.RecordedAt),
 		timeString(record.RecordedAt),
 		record.PromptTokens,
 		record.CompletionTokens,
@@ -395,14 +395,14 @@ func (s *Store) AppendUsage(record model.UsageRecord) error {
 }
 
 func (s *Store) SummarizeUsage(day time.Time) (model.UsageSummary, error) {
-	summary := model.UsageSummary{Day: model.NormalizeDay(day)}
+	summary := model.UsageSummary{Day: model.NormalizeUsageDay(day)}
 	err := s.db.QueryRow(
 		`SELECT COUNT(*),
 		        COALESCE(SUM(prompt_tokens), 0),
 		        COALESCE(SUM(completion_tokens), 0)
 		   FROM usage_records
 		  WHERE day = ?`,
-		dayString(day),
+		usageDayString(day),
 	).Scan(&summary.Calls, &summary.PromptTokens, &summary.CompletionTokens)
 	if err != nil {
 		return model.UsageSummary{}, err
@@ -718,7 +718,7 @@ func appendUsageTx(tx *sql.Tx, record model.UsageRecord) error {
 	_, err = tx.Exec(
 		`INSERT INTO usage_records (day, recorded_at, prompt_tokens, completion_tokens, payload)
 		 VALUES (?, ?, ?, ?, ?)`,
-		dayString(record.RecordedAt),
+		usageDayString(record.RecordedAt),
 		timeString(record.RecordedAt),
 		record.PromptTokens,
 		record.CompletionTokens,
@@ -775,6 +775,16 @@ func reportKey(agentID string, day time.Time) string {
 
 func dayString(value time.Time) string {
 	return model.NormalizeDay(value).Format("2006-01-02")
+}
+
+// usageDayString buckets a usage record (or a SummarizeUsage query
+// argument) into the local calendar day. operatoragent records
+// RecordedAt in UTC while CLI queries arrive in time.Local; if both
+// sides used dayString they would disagree near tz boundaries. Keep
+// process-sink data on dayString -- its Window times are constructed
+// with intentional locations by the codex JSONL importer.
+func usageDayString(value time.Time) string {
+	return model.NormalizeUsageDay(value).Format("2006-01-02")
 }
 
 func timeString(value time.Time) string {

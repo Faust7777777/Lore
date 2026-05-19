@@ -45,3 +45,50 @@ func TestRuntimeRecordUsageEmptyIsNoOp(t *testing.T) {
 		t.Fatalf("RecordUsage(empty) error = %v", err)
 	}
 }
+
+// TestRuntimeSummarizeUsageBucketsAcrossUTCBoundary is the regression
+// reviewer asked for: a UTC RecordedAt that falls on the previous UTC
+// day must still be counted against the local "today" the CLI queries
+// for. Without NormalizeUsageDay this scenario silently dropped the
+// usage near every Asia midnight.
+func TestRuntimeSummarizeUsageBucketsAcrossUTCBoundary(t *testing.T) {
+	originalLocal := time.Local
+	t.Cleanup(func() { time.Local = originalLocal })
+	time.Local = time.FixedZone("CST", 8*3600)
+
+	runtime := &Runtime{Store: memory.New()}
+	// 2026-05-17 16:30 UTC == 2026-05-18 00:30 +0800 local.
+	recordedUTC := time.Date(2026, 5, 17, 16, 30, 0, 0, time.UTC)
+	if err := runtime.RecordUsage([]model.UsageRecord{{
+		Provider: "openai-compatible", Model: "fake",
+		AgentID: "codex", SessionID: "s1",
+		PromptTokens: 30, CompletionTokens: 4,
+		RecordedAt: recordedUTC,
+	}}); err != nil {
+		t.Fatalf("RecordUsage() error = %v", err)
+	}
+
+	// CLI semantics: time.Now() returns local; here a user opens
+	// `lore usage` at 2026-05-18 00:30 local.
+	queryToday := time.Date(2026, 5, 18, 0, 30, 0, 0, time.Local)
+	summary, err := runtime.SummarizeUsage(queryToday)
+	if err != nil {
+		t.Fatalf("SummarizeUsage(today) error = %v", err)
+	}
+	if summary.Calls != 1 || summary.PromptTokens != 30 || summary.CompletionTokens != 4 {
+		t.Fatalf("today summary = %+v, want 1 call / 30 prompt / 4 completion", summary)
+	}
+	if got := summary.Day.In(time.Local).Format("2006-01-02"); got != "2026-05-18" {
+		t.Fatalf("summary.Day = %q, want 2026-05-18 local", got)
+	}
+
+	// A query for the previous local day must miss the record.
+	queryYesterday := time.Date(2026, 5, 17, 12, 0, 0, 0, time.Local)
+	prev, err := runtime.SummarizeUsage(queryYesterday)
+	if err != nil {
+		t.Fatalf("SummarizeUsage(yesterday) error = %v", err)
+	}
+	if prev.Calls != 0 {
+		t.Fatalf("yesterday summary should be empty, got %+v", prev)
+	}
+}

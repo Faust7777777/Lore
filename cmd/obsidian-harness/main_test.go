@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,9 +14,25 @@ import (
 
 	"obsidian-harness/internal/app"
 	"obsidian-harness/internal/config/configtest"
+	"obsidian-harness/internal/console"
+	openai "obsidian-harness/internal/llm/openai"
 	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/operatoragent"
 	"obsidian-harness/internal/vault"
 )
+
+// failingTurnClient is the minimal completionClient that returns one
+// scripted ChatCompletion response (with non-zero tokens) and then a
+// malformed loop envelope. operatoragent's Respond will treat this as
+// a billed-but-failed turn and surface a *UsageError, which console.
+// Session.Handle persists best-effort into the store.
+type failingTurnClient struct {
+	resp openai.ChatCompletionResponse
+}
+
+func (f *failingTurnClient) ChatCompletion(_ context.Context, _ openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
+	return f.resp, nil
+}
 
 func clearOperatorEnv(t *testing.T) {
 	t.Helper()
@@ -1304,6 +1321,60 @@ func TestRunStatusAppendsTodayUsageWhenRecorded(t *testing.T) {
 	for _, want := range []string{"Managed Status", "Today Usage", "1 calls / 30 prompt + 4 completion = 34 tokens"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("status output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunUsageCLIReadsFailedTurnUsageEndToEnd(t *testing.T) {
+	clearOperatorEnv(t)
+	workDir := t.TempDir()
+
+	// Phase 1: open a real runtime, drive one billed-but-failed turn
+	// through a real Session, then close so the sqlite store flushes
+	// before the CLI re-opens it.
+	{
+		runtime, err := app.OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
+		if err != nil {
+			t.Fatalf("OpenRuntime() error = %v", err)
+		}
+		if _, err := runtime.Bootstrap(time.Now()); err != nil {
+			runtime.Close()
+			t.Fatalf("Bootstrap() error = %v", err)
+		}
+		client := &failingTurnClient{
+			resp: openai.ChatCompletionResponse{
+				Content:          `not a json loop envelope`,
+				PromptTokens:     42,
+				CompletionTokens: 9,
+			},
+		}
+		agent := operatoragent.NewModelAgent(client, "openai-compatible", "fake-model")
+		session := console.NewSessionWithAgent("test", agent)
+		session.DefaultAgentID = "codex"
+		session.Now = func() time.Time { return time.Now() }
+		if _, err := session.Handle("ask one", runtime); err == nil {
+			runtime.Close()
+			t.Fatal("Session.Handle() error = nil, want billed parse failure")
+		}
+		if err := runtime.Close(); err != nil {
+			t.Fatalf("runtime.Close() error = %v", err)
+		}
+	}
+
+	// Phase 2: invoke `lore usage <workDir>` and confirm the CLI
+	// surfaces the cost of the failed turn.
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"usage", workDir}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit = %d, stderr = %q", exitCode, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Window: today",
+		"Total: 1 calls / 42 prompt + 9 completion = 51 tokens",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("usage output missing %q:\n%s", want, output)
 		}
 	}
 }
