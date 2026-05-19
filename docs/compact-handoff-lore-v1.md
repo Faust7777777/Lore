@@ -61,10 +61,10 @@ Optional background:
 
 MCP surface:
 
-- `internal/mcp/tool_contract.go`
-  Canonical live MCP tool contracts. Current live tools are read tools plus proposal-intake tools such as `persona_update_propose` and `markdown_note_propose`.
+- `internal/tools/`
+  Canonical ToolRegistry source for live MCP schema and dispatch. Current live MCP tools are read tools plus proposal-intake tools such as `persona_update_propose` and `markdown_note_propose`.
 - `internal/mcp/server.go`
-  MCP server. `tools/call` routes proposal-intake tools to the orchestrator.
+  MCP server. `tools/list` and `tools/call` are derived from the registry; there is no separate `internal/mcp/tool_contract.go` fallback.
 - `internal/mcp/server_test.go`
   Important test: `TestMCPV1ExposesOnlyReadAndProposalTools` locks MCP to read tools + narrow proposal intake. This prevents accidental shell/generic write/apply exposure.
 

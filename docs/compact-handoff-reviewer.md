@@ -258,7 +258,8 @@ Relevant files:
 - `sdk/go/lore/README.md`
 - `sdk/go/lore/boundary_test.go`
 - `docs/contracts/mcp-sdk-tools-v0.json`
-- `internal/mcp/tool_contract.go`
+- `internal/tools/`
+- `internal/mcp/server.go`
 - `internal/mcp/server_test.go`
 
 Relevant commits mentioned:
@@ -514,7 +515,7 @@ Start here:
 3. `docs/plans/2026-04-28-external-agent-governed-intake.md`
 4. `docs/adr-lore-v1-architecture.md`
 5. `docs/integrations/mcp-client-setup.md`
-6. `internal/mcp/tool_contract.go`
+6. `internal/tools/`
 7. `internal/mcp/server.go`
 8. `internal/mcp/server_test.go`
 9. `internal/orchestrator/harness.go`
