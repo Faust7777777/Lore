@@ -300,6 +300,64 @@ After B1 lands, the user decides which of B3-B6 follow and whether B5
 (recovery) is needed or if existing repeat-protection plus the audit
 findings already cover the gap.
 
+## Closeout (2026-05-19)
+
+The Task/Turn backbone is sealed at commit `cc17fea` (B8a). Shipped
+slices: B0 / B1 / B2 / B3 / B4 / B6 / B8a. The remaining items are
+NOT being executed by B and require a concrete trigger before opening.
+
+### B5 -- bounded recovery (deferred)
+
+Trigger: real-model failure samples showing the agent burning loop
+budget on path guesses despite the B3 prompt + tool description
+guidance. Existing `hasRepeatedToolLoop` (threshold 3) and
+`hasPingPongToolLoop` already cover obvious thrash. Do not open
+without a concrete failing transcript in hand.
+
+### B7 -- `lore sessions show <id> --trace` (deferred)
+
+Trigger: B8b lands first. Without persisted Steps the command can
+only render tool names + arguments, which is the exact gap reviewer
+flagged in B7's original scoping ("看不到读到了什么"). Skip until
+B8b makes the data available.
+
+### B8b -- sessionlog persistence of Steps (deferred)
+
+Trigger: TUI or A line explicitly needs **historical** turn replay
+(scroll-back on stored sessions, cross-session audit). Live in-turn
+rendering is already served by `Response.Steps` and does not need
+this slice.
+
+Design committed if and when opened: a single per-turn summary event,
+not per-step events.
+
+```
+event: task_turn_steps
+stop_reason: ...
+step_count:  N
+steps: [ { index, tool, arguments, status, observation_excerpt, error }, ... ]
+```
+
+Rationale: one event per turn keeps history replay coherent and
+avoids fragmenting per-step JSONL lines that downstream readers
+would need to re-correlate. Reuse the same Slice 3 backward
+compatibility trick (omitempty fields on `Event`, unknown event
+types fall-through in `applyEvent`).
+
+### Consumer handoff
+
+- **TUI line** consumes `operatoragent.Response.Steps` directly.
+  Render in-turn progress (Tool / Arguments / Status /
+  ObservationExcerpt / Error). Do not re-truncate -- the excerpt is
+  already capped at 1024 bytes with a marker. Do not restore Latest
+  Output. Do not attempt live streaming -- Respond returns when the
+  turn is done; render the full Steps then.
+- **A line** activates the existing skipped e2e scaffold and wires
+  it into the PR gate using `Response.StopReason == "final"` as the
+  primary health check. Fake-LLM patterns to copy:
+  `internal/console/session_file_inspection_e2e_test.go` and
+  `session_usage_e2e_test.go`.
+
 ## Hard rules
 
 - B never edits TUI files. If a feature needs TUI render changes, B
