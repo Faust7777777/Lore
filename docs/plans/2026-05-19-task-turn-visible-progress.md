@@ -114,12 +114,12 @@ Acceptance rules:
 
 ### A2: Deterministic E2E
 
-Current scaffold:
+Status: implemented and wired into the release gate.
 
 - `cmd/obsidian-harness/main_test.go`
 - `TestRunTUIOnceShowsResolveReadFinalTaskVisibility`
-- The test is intentionally skipped until B/TUI exposes stable task-step
-  rendering with observation excerpts.
+- The test is active. It uses the fake model provider and does not require a
+  real model in PR gate.
 
 The fake-model e2e drives a fixed sequence:
 
@@ -136,26 +136,25 @@ Assertions:
 - visible output includes the final answer;
 - non-error `lastOutput` is still not rendered as the old `Latest Output`.
 
-Suggested placement:
+Placement:
 
-- command-level or workbench-level test under `cmd/obsidian-harness` or
-  `internal/cli`;
+- command-level test under `cmd/obsidian-harness`;
 - no real model dependency in PR gate.
 
-Activation checklist:
+Completed activation checklist:
 
-- remove the `t.Skip(...)` from
+- removed the `t.Skip(...)` from
   `TestRunTUIOnceShowsResolveReadFinalTaskVisibility`;
-- update expected labels if the final UI uses `Task Steps` instead of the
+- updated expected labels to `Task Steps` instead of the
   legacy `Tool Trace` label;
-- assert that output includes a bounded observation excerpt, not just tool
+- asserted that output includes a bounded observation excerpt, not just tool
   names and arguments;
-- run the test without a real model provider;
-- only then wire the test into `scripts/release-gate.ps1` PR gate.
+- ran the test without a real model provider;
+- wired the test into `scripts/release-gate.ps1` PR gate.
 
 ### A3: Release-Gate Integration
 
-After B and TUI slices land:
+Status: implemented for the deterministic fake-model scenario.
 
 - PR gate runs the deterministic fake-model scenario.
 - Full gate may run a real-model smoke only on `push main` or
@@ -268,10 +267,10 @@ Forbidden in TUI line:
 
 ## Recommended Order
 
-1. B line lands turn-step / observation excerpt backend data.
-2. TUI line renders post-turn task timeline from that data.
+1. B line lands turn-step / observation excerpt backend data. Done.
+2. TUI line renders post-turn task timeline from that data. Done.
 3. A line activates the existing deterministic fake-model e2e scaffold and
-   wires it into the PR release gate.
+   wires it into the PR release gate. Done.
 4. Optional later work: live streaming progress events.
 
 Do not start with live streaming. Post-turn visibility solves the immediate
