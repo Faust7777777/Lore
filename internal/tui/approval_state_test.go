@@ -11,9 +11,9 @@ import (
 
 // approvalDriverStub tracks actions and returns deterministic results.
 type approvalDriverStub struct {
-	drafts    []model.Draft
-	actions   []string
-	lastID    string
+	drafts  []model.Draft
+	actions []string
+	lastID  string
 }
 
 func (d *approvalDriverStub) Load(lastOutput string) (WorkbenchViewModel, error) {

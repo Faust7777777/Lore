@@ -75,7 +75,7 @@ func TestRenderInteractiveConversationRendersAllTurns(t *testing.T) {
 
 func TestRenderInteractiveConversationShowsTaskSteps(t *testing.T) {
 	vm := WorkbenchViewModel{
-		TurnSteps: []TurnStep{
+		TurnSteps: []operatoragent.TurnStep{
 			{Index: 1, Tool: "managed_status", Status: "ok"},
 			{Index: 2, Tool: "vault_read", Status: "error", Error: "not found"},
 		},
@@ -97,7 +97,7 @@ func TestRenderInteractiveConversationShowsTaskSteps(t *testing.T) {
 
 func TestRenderTaskStepsArgSummary(t *testing.T) {
 	vm := WorkbenchViewModel{
-		TurnSteps: []TurnStep{
+		TurnSteps: []operatoragent.TurnStep{
 			{Index: 1, Tool: "vault_resolve", Status: "ok", Arguments: map[string]any{"query": "人物背景"}},
 			{Index: 2, Tool: "vault_read", Status: "ok", Arguments: map[string]any{"path": "03-画像/人物画像.md"}},
 		},
@@ -114,7 +114,7 @@ func TestRenderTaskStepsArgSummary(t *testing.T) {
 func TestRenderTaskStepsTruncatesObservation(t *testing.T) {
 	longObs := strings.Repeat("abcdefghij", 20) // 200 chars
 	vm := WorkbenchViewModel{
-		TurnSteps: []TurnStep{
+		TurnSteps: []operatoragent.TurnStep{
 			{Index: 1, Tool: "vault_read", Status: "ok", ObservationExcerpt: longObs, Arguments: map[string]any{"path": "x.md"}},
 		},
 	}
@@ -128,7 +128,7 @@ func TestRenderTaskStepsTruncatesObservation(t *testing.T) {
 	for _, line := range lines {
 		if strings.Contains(line, "obs:") {
 			found = true
-			if len(line) > 200 {
+			if len(line) > 250 {
 				t.Errorf("observation line too long (%d chars): %q", len(line), line)
 			}
 		}
@@ -140,7 +140,7 @@ func TestRenderTaskStepsTruncatesObservation(t *testing.T) {
 
 func TestRenderTaskStepsErrorStep(t *testing.T) {
 	vm := WorkbenchViewModel{
-		TurnSteps: []TurnStep{
+		TurnSteps: []operatoragent.TurnStep{
 			{Index: 1, Tool: "vault_read", Status: "error", Error: "file not found", Arguments: map[string]any{"path": "missing.md"}},
 		},
 	}
@@ -155,7 +155,7 @@ func TestRenderTaskStepsErrorStep(t *testing.T) {
 
 func TestRenderTaskStepsNonErrorLastOutputNotShown(t *testing.T) {
 	vm := WorkbenchViewModel{
-		TurnSteps: []TurnStep{
+		TurnSteps: []operatoragent.TurnStep{
 			{Index: 1, Tool: "managed_status", Status: "ok"},
 		},
 	}
@@ -166,6 +166,47 @@ func TestRenderTaskStepsNonErrorLastOutputNotShown(t *testing.T) {
 	}
 	if !strings.Contains(result, "Task Steps") {
 		t.Errorf("task steps should still render, got: %q", result)
+	}
+}
+
+func TestRenderTaskStepsWithObservation(t *testing.T) {
+	vm := WorkbenchViewModel{
+		TurnSteps: []operatoragent.TurnStep{
+			{Index: 1, Tool: "vault_read", Status: "ok", ObservationExcerpt: "# 人物背景\n\n- 海边自习\n- 电子商务", Arguments: map[string]any{"path": "03-画像/人物背景.md"}},
+		},
+	}
+	result := renderInteractiveConversation(vm, "", false, "", 80)
+	if !strings.Contains(result, "obs:") {
+		t.Errorf("should show observation label, got: %q", result)
+	}
+	if !strings.Contains(result, "人物背景") {
+		t.Errorf("observation should contain content, got: %q", result)
+	}
+}
+
+func TestRenderTaskStepsTruncatedMarker(t *testing.T) {
+	longObs := "# Long Doc\n\n" + strings.Repeat("paragraph text here. ", 50) + "\n[truncated 2048 bytes]"
+	vm := WorkbenchViewModel{
+		TurnSteps: []operatoragent.TurnStep{
+			{Index: 1, Tool: "vault_read", Status: "ok", ObservationExcerpt: longObs, Arguments: map[string]any{"path": "long.md"}},
+		},
+	}
+	result := renderInteractiveConversation(vm, "", false, "", 80)
+	if !strings.Contains(result, "obs:") {
+		t.Errorf("should show observation, got: %q", result)
+	}
+	if !strings.Contains(result, "truncated") {
+		t.Errorf("truncated marker should be preserved, got: %q", result)
+	}
+}
+
+func TestRenderTaskStepsEmptyNoRender(t *testing.T) {
+	vm := WorkbenchViewModel{
+		TurnSteps: nil,
+	}
+	result := renderInteractiveConversation(vm, "", false, "", 80)
+	if strings.Contains(result, "Task Steps") {
+		t.Errorf("empty TurnSteps should not render Task Steps block, got: %q", result)
 	}
 }
 

@@ -19,21 +19,10 @@ type WorkbenchViewModel struct {
 	ProcessSink   app.ProcessSinkDayView
 	Findings      []model.Finding
 	ToolTrace     []operatoragent.ToolCallTrace
-	TurnSteps     []TurnStep
+	TurnSteps     []operatoragent.TurnStep
 	Conversation  WorkbenchConversation
 	QuickActions  []string
 	Controls      []string
-}
-
-// TurnStep represents one tool call step within the last agent turn,
-// built from ToolCallTrace for timeline rendering in the TUI.
-type TurnStep struct {
-	Index              int
-	Tool               string
-	Status             string
-	ObservationExcerpt string
-	Error              string
-	Arguments          map[string]any
 }
 
 type WorkbenchHeader struct {
@@ -67,7 +56,7 @@ type WorkbenchConversation struct {
 	LastOutput string
 }
 
-func NewWorkbenchViewModel(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, findings []model.Finding, toolTrace []operatoragent.ToolCallTrace, history []operatoragent.ConversationTurn, localExec bool, shellEnabled bool, lastOutput string, sessionID string, transcriptPath string) WorkbenchViewModel {
+func NewWorkbenchViewModel(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, findings []model.Finding, turnSteps []operatoragent.TurnStep, toolTrace []operatoragent.ToolCallTrace, history []operatoragent.ConversationTurn, localExec bool, shellEnabled bool, lastOutput string, sessionID string, transcriptPath string) WorkbenchViewModel {
 	pendingDrafts := filterDraftsByStates(drafts, model.DraftPendingReview, model.DraftApproved)
 	dailyReportPath := "missing"
 	if processSink.Report != nil {
@@ -105,7 +94,7 @@ func NewWorkbenchViewModel(version string, managed model.ManagedStatusView, draf
 		ProcessSink:   processSink,
 		Findings:      append([]model.Finding(nil), findings...),
 		ToolTrace:     append([]operatoragent.ToolCallTrace(nil), toolTrace...),
-		TurnSteps:     buildTurnSteps(toolTrace),
+		TurnSteps:     operatoragent.CloneTurnSteps(turnSteps),
 		Conversation: WorkbenchConversation{
 			Turns:      append([]operatoragent.ConversationTurn(nil), history...),
 			LastOutput: strings.TrimSpace(lastOutput),
@@ -120,24 +109,6 @@ func NewWorkbenchViewModel(version string, managed model.ManagedStatusView, draf
 
 func (s WorkbenchSnapshot) DraftSummary() string {
 	return fmt.Sprintf("%d reviewable / %d total", s.PendingDrafts, s.TotalDrafts)
-}
-
-func buildTurnSteps(trace []operatoragent.ToolCallTrace) []TurnStep {
-	if len(trace) == 0 {
-		return nil
-	}
-	steps := make([]TurnStep, len(trace))
-	for i, tc := range trace {
-		steps[i] = TurnStep{
-			Index:     i + 1,
-			Tool:      tc.Name,
-			Status:    tc.Status,
-			Error:     tc.Error,
-			Arguments: tc.Arguments,
-			// ObservationExcerpt left empty until B-line populates ToolCallTrace with tool result
-		}
-	}
-	return steps
 }
 
 // stepArgSummary returns a human-readable one-line summary of key arguments

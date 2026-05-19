@@ -56,6 +56,7 @@ func loadWorkbenchViewModel(version string, runtime console.Runtime, session *co
 		processSink,
 		focusedReview,
 		findings,
+		session.LastTurnSteps,
 		session.LastToolTrace,
 		session.History,
 		localExec,

@@ -11,7 +11,7 @@ import (
 )
 
 func RenderWorkbench(version string, managed model.ManagedStatusView, drafts []model.Draft, processSink app.ProcessSinkDayView, focusedReview *app.DraftReview, toolTrace []operatoragent.ToolCallTrace, history []operatoragent.ConversationTurn, localExec bool, shellEnabled bool, lastOutput string) string {
-	viewModel := NewWorkbenchViewModel(version, managed, drafts, processSink, focusedReview, nil, toolTrace, history, localExec, shellEnabled, lastOutput, "", "")
+	viewModel := NewWorkbenchViewModel(version, managed, drafts, processSink, focusedReview, nil, nil, toolTrace, history, localExec, shellEnabled, lastOutput, "", "")
 	return RenderWorkbenchViewModel(viewModel)
 }
 
@@ -138,7 +138,7 @@ func renderProcessSinkSection(builder *strings.Builder, processSink app.ProcessS
 	}
 }
 
-func renderTaskStepsSection(builder *strings.Builder, steps []TurnStep) {
+func renderTaskStepsSection(builder *strings.Builder, steps []operatoragent.TurnStep) {
 	builder.WriteString("\nTask Steps\n")
 	builder.WriteString("----------\n")
 	if len(steps) == 0 {
