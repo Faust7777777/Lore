@@ -32,6 +32,7 @@ Explicitly out of scope:
 3c9185d ci: assert release gate worktree cleanliness
 39430dd test: fix tui approval driver stub
 d3d84be test: avoid masking release gate failures
+da78475 test: let sdk e2e use path go fallback
 ```
 
 ## What changed
@@ -82,6 +83,14 @@ Both scripts now avoid accidental SDK E2E execution from inherited shell env:
 
 A clean worktree run exposed a compile failure in `internal/tui/approval_state_test.go`: the test stub missed `ExecuteFindingAction` after the driver interface grew. Fixed by adding a minimal test-only stub method. No production TUI behavior changed.
 
+### 6. SDK E2E Go fallback fixed
+
+Manual E2E workflow uses `actions/setup-go`, which provides `go` on PATH but
+does not create `.tools/go/bin/go.exe`. `TestSDKEndToEndWithLoreMCP` now uses
+repo-local `.tools/go` when present and falls back to `exec.LookPath("go")`.
+This keeps local portable-toolchain behavior while unblocking GitHub manual
+E2E runs.
+
 ## Verification performed
 
 ### Dirty collaborative worktree
@@ -123,6 +132,18 @@ git worktree remove --force <temp>
 Both clean-worktree gates passed.
 
 The clean full gate was re-run after `d3d84be`; it still passed.
+
+SDK E2E fallback was verified with:
+
+```powershell
+Push-Location .\sdk\go\lore
+$env:LORE_SDK_E2E='1'
+go test ./... -run TestSDKEndToEndWithLoreMCP -count=1 -v
+Remove-Item Env:LORE_SDK_E2E
+Pop-Location
+```
+
+The E2E test passed.
 
 ## Current working tree note
 
