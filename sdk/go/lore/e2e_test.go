@@ -24,10 +24,21 @@ func TestSDKEndToEndWithLoreMCP(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		binPath += ".exe"
 	}
+	goBin := filepath.Join(repoRoot, ".tools", "go", "bin", goExeName())
+	if _, err := os.Stat(goBin); err != nil {
+		if !os.IsNotExist(err) {
+			t.Fatalf("stat local go toolchain: %v", err)
+		}
+		resolved, err := exec.LookPath(goExeName())
+		if err != nil {
+			t.Fatalf("go toolchain not found at %s and %s is not on PATH", goBin, goExeName())
+		}
+		goBin = resolved
+	}
 
 	buildCtx, buildCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer buildCancel()
-	build := exec.CommandContext(buildCtx, filepath.Join(repoRoot, ".tools", "go", "bin", goExeName()), "build", "-o", binPath, "./cmd/lore")
+	build := exec.CommandContext(buildCtx, goBin, "build", "-o", binPath, "./cmd/lore")
 	build.Dir = repoRoot
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build lore: %v\n%s", err, string(output))
