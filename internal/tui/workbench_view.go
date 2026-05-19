@@ -164,8 +164,7 @@ func renderTaskStepsSection(builder *strings.Builder, steps []operatoragent.Turn
 		builder.WriteString("\n")
 
 		if step.ObservationExcerpt != "" {
-			excerpt := oneLine(step.ObservationExcerpt, 100)
-			fmt.Fprintf(builder, "     obs: %s\n", excerpt)
+			fmt.Fprintf(builder, "     obs: %s\n", renderObservationExcerpt(step.ObservationExcerpt, 100))
 		}
 		if step.Error != "" {
 			fmt.Fprintf(builder, "     err: %s\n", oneLine(step.Error, 100))

@@ -210,6 +210,31 @@ func TestRenderTaskStepsEmptyNoRender(t *testing.T) {
 	}
 }
 
+func TestRenderObservationExcerptRuneSafe(t *testing.T) {
+	// CJK characters: each rune is 3 bytes, must not cut mid-rune
+	cjk := strings.Repeat("人物背景画像", 10) // 40 runes, 120 bytes
+	result := renderObservationExcerpt(cjk, 20)
+	runes := []rune(result)
+	if len(runes) > 23 { // 20 + "..." = 23 max
+		t.Fatalf("result has %d runes, expected <= 23: %q", len(runes), result)
+	}
+	// Should end with "..."
+	if !strings.HasSuffix(result, "...") {
+		t.Fatalf("should end with ..., got: %q", result)
+	}
+}
+
+func TestRenderObservationExcerptPreservesTruncatedMarker(t *testing.T) {
+	text := strings.Repeat("abcdefghij", 30) + " [truncated 2048 bytes]"
+	result := renderObservationExcerpt(text, 50)
+	if !strings.Contains(result, "[truncated 2048 bytes]") {
+		t.Fatalf("marker should be preserved, got: %q", result)
+	}
+	if !strings.Contains(result, "...") {
+		t.Fatalf("should have ellipsis, got: %q", result)
+	}
+}
+
 func TestRenderInteractiveConversationRunningState(t *testing.T) {
 	vm := WorkbenchViewModel{}
 	result := renderInteractiveConversation(vm, "", true, "show status", 80)

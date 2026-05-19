@@ -168,24 +168,25 @@ func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput stri
 }
 
 // renderObservationExcerpt flattens a multi-line observation into a single
-// display line, capped at maxBytes. If the original text contains a
-// "[truncated ...]" marker (placed by B-line), the marker is preserved
-// even when the preceding content must be cut.
-func renderObservationExcerpt(text string, maxBytes int) string {
+// display line, capped at maxRunes runes (not bytes). If the original text
+// contains a "[truncated ...]" marker (placed by B-line), the marker is
+// preserved even when the preceding content must be cut.
+func renderObservationExcerpt(text string, maxRunes int) string {
 	flat := strings.ReplaceAll(text, "\n", " ")
 	flat = strings.TrimSpace(flat)
-	if len(flat) <= maxBytes {
+	runes := []rune(flat)
+	if len(runes) <= maxRunes {
 		return flat
 	}
 	// Check for truncated marker from B-line
 	if idx := strings.LastIndex(flat, "[truncated"); idx > 0 {
-		marker := flat[idx:]
-		headroom := maxBytes - len(marker) - 4 // "..." + space
+		markerRunes := []rune(flat[idx:])
+		headroom := maxRunes - len(markerRunes) - 4 // "..." + space
 		if headroom > 20 {
-			return flat[:headroom] + "... " + marker
+			return string(runes[:headroom]) + "... " + string(markerRunes)
 		}
 	}
-	return flat[:maxBytes-3] + "..."
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
