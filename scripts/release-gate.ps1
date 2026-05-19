@@ -68,6 +68,33 @@ function Invoke-GoGate {
     }
 }
 
+function Invoke-GoModuleGate {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Label,
+        [Parameter(Mandatory = $true)]
+        [string]$ModulePath
+    )
+
+    for ($i = 1; $i -le $Repeat; $i++) {
+        $suffix = ""
+        if ($Repeat -gt 1) {
+            $suffix = " ($i/$Repeat)"
+        }
+        Push-Location (Join-Path $RepoRoot $ModulePath)
+        try {
+            Invoke-NativeChecked -Label "$Label$suffix" -FilePath $Go -Arguments @(
+                "test",
+                "./...",
+                "-count=1",
+                "-v"
+            )
+        } finally {
+            Pop-Location
+        }
+    }
+}
+
 Push-Location $RepoRoot
 try {
     if (-not $SkipDiffCheck) {
@@ -98,6 +125,10 @@ try {
         -Label "preferred lore CLI wrapper guardrails" `
         -Package "./cmd/lore" `
         -Run "TestRunVersion$"
+
+    Invoke-GoModuleGate `
+        -Label "Go SDK v0 contract and transport guardrails" `
+        -ModulePath "sdk\go\lore"
 
     Invoke-GoGate `
         -Label "console resolve-read-final and task-turn guardrails" `
