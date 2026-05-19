@@ -753,6 +753,259 @@ func TestModelAgentRespondStopReasonModelErrorWhenChatCompletionFails(t *testing
 	}
 }
 
+func TestModelAgentRespondAppendsTurnStepPerToolCall(t *testing.T) {
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{Content: `{"type":"tool_call","tool":"vault_resolve","arguments":{"query":"target"}}`},
+			{Content: `{"type":"tool_call","tool":"vault_read","arguments":{"path":"03-notes/target.md"}}`},
+			{Content: `{"type":"final","message":"explained onboarding"}`},
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{
+			{Name: "vault_resolve", Description: "x"},
+			{Name: "vault_read", Description: "y"},
+		},
+		results: map[string]ToolResult{
+			"vault_resolve": {Content: `{"status":"unique","selected_path":"03-notes/target.md"}`},
+			"vault_read":    {Content: "# Target\n\nproject onboarding notes\n"},
+		},
+	}
+
+	response, err := agent.Respond("inspect target", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if len(response.Steps) != 2 {
+		t.Fatalf("len(Steps) = %d, want 2; steps = %+v", len(response.Steps), response.Steps)
+	}
+	if response.Steps[0].Index != 1 || response.Steps[1].Index != 2 {
+		t.Fatalf("step indexes = %d / %d, want 1 / 2", response.Steps[0].Index, response.Steps[1].Index)
+	}
+	if response.Steps[0].Tool != "vault_resolve" || response.Steps[1].Tool != "vault_read" {
+		t.Fatalf("step tools = %q / %q, want vault_resolve / vault_read",
+			response.Steps[0].Tool, response.Steps[1].Tool)
+	}
+	if response.Steps[0].Status != "ok" || response.Steps[1].Status != "ok" {
+		t.Fatalf("step statuses = %q / %q, want ok / ok",
+			response.Steps[0].Status, response.Steps[1].Status)
+	}
+	if response.Steps[0].Arguments["query"] != "target" {
+		t.Fatalf("step[0] args = %+v, want query=target", response.Steps[0].Arguments)
+	}
+	if response.Steps[1].Arguments["path"] != "03-notes/target.md" {
+		t.Fatalf("step[1] args = %+v, want path=03-notes/target.md", response.Steps[1].Arguments)
+	}
+	if !strings.Contains(response.Steps[1].ObservationExcerpt, "project onboarding") {
+		t.Fatalf("step[1] excerpt = %q, want file content snippet", response.Steps[1].ObservationExcerpt)
+	}
+	// Existing ToolCallTrace behaviour must be preserved verbatim.
+	if len(response.Trace) != 2 || response.Trace[0].Name != "vault_resolve" || response.Trace[1].Name != "vault_read" {
+		t.Fatalf("trace = %+v, want unchanged 2 entries vault_resolve then vault_read", response.Trace)
+	}
+}
+
+func TestModelAgentRespondTurnStepTruncatesLongObservation(t *testing.T) {
+	bigBody := strings.Repeat("x", maxObservationExcerptBytes*2)
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{Content: `{"type":"tool_call","tool":"vault_read","arguments":{"path":"big.md"}}`},
+			{Content: `{"type":"final","message":"ok"}`},
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools:   []ToolDefinition{{Name: "vault_read", Description: "y"}},
+		results: map[string]ToolResult{"vault_read": {Content: bigBody}},
+	}
+
+	response, err := agent.Respond("read big", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if len(response.Steps) != 1 {
+		t.Fatalf("len(Steps) = %d, want 1", len(response.Steps))
+	}
+	excerpt := response.Steps[0].ObservationExcerpt
+	if len(excerpt) >= len(bigBody) {
+		t.Fatalf("excerpt length = %d, want strictly less than original %d", len(excerpt), len(bigBody))
+	}
+	if !strings.Contains(excerpt, "truncated") {
+		t.Fatalf("excerpt missing truncation marker; got %q", oneLine(excerpt, 120))
+	}
+}
+
+func TestModelAgentRespondTurnStepRedactsBinaryObservation(t *testing.T) {
+	binary := string([]byte{0xff, 0xfe, 0xfd, 0xfc, 0xff})
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{Content: `{"type":"tool_call","tool":"vault_read","arguments":{"path":"bin.md"}}`},
+			{Content: `{"type":"final","message":"ok"}`},
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools:   []ToolDefinition{{Name: "vault_read", Description: "y"}},
+		results: map[string]ToolResult{"vault_read": {Content: binary}},
+	}
+
+	response, err := agent.Respond("read bin", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if len(response.Steps) != 1 {
+		t.Fatalf("len(Steps) = %d, want 1", len(response.Steps))
+	}
+	if response.Steps[0].ObservationExcerpt != "(binary content omitted)" {
+		t.Fatalf("excerpt = %q, want binary marker", response.Steps[0].ObservationExcerpt)
+	}
+}
+
+func TestModelAgentRespondTurnStepCapturesToolError(t *testing.T) {
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{Content: `{"type":"tool_call","tool":"vault_read","arguments":{"path":"missing.md"}}`},
+			{Content: `{"type":"final","message":"file not found"}`},
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools:   []ToolDefinition{{Name: "vault_read", Description: "y"}},
+		callErr: errors.New("vault_read: not found"),
+	}
+
+	response, err := agent.Respond("read missing", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if len(response.Steps) != 1 {
+		t.Fatalf("len(Steps) = %d, want 1", len(response.Steps))
+	}
+	step := response.Steps[0]
+	if step.Status != "error" {
+		t.Fatalf("step status = %q, want error", step.Status)
+	}
+	if !strings.Contains(step.Error, "not found") {
+		t.Fatalf("step.Error = %q, want substring 'not found'", step.Error)
+	}
+}
+
+func TestModelAgentRespondTurnStepsCarriedThroughUsageError(t *testing.T) {
+	// Tool call succeeds, then parse failure surfaces *UsageError.
+	// Steps captured before the failure must still ride out.
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{Content: `{"type":"tool_call","tool":"vault_resolve","arguments":{"query":"target"}}`, PromptTokens: 3, CompletionTokens: 1},
+			{Content: `definitely not json`, PromptTokens: 4, CompletionTokens: 1},
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools:   []ToolDefinition{{Name: "vault_resolve", Description: "x"}},
+		results: map[string]ToolResult{"vault_resolve": {Content: `{"status":"unique","selected_path":"03-notes/target.md"}`}},
+	}
+
+	response, err := agent.Respond("inspect target", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err == nil {
+		t.Fatal("Respond() error = nil, want parse failure")
+	}
+	var usageErr *UsageError
+	if !errors.As(err, &usageErr) {
+		t.Fatalf("error chain missing *UsageError; got %T %v", err, err)
+	}
+	if len(response.Steps) != 1 || response.Steps[0].Tool != "vault_resolve" {
+		t.Fatalf("response.Steps = %+v, want one vault_resolve entry preserved through failure", response.Steps)
+	}
+	if response.Steps[0].Index != 1 {
+		t.Fatalf("response.Steps[0].Index = %d, want 1", response.Steps[0].Index)
+	}
+}
+
+func TestCloneTurnStepsDeepCopiesArguments(t *testing.T) {
+	source := []TurnStep{
+		{
+			Index:     1,
+			Tool:      "vault_resolve",
+			Arguments: map[string]any{"query": "target", "limit": 5},
+			Status:    "ok",
+		},
+		{
+			Index:     2,
+			Tool:      "vault_read",
+			Arguments: map[string]any{"path": "03-notes/target.md"},
+			Status:    "ok",
+		},
+	}
+
+	clone := cloneTurnSteps(source)
+	if len(clone) != len(source) {
+		t.Fatalf("clone length = %d, want %d", len(clone), len(source))
+	}
+
+	// Mutating a clone's Arguments must not leak into the source. If
+	// the helper only did a shallow slice copy the underlying map
+	// would be shared and this assertion would fail.
+	clone[0].Arguments["query"] = "mutated"
+	if source[0].Arguments["query"] != "target" {
+		t.Fatalf("clone mutation leaked into source: source[0].Arguments = %+v", source[0].Arguments)
+	}
+
+	// Producing two snapshots from the same source must also keep
+	// them independent: mutating one snapshot must not change the
+	// other.
+	a := cloneTurnSteps(source)
+	b := cloneTurnSteps(source)
+	a[1].Arguments["path"] = "tampered.md"
+	if b[1].Arguments["path"] != "03-notes/target.md" {
+		t.Fatalf("sibling snapshot mutated: b[1].Arguments = %+v", b[1].Arguments)
+	}
+	if source[1].Arguments["path"] != "03-notes/target.md" {
+		t.Fatalf("sibling snapshot mutation leaked into source: source[1].Arguments = %+v", source[1].Arguments)
+	}
+}
+
+func TestModelAgentRespondStepsAreIsolatedFromTraceAndOtherSnapshots(t *testing.T) {
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{Content: `{"type":"tool_call","tool":"vault_resolve","arguments":{"query":"target"}}`},
+			{Content: `{"type":"final","message":"done"}`},
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools:   []ToolDefinition{{Name: "vault_resolve", Description: "x"}},
+		results: map[string]ToolResult{"vault_resolve": {Content: `{"status":"unique","selected_path":"x.md"}`}},
+	}
+
+	response, err := agent.Respond("inspect target", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if len(response.Steps) != 1 || len(response.Trace) != 1 {
+		t.Fatalf("expected one step and one trace entry; got %d / %d", len(response.Steps), len(response.Trace))
+	}
+
+	// Mutating a returned Step's Arguments must not affect the
+	// parallel ToolCallTrace snapshot of the same call.
+	response.Steps[0].Arguments["query"] = "tampered"
+	if response.Trace[0].Arguments["query"] != "target" {
+		t.Fatalf("Trace.Arguments aliased Step.Arguments; Trace[0] = %+v", response.Trace[0].Arguments)
+	}
+}
+
+func TestBuildObservationExcerptRuneBoundaryTruncation(t *testing.T) {
+	// Multi-byte runes near the cap must not yield invalid UTF-8.
+	body := strings.Repeat("中", maxObservationExcerptBytes) // each rune is 3 bytes
+	excerpt := buildObservationExcerpt(body)
+	if !utf8.ValidString(excerpt) {
+		t.Fatalf("excerpt is not valid UTF-8: %q", excerpt)
+	}
+	if !strings.Contains(excerpt, "truncated") {
+		t.Fatalf("excerpt missing truncation marker; got %q", oneLine(excerpt, 120))
+	}
+}
+
 func TestModelAgentRespondIncludesWorkingSetInUserPrompt(t *testing.T) {
 	client := &fakeCompletionClient{
 		response: openai.ChatCompletionResponse{Content: `{"type":"final","message":"ok"}`},

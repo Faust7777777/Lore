@@ -107,6 +107,39 @@ const (
 	TurnStopModelError TurnStopReason = "model_error"
 )
 
+// TurnStep is a structured per-step record of one tool call inside a
+// single Respond turn. Unlike ToolCallTrace (which is wire-shaped for
+// transcript replay and survives the older agent loop), TurnStep is
+// shaped for direct consumption by progress UIs: it preserves
+// arguments and adds an ObservationExcerpt -- a safely truncated
+// preview of what the tool returned -- so a renderer can show
+// "found path X, read first 1KB, then generated final" without
+// having to re-fetch tool outputs.
+//
+// Steps are emitted only for actually-executed tool calls; pre-tool
+// validation errors (multiple ToolCalls, empty name) terminate before
+// a step is appended.
+type TurnStep struct {
+	// Index is 1-based for human-facing display ordering.
+	Index int
+	// Tool is the tool name as dispatched (e.g. "vault_resolve").
+	Tool string
+	// Arguments is a defensive copy of the arguments passed to the
+	// tool, suitable for rendering and JSON serialization.
+	Arguments map[string]any
+	// Status mirrors ToolCallTrace.Status: "ok", "error", or
+	// "pending" (the shell_exec confirmation path).
+	Status string
+	// ObservationExcerpt is a safe, length-bounded preview of the
+	// tool's textual return value. Binary content is replaced with a
+	// short marker; oversized content is rune-safely truncated and
+	// annotated with the dropped byte count.
+	ObservationExcerpt string
+	// Error captures the tool's error message when Status == "error",
+	// empty otherwise. Mirrors ToolCallTrace.Error.
+	Error string
+}
+
 type Response struct {
 	Final      string
 	Decision   *Decision
@@ -114,6 +147,10 @@ type Response struct {
 	Usage      []ModelCallUsage
 	StopReason TurnStopReason
 	StepCount  int
+	// Steps is the structured per-step record of every tool call
+	// executed during this turn. Index is 1-based. Empty for turns
+	// that finalize without invoking any tool.
+	Steps []TurnStep
 }
 
 // UsageError wraps an error returned by Respond after one or more

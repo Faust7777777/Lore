@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	openai "obsidian-harness/internal/llm/openai"
 	"obsidian-harness/internal/model"
@@ -69,6 +70,12 @@ const (
 	repeatedToolCallAbortThreshold = 3
 	maxLoopRecentHistoryMessages   = 6
 	maxLoopSummaryHistoryMessages  = 14
+	// maxObservationExcerptBytes caps the textual preview of a tool
+	// result attached to a TurnStep. Set generously enough to show
+	// the beginning of a typical vault note (~1 KB of markdown) while
+	// keeping transcript / UI payloads bounded for very large reads
+	// or pathological tool output.
+	maxObservationExcerptBytes = 1024
 )
 
 func NewDefault() Agent {
@@ -248,12 +255,13 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 	toolHistory := make([]string, 0, maxLoopSteps)
 	trace := make([]ToolCallTrace, 0, maxLoopSteps)
 	usage := make([]ModelCallUsage, 0, maxLoopSteps)
+	steps := make([]TurnStep, 0, maxLoopSteps)
 	// failWithUsage builds the error-return pair for any step that
 	// fails AFTER at least one successful ChatCompletion. It wraps the
 	// underlying error with *UsageError so console.Session can still
 	// bill the model calls that were already paid for, and also seeds
-	// Response.Usage and Response.StopReason / StepCount so callers
-	// that ignore the wrapper still see the records on the value side.
+	// Response.Usage / StopReason / StepCount / Steps so callers that
+	// ignore the wrapper still see the records on the value side.
 	// Pre-ChatCompletion failures (the call itself errored, before any
 	// tokens were billed) should use the bare `return Response{...},
 	// err` form instead, which also stamps StopReason.
@@ -261,12 +269,14 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 		if len(usage) == 0 {
 			return Response{StopReason: reason}, err
 		}
-		snapshot := append([]ModelCallUsage(nil), usage...)
+		usageSnapshot := append([]ModelCallUsage(nil), usage...)
+		stepsSnapshot := cloneTurnSteps(steps)
 		return Response{
-			Usage:      snapshot,
+			Usage:      usageSnapshot,
 			StopReason: reason,
-			StepCount:  len(snapshot),
-		}, &UsageError{Err: err, Usage: snapshot}
+			StepCount:  len(usageSnapshot),
+			Steps:      stepsSnapshot,
+		}, &UsageError{Err: err, Usage: usageSnapshot}
 	}
 	for step := 0; step < maxLoopSteps; step++ {
 		startedAt := time.Now().UTC()
@@ -306,11 +316,21 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 
 			toolResult, toolErr := runtime.CallTool(toolName, toolCall.Arguments)
 			toolContent := strings.TrimSpace(toolResult.Content)
+			stepStatus := toolTraceStatus(toolName, toolContent, toolErr)
+			stepError := toolTraceError(toolErr)
 			trace = append(trace, ToolCallTrace{
 				Name:      toolName,
 				Arguments: cloneToolArguments(toolCall.Arguments),
-				Status:    toolTraceStatus(toolName, toolContent, toolErr),
-				Error:     toolTraceError(toolErr),
+				Status:    stepStatus,
+				Error:     stepError,
+			})
+			steps = append(steps, TurnStep{
+				Index:              len(steps) + 1,
+				Tool:               toolName,
+				Arguments:          cloneToolArguments(toolCall.Arguments),
+				Status:             stepStatus,
+				ObservationExcerpt: buildObservationExcerpt(toolContent),
+				Error:              stepError,
 			})
 			if isShellConfirmationResult(toolName, toolContent, toolErr) {
 				return Response{
@@ -319,6 +339,7 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 					Usage:      append([]ModelCallUsage(nil), usage...),
 					StopReason: TurnStopFinal,
 					StepCount:  len(usage),
+					Steps:      cloneTurnSteps(steps),
 				}, nil
 			}
 			if toolErr != nil && toolContent != "" {
@@ -343,6 +364,7 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 				Usage:      append([]ModelCallUsage(nil), usage...),
 				StopReason: TurnStopFinal,
 				StepCount:  len(usage),
+				Steps:      cloneTurnSteps(steps),
 			}, nil
 		}
 
@@ -358,6 +380,7 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 				Usage:      append([]ModelCallUsage(nil), usage...),
 				StopReason: TurnStopFinal,
 				StepCount:  len(usage),
+				Steps:      cloneTurnSteps(steps),
 			}, nil
 		case "tool_call":
 			toolName := strings.TrimSpace(envelope.Tool)
@@ -375,11 +398,21 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 
 			toolResult, toolErr := runtime.CallTool(toolName, envelope.Arguments)
 			toolContent := strings.TrimSpace(toolResult.Content)
+			stepStatus := toolTraceStatus(toolName, toolContent, toolErr)
+			stepError := toolTraceError(toolErr)
 			trace = append(trace, ToolCallTrace{
 				Name:      toolName,
 				Arguments: cloneToolArguments(envelope.Arguments),
-				Status:    toolTraceStatus(toolName, toolContent, toolErr),
-				Error:     toolTraceError(toolErr),
+				Status:    stepStatus,
+				Error:     stepError,
+			})
+			steps = append(steps, TurnStep{
+				Index:              len(steps) + 1,
+				Tool:               toolName,
+				Arguments:          cloneToolArguments(envelope.Arguments),
+				Status:             stepStatus,
+				ObservationExcerpt: buildObservationExcerpt(toolContent),
+				Error:              stepError,
 			})
 			if isShellConfirmationResult(toolName, toolContent, toolErr) {
 				return Response{
@@ -388,6 +421,7 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 					Usage:      append([]ModelCallUsage(nil), usage...),
 					StopReason: TurnStopFinal,
 					StepCount:  len(usage),
+					Steps:      cloneTurnSteps(steps),
 				}, nil
 			}
 			if toolErr != nil && toolContent != "" {
@@ -963,6 +997,49 @@ func toolTraceError(err error) string {
 		return ""
 	}
 	return strings.TrimSpace(err.Error())
+}
+
+// cloneTurnSteps returns an independent snapshot of a TurnStep slice.
+// Each step's Arguments map is deep-copied so callers receive a
+// defensible snapshot: mutating any returned step (slice index or
+// nested Arguments key) cannot leak into the internal accumulator or
+// into any other snapshot produced from the same source. This is the
+// same level of isolation Trace and Usage snapshots already provide.
+func cloneTurnSteps(steps []TurnStep) []TurnStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]TurnStep, len(steps))
+	for i, step := range steps {
+		out[i] = step
+		out[i].Arguments = cloneToolArguments(step.Arguments)
+	}
+	return out
+}
+
+// buildObservationExcerpt returns a safe preview of a tool's textual
+// return value for display in a TurnStep. It enforces three rules:
+//   - empty input yields empty output (no need to render a placeholder);
+//   - invalid-UTF-8 / binary content is collapsed to a marker so a
+//     progress UI never tries to render raw bytes;
+//   - content longer than maxObservationExcerptBytes is rune-safely
+//     truncated and annotated with the dropped byte count.
+func buildObservationExcerpt(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	if !utf8.ValidString(content) {
+		return "(binary content omitted)"
+	}
+	if len(content) <= maxObservationExcerptBytes {
+		return content
+	}
+	cut := maxObservationExcerptBytes
+	for cut > 0 && !utf8.RuneStart(content[cut]) {
+		cut--
+	}
+	dropped := len(content) - cut
+	return content[:cut] + fmt.Sprintf("\n...[truncated %d more bytes]", dropped)
 }
 
 func cloneToolArguments(arguments map[string]any) map[string]any {
