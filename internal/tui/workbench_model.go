@@ -19,9 +19,21 @@ type WorkbenchViewModel struct {
 	ProcessSink   app.ProcessSinkDayView
 	Findings      []model.Finding
 	ToolTrace     []operatoragent.ToolCallTrace
+	TurnSteps     []TurnStep
 	Conversation  WorkbenchConversation
 	QuickActions  []string
 	Controls      []string
+}
+
+// TurnStep represents one tool call step within the last agent turn,
+// built from ToolCallTrace for timeline rendering in the TUI.
+type TurnStep struct {
+	Index              int
+	Tool               string
+	Status             string
+	ObservationExcerpt string
+	Error              string
+	Arguments          map[string]any
 }
 
 type WorkbenchHeader struct {
@@ -93,6 +105,7 @@ func NewWorkbenchViewModel(version string, managed model.ManagedStatusView, draf
 		ProcessSink:   processSink,
 		Findings:      append([]model.Finding(nil), findings...),
 		ToolTrace:     append([]operatoragent.ToolCallTrace(nil), toolTrace...),
+		TurnSteps:     buildTurnSteps(toolTrace),
 		Conversation: WorkbenchConversation{
 			Turns:      append([]operatoragent.ConversationTurn(nil), history...),
 			LastOutput: strings.TrimSpace(lastOutput),
@@ -107,4 +120,73 @@ func NewWorkbenchViewModel(version string, managed model.ManagedStatusView, draf
 
 func (s WorkbenchSnapshot) DraftSummary() string {
 	return fmt.Sprintf("%d reviewable / %d total", s.PendingDrafts, s.TotalDrafts)
+}
+
+func buildTurnSteps(trace []operatoragent.ToolCallTrace) []TurnStep {
+	if len(trace) == 0 {
+		return nil
+	}
+	steps := make([]TurnStep, len(trace))
+	for i, tc := range trace {
+		steps[i] = TurnStep{
+			Index:     i + 1,
+			Tool:      tc.Name,
+			Status:    tc.Status,
+			Error:     tc.Error,
+			Arguments: tc.Arguments,
+			// ObservationExcerpt left empty until B-line populates ToolCallTrace with tool result
+		}
+	}
+	return steps
+}
+
+// stepArgSummary returns a human-readable one-line summary of key arguments
+// for the most common tool types. Falls back to empty string for unknown tools.
+func stepArgSummary(tool string, args map[string]any) string {
+	if args == nil {
+		return ""
+	}
+	switch tool {
+	case "vault_resolve":
+		if q, ok := args["query"].(string); ok {
+			return "query=" + q
+		}
+	case "vault_read":
+		if p, ok := args["path"].(string); ok {
+			return "path=" + p
+		}
+	case "vault_search_text":
+		if q, ok := args["query"].(string); ok {
+			return "query=" + q
+		}
+	case "vault_write_note":
+		if p, ok := args["path"].(string); ok {
+			return "path=" + p
+		}
+	case "draft_approve", "draft_reject", "draft_apply":
+		if id, ok := args["draft_id"].(string); ok {
+			return "draft=" + id
+		}
+	case "managed_status":
+		return ""
+	case "draft_review":
+		if id, ok := args["draft_id"].(string); ok {
+			return "draft=" + id
+		}
+	case "process_sink_day":
+		if a, ok := args["agent_id"].(string); ok {
+			return "agent=" + a
+		}
+	case "vault_backlinks":
+		if p, ok := args["path"].(string); ok {
+			return "path=" + p
+		}
+	}
+	// Generic: show first string argument
+	for k, v := range args {
+		if s, ok := v.(string); ok && s != "" {
+			return k + "=" + s
+		}
+	}
+	return ""
 }

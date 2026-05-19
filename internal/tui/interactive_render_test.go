@@ -73,22 +73,99 @@ func TestRenderInteractiveConversationRendersAllTurns(t *testing.T) {
 	}
 }
 
-func TestRenderInteractiveConversationShowsToolTrace(t *testing.T) {
+func TestRenderInteractiveConversationShowsTaskSteps(t *testing.T) {
 	vm := WorkbenchViewModel{
-		ToolTrace: []operatoragent.ToolCallTrace{
-			{Name: "managed_status", Status: "ok"},
-			{Name: "vault_read", Status: "error", Error: "not found"},
+		TurnSteps: []TurnStep{
+			{Index: 1, Tool: "managed_status", Status: "ok"},
+			{Index: 2, Tool: "vault_read", Status: "error", Error: "not found"},
 		},
 	}
 	result := renderInteractiveConversation(vm, "", false, "", 80)
-	if !strings.Contains(result, "Tool Calls") {
-		t.Errorf("should show Tool Calls section, got: %q", result)
+	if !strings.Contains(result, "Task Steps") {
+		t.Errorf("should show Task Steps section, got: %q", result)
 	}
 	if !strings.Contains(result, "managed_status") {
 		t.Errorf("should show tool name, got: %q", result)
 	}
 	if !strings.Contains(result, "not found") {
 		t.Errorf("should show tool error, got: %q", result)
+	}
+	if !strings.Contains(result, "1.") {
+		t.Errorf("should show step number, got: %q", result)
+	}
+}
+
+func TestRenderTaskStepsArgSummary(t *testing.T) {
+	vm := WorkbenchViewModel{
+		TurnSteps: []TurnStep{
+			{Index: 1, Tool: "vault_resolve", Status: "ok", Arguments: map[string]any{"query": "人物背景"}},
+			{Index: 2, Tool: "vault_read", Status: "ok", Arguments: map[string]any{"path": "03-画像/人物画像.md"}},
+		},
+	}
+	result := renderInteractiveConversation(vm, "", false, "", 80)
+	if !strings.Contains(result, "query=人物背景") {
+		t.Errorf("should show vault_resolve argument, got: %q", result)
+	}
+	if !strings.Contains(result, "path=03-画像/人物画像.md") {
+		t.Errorf("should show vault_read argument, got: %q", result)
+	}
+}
+
+func TestRenderTaskStepsTruncatesObservation(t *testing.T) {
+	longObs := strings.Repeat("abcdefghij", 20) // 200 chars
+	vm := WorkbenchViewModel{
+		TurnSteps: []TurnStep{
+			{Index: 1, Tool: "vault_read", Status: "ok", ObservationExcerpt: longObs, Arguments: map[string]any{"path": "x.md"}},
+		},
+	}
+	result := renderInteractiveConversation(vm, "", false, "", 80)
+	if !strings.Contains(result, "obs:") {
+		t.Errorf("should show observation label, got: %q", result)
+	}
+	// Observation should be truncated (oneLine caps at 120)
+	lines := strings.Split(result, "\n")
+	found := false
+	for _, line := range lines {
+		if strings.Contains(line, "obs:") {
+			found = true
+			if len(line) > 200 {
+				t.Errorf("observation line too long (%d chars): %q", len(line), line)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no obs line found in output")
+	}
+}
+
+func TestRenderTaskStepsErrorStep(t *testing.T) {
+	vm := WorkbenchViewModel{
+		TurnSteps: []TurnStep{
+			{Index: 1, Tool: "vault_read", Status: "error", Error: "file not found", Arguments: map[string]any{"path": "missing.md"}},
+		},
+	}
+	result := renderInteractiveConversation(vm, "", false, "", 80)
+	if !strings.Contains(result, "error") {
+		t.Errorf("should show error status, got: %q", result)
+	}
+	if !strings.Contains(result, "file not found") {
+		t.Errorf("should show error message, got: %q", result)
+	}
+}
+
+func TestRenderTaskStepsNonErrorLastOutputNotShown(t *testing.T) {
+	vm := WorkbenchViewModel{
+		TurnSteps: []TurnStep{
+			{Index: 1, Tool: "managed_status", Status: "ok"},
+		},
+	}
+	// Non-error lastOutput should NOT appear in the conversation pane
+	result := renderInteractiveConversation(vm, "some normal output text", false, "", 80)
+	if strings.Contains(result, "some normal output text") {
+		t.Errorf("non-error lastOutput should not be rendered, got: %q", result)
+	}
+	if !strings.Contains(result, "Task Steps") {
+		t.Errorf("task steps should still render, got: %q", result)
 	}
 }
 

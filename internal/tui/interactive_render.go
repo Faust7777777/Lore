@@ -117,29 +117,41 @@ func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput stri
 		builder.WriteString(styleRunning.Render("  "+glyphThinking+" thinking") + "\n\n")
 	}
 
-	if len(viewModel.ToolTrace) > 0 {
+	if len(viewModel.TurnSteps) > 0 {
 		builder.WriteString(thinRule(40) + "\n")
-		builder.WriteString(styleSectionHead.Render("Tool Calls") + "\n")
-		limit := minInt(5, len(viewModel.ToolTrace))
-		for _, item := range viewModel.ToolTrace[:limit] {
+		builder.WriteString(styleSectionHead.Render("Task Steps") + "\n")
+		for _, step := range viewModel.TurnSteps {
 			statusStyle := styleMutedText
-			switch strings.ToLower(item.Status) {
+			statusLabel := step.Status
+			switch strings.ToLower(step.Status) {
 			case "ok", "success":
 				statusStyle = styleOK
+				statusLabel = "ok"
 			case "error", "fail", "failed":
 				statusStyle = styleErr
+				statusLabel = "error"
 			case "pending", "waiting":
 				statusStyle = styleWarn
-			case "cancelled", "canceled":
-				statusStyle = styleMutedText
-			case "running":
-				statusStyle = styleRunning
+				statusLabel = "pending"
 			}
-			builder.WriteString("  " + styleToolName.Render(oneLine(item.Name, 24)) + " " + statusStyle.Render(item.Status))
-			if item.Error != "" {
-				builder.WriteString(" " + styleErr.Render(oneLine(item.Error, 40)))
+
+			builder.WriteString(fmt.Sprintf("  %d. %s %s\n", step.Index, styleToolName.Render(oneLine(step.Tool, 24)), statusStyle.Render(statusLabel)))
+
+			// Argument summary
+			if argLine := stepArgSummary(step.Tool, step.Arguments); argLine != "" {
+				builder.WriteString("     " + styleMutedText.Render(oneLine(argLine, contentWidth-6)) + "\n")
 			}
-			builder.WriteString("\n")
+
+			// Observation excerpt (when B-line populates it)
+			if step.ObservationExcerpt != "" {
+				excerpt := oneLine(step.ObservationExcerpt, 120)
+				builder.WriteString("     " + styleMutedText.Render("obs: "+excerpt) + "\n")
+			}
+
+			// Error detail
+			if step.Error != "" {
+				builder.WriteString("     " + styleErr.Render(oneLine(step.Error, contentWidth-6)) + "\n")
+			}
 		}
 		builder.WriteString("\n")
 	}

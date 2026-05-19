@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -25,7 +24,7 @@ func RenderWorkbenchViewModel(viewModel WorkbenchViewModel) string {
 	renderPendingDraftsSection(&builder, viewModel.PendingDrafts)
 	renderFocusedDraftSection(&builder, viewModel.FocusedReview)
 	renderProcessSinkSection(&builder, viewModel.ProcessSink)
-	renderToolTraceSection(&builder, viewModel.ToolTrace)
+	renderTaskStepsSection(&builder, viewModel.TurnSteps)
 	renderConversationSection(&builder, viewModel.Conversation)
 	renderErrorStatusSection(&builder, viewModel.Conversation.LastOutput)
 	renderQuickActionsSection(&builder, viewModel.QuickActions)
@@ -139,25 +138,38 @@ func renderProcessSinkSection(builder *strings.Builder, processSink app.ProcessS
 	}
 }
 
-func renderToolTraceSection(builder *strings.Builder, toolTrace []operatoragent.ToolCallTrace) {
-	builder.WriteString("\nTool Trace\n")
+func renderTaskStepsSection(builder *strings.Builder, steps []TurnStep) {
+	builder.WriteString("\nTask Steps\n")
 	builder.WriteString("----------\n")
-	if len(toolTrace) == 0 {
+	if len(steps) == 0 {
 		builder.WriteString("No tool calls in the last turn.\n")
 		return
 	}
 
-	fmt.Fprintf(builder, "%-4s %-18s %-8s %-34s %s\n", "STEP", "TOOL", "STATUS", "ARGUMENTS", "ERROR")
-	for idx, item := range toolTrace {
-		fmt.Fprintf(
-			builder,
-			"%-4d %-18s %-8s %-34s %s\n",
-			idx+1,
-			oneLine(item.Name, 18),
-			oneLine(item.Status, 8),
-			oneLine(formatToolArguments(item.Arguments), 34),
-			oneLine(item.Error, 64),
-		)
+	for _, step := range steps {
+		statusLabel := step.Status
+		switch strings.ToLower(step.Status) {
+		case "ok", "success":
+			statusLabel = "ok"
+		case "error", "fail", "failed":
+			statusLabel = "error"
+		case "pending", "waiting":
+			statusLabel = "pending"
+		}
+
+		fmt.Fprintf(builder, "%-4d %-20s %-8s", step.Index, oneLine(step.Tool, 20), oneLine(statusLabel, 8))
+		if argLine := stepArgSummary(step.Tool, step.Arguments); argLine != "" {
+			builder.WriteString(" " + oneLine(argLine, 40))
+		}
+		builder.WriteString("\n")
+
+		if step.ObservationExcerpt != "" {
+			excerpt := oneLine(step.ObservationExcerpt, 100)
+			fmt.Fprintf(builder, "     obs: %s\n", excerpt)
+		}
+		if step.Error != "" {
+			fmt.Fprintf(builder, "     err: %s\n", oneLine(step.Error, 100))
+		}
 	}
 }
 
@@ -282,23 +294,6 @@ func enabledDisabled(value bool) string {
 		return "enabled"
 	}
 	return "disabled"
-}
-
-func formatToolArguments(arguments map[string]any) string {
-	if len(arguments) == 0 {
-		return "{}"
-	}
-	keys := make([]string, 0, len(arguments))
-	for key := range arguments {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(arguments))
-	for _, key := range keys {
-		value := arguments[key]
-		parts = append(parts, fmt.Sprintf("%s=%v", key, value))
-	}
-	return strings.Join(parts, ", ")
 }
 
 func modeBanner(localExec bool, shellEnabled bool, agentID string, day time.Time) string {
