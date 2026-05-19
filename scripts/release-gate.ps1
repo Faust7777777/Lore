@@ -160,6 +160,11 @@ try {
     Invoke-SDKGate
 
     Invoke-GoGate `
+        -Label "operator-agent turn-step observation guardrails" `
+        -Package "./internal/operatoragent" `
+        -Run "Test(ModelAgentRespondAppendsTurnStepPerToolCall|ModelAgentRespondTurnStepTruncatesLongObservation|ModelAgentRespondTurnStepRedactsBinaryObservation|ModelAgentRespondTurnStepCapturesToolError|ModelAgentRespondTurnStepsCarriedThroughUsageError|CloneTurnStepsDeepCopiesArguments)$"
+
+    Invoke-GoGate `
         -Label "console resolve-read-final and task-turn guardrails" `
         -Package "./internal/console" `
         -Run "Test(EndToEndResolveReadFinalFileInspectionTurn|SessionHandleEmitsTaskTurnEndOnSuccess|SessionHandleEmitsTaskTurnEndOnFailure|SessionHandleSkipsTaskTurnEndForLegacyDecidePath)$"
