@@ -9,6 +9,7 @@ import (
 	"obsidian-harness/internal/config"
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/orchestrator"
+	"obsidian-harness/internal/persona"
 	"obsidian-harness/internal/store"
 	"obsidian-harness/internal/store/sqlitestore"
 	"obsidian-harness/internal/vault"
@@ -21,6 +22,14 @@ type Runtime struct {
 	Store                    store.StateStore
 	ProcessSinkSummarizer    ProcessSinkSummarizer
 	processSinkSummarizerErr error
+	// PersonaExtractor mines persona update candidates from user
+	// turns. nil when no LLM is configured for the runtime so console
+	// callers can guard fire-and-forget extraction calls with a nil
+	// check instead of branching on env state. Tests can override the
+	// field after construction; OpenRuntime populates a default that
+	// reads the same LORE_LLM_* env as the operator agent.
+	PersonaExtractor    persona.PersonaCandidateExtractor
+	personaExtractorErr error
 }
 
 type DemoP0BResult struct {
@@ -63,6 +72,7 @@ func OpenRuntimeWithConfigOptions(workDir string, opts config.LoadOptions) (*Run
 		return nil, err
 	}
 	processSinkSummarizer, processSinkErr := defaultProcessSinkSummarizer()
+	personaExtractor, personaErr := defaultPersonaExtractor()
 	runtime := &Runtime{
 		Config:                   cfg,
 		ConfigDiagnostics:        diagnostics,
@@ -70,12 +80,20 @@ func OpenRuntimeWithConfigOptions(workDir string, opts config.LoadOptions) (*Run
 		Store:                    st,
 		ProcessSinkSummarizer:    processSinkSummarizer,
 		processSinkSummarizerErr: processSinkErr,
+		PersonaExtractor:         personaExtractor,
+		personaExtractorErr:      personaErr,
 	}
 	// Second-phase wiring: route summarizer cost records into the
 	// runtime's usage store. The sink is a no-op for non-model-backed
 	// summarizers (e.g. fakes used in tests), so tests that wire their
 	// own summarizer via runtime.ProcessSinkSummarizer = ... still work.
 	attachUsageSink(processSinkSummarizer, func(rec model.UsageRecord) error {
+		return runtime.RecordUsage([]model.UsageRecord{rec})
+	})
+	// Mirror the same two-phase pattern for the persona extractor so
+	// its UsageRecord (Purpose=persona_extract) flows into the same
+	// store as chat and process-sink usage.
+	attachPersonaExtractorUsageSink(personaExtractor, func(rec model.UsageRecord) error {
 		return runtime.RecordUsage([]model.UsageRecord{rec})
 	})
 	return runtime, nil

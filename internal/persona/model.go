@@ -24,7 +24,11 @@
 // It is a leaf module that the P3+ slices will compose into.
 package persona
 
-import "time"
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"time"
+)
 
 // Confidence is the candidate's self-reported strength. Only Medium
 // and High candidates survive parser filtering; Low is discarded so
@@ -172,6 +176,25 @@ type PersonaCandidateRecord struct {
 // this package can derive the same key.
 func NormalizeText(s string) string {
 	return normalizeForSubstring(s)
+}
+
+// NewCandidateID generates a fresh PersonaCandidateRecord.ID. The
+// shape is "pc-<RFC3339Nano UTC>-<8 hex bytes of randomness>": the
+// timestamp prefix gives lexicographic ordering for debugging and a
+// monotonic-ish tie-breaker, the suffix removes collision risk when
+// two candidates land in the same nanosecond. Falls back to a
+// deterministic suffix if crypto/rand fails so the caller still
+// receives a usable (but less unique) ID.
+func NewCandidateID(now time.Time) string {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	stamp := now.UTC().Format("20060102T150405.000000000Z")
+	var random [4]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "pc-" + stamp + "-0000"
+	}
+	return "pc-" + stamp + "-" + hex.EncodeToString(random[:])
 }
 
 // DedupKey returns the canonical identity key for a candidate. Two

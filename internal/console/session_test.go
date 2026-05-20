@@ -5,25 +5,30 @@ import (
 	"path/filepath"
 	osruntime "runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"obsidian-harness/internal/app"
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/operatoragent"
+	"obsidian-harness/internal/persona"
 )
 
 type fakeRuntime struct {
-	managed      model.ManagedStatusView
-	drafts       []model.Draft
-	review       app.DraftReview
-	processSink  app.ProcessSinkDayView
-	vaultResolve model.VaultResolveResult
-	writtenNote  *model.VaultDocument
-	supersede    *model.DraftSupersedeUpdate
-	coreContext  model.CoreContext
-	usageRecords []model.UsageRecord
-	usageErr     error
+	managed           model.ManagedStatusView
+	drafts            []model.Draft
+	review            app.DraftReview
+	processSink       app.ProcessSinkDayView
+	vaultResolve      model.VaultResolveResult
+	writtenNote       *model.VaultDocument
+	supersede         *model.DraftSupersedeUpdate
+	coreContext       model.CoreContext
+	usageRecords      []model.UsageRecord
+	usageErr          error
+	personaMu         sync.Mutex
+	personaCandidates []persona.PersonaCandidateRecord
+	personaErr        error
 }
 
 func (f *fakeRuntime) ManagedStatus() (model.ManagedStatusView, error) {
@@ -132,6 +137,25 @@ func (f *fakeRuntime) RecordUsage(records []model.UsageRecord) error {
 	}
 	f.usageRecords = append(f.usageRecords, records...)
 	return nil
+}
+
+func (f *fakeRuntime) RecordPersonaCandidate(record persona.PersonaCandidateRecord) (persona.PersonaCandidateRecord, bool, error) {
+	f.personaMu.Lock()
+	defer f.personaMu.Unlock()
+	if f.personaErr != nil {
+		return persona.PersonaCandidateRecord{}, false, f.personaErr
+	}
+	f.personaCandidates = append(f.personaCandidates, record)
+	return record, true, nil
+}
+
+// recordedPersonaCandidates returns a snapshot copy so tests can read
+// it from the main goroutine while the fire-and-forget extraction
+// goroutine may still be appending.
+func (f *fakeRuntime) recordedPersonaCandidates() []persona.PersonaCandidateRecord {
+	f.personaMu.Lock()
+	defer f.personaMu.Unlock()
+	return append([]persona.PersonaCandidateRecord(nil), f.personaCandidates...)
 }
 
 func (f *fakeRuntime) WorkDirPath() string {

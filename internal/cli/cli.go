@@ -397,6 +397,13 @@ func renderSessionSummaries(stdout io.Writer, sessions []sessionlog.Summary) {
 		fmt.Fprintf(stdout, "%s\t%s\t%d\t%s\n", summary.ID, summary.UpdatedAt.Format("2006-01-02 15:04"), summary.TurnCount, summary.Title)
 	}
 }
+// consolePersonaDrainTimeout caps how long the console / TUI shell
+// waits at exit for in-flight persona extraction goroutines to land
+// their candidates in the store. Short enough that a stuck LLM does
+// not visibly delay shell exit; long enough that a healthy mid-call
+// extraction reaches the store before sqlite closes.
+const consolePersonaDrainTimeout = 2 * time.Second
+
 func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, version string) int {
 	workDir, utterance, localExec, resume, resumeID, err := parseConsoleFlags(args, stderr)
 	if err != nil {
@@ -412,6 +419,16 @@ func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 	defer closeRuntime(stderr, runtime, "console")
 	session := console.NewSession(version)
 	session.EnableLocalWorkTools = localExec
+	// Wire the persona candidate extractor from the runtime so the
+	// fire-and-forget mining path (P4) is actually live in production.
+	// When LLM env is unset OpenRuntime returns a nil extractor, in
+	// which case Session.PersonaExtractor stays nil and the goroutine
+	// is never spawned. Drain before closeRuntime so in-flight
+	// extractions land in sqlite before the store closes -- defer
+	// ordering is LIFO, so this drain runs BEFORE closeRuntime even
+	// though it is registered later.
+	session.PersonaExtractor = runtime.PersonaExtractor
+	defer session.DrainPersonaExtractions(consolePersonaDrainTimeout)
 	if err := configureSessionRecorder(session, runtime, resume, resumeID, stdin, stdout, stderr, "console"); err != nil {
 		fmt.Fprintf(stderr, "console: %v\n", err)
 		return 1
@@ -478,6 +495,10 @@ func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 	session := console.NewSession(version)
 	session.DefaultAgentID = agentID
 	session.EnableLocalWorkTools = localExec
+	// Same persona extractor wiring + drain defer as the console
+	// path; see RunConsoleCommand for the LIFO ordering rationale.
+	session.PersonaExtractor = runtime.PersonaExtractor
+	defer session.DrainPersonaExtractions(consolePersonaDrainTimeout)
 	if err := configureSessionRecorder(session, runtime, resume, resumeID, stdin, stdout, stderr, "tui"); err != nil {
 		fmt.Fprintf(stderr, "tui: %v\n", err)
 		return 1

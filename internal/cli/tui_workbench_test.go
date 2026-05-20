@@ -8,6 +8,7 @@ import (
 	"obsidian-harness/internal/console"
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/operatoragent"
+	"obsidian-harness/internal/persona"
 )
 
 type workbenchRuntimeStub struct {
@@ -106,6 +107,10 @@ func (s workbenchRuntimeStub) BuildCoreContext(limit int) (model.CoreContext, er
 
 func (s workbenchRuntimeStub) RecordUsage(records []model.UsageRecord) error {
 	return nil
+}
+
+func (s workbenchRuntimeStub) RecordPersonaCandidate(record persona.PersonaCandidateRecord) (persona.PersonaCandidateRecord, bool, error) {
+	return record, true, nil
 }
 
 func (s workbenchRuntimeStub) WorkDirPath() string {

@@ -1,17 +1,27 @@
 package console
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"obsidian-harness/internal/app"
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/operatoragent"
+	"obsidian-harness/internal/persona"
 	"obsidian-harness/internal/tui"
 )
+
+// defaultPersonaExtractTimeout caps a single fire-and-forget persona
+// extraction at 8 seconds. The console turn does not wait on
+// extraction; this timeout only bounds how long the background
+// goroutine itself runs before giving up on the LLM call. Tunable via
+// Session.PersonaExtractTimeout.
+const defaultPersonaExtractTimeout = 8 * time.Second
 
 type Runtime interface {
 	ManagedStatus() (model.ManagedStatusView, error)
@@ -37,6 +47,7 @@ type Runtime interface {
 	WriteLowRiskNote(relPath string, content string, overwrite bool) (model.VaultDocument, error)
 	BuildCoreContext(limit int) (model.CoreContext, error)
 	RecordUsage(records []model.UsageRecord) error
+	RecordPersonaCandidate(record persona.PersonaCandidateRecord) (persona.PersonaCandidateRecord, bool, error)
 	WorkDirPath() string
 	VaultRootPath() string
 	StateDirPath() string
@@ -80,6 +91,17 @@ type Session struct {
 	Now           func() time.Time
 	Agent         operatoragent.Agent
 	Recorder      TranscriptRecorder
+	// PersonaExtractor mines persona candidates from each successful
+	// loop-agent user turn. nil disables extraction entirely (no
+	// goroutine spawned, no candidates recorded); console callers
+	// wire it from runtime.PersonaExtractor when an LLM is configured.
+	PersonaExtractor persona.PersonaCandidateExtractor
+	// PersonaExtractTimeout caps a single fire-and-forget extraction.
+	// Zero or negative falls back to defaultPersonaExtractTimeout.
+	PersonaExtractTimeout time.Duration
+	// personaExtractWG tracks in-flight extraction goroutines so the
+	// shell can call DrainPersonaExtractions before exit.
+	personaExtractWG sync.WaitGroup
 }
 type pendingShellCommand struct {
 	Command        string
@@ -160,14 +182,18 @@ func (s *Session) Handle(input string, runtime Runtime) (string, error) {
 			if err != nil {
 				return "", err
 			}
+			priorAssistant := s.priorAssistantContext()
 			s.rememberTurn(input, output)
+			s.launchPersonaExtraction(runtime, input, priorAssistant)
 			return output, nil
 		}
 		output := strings.TrimSpace(response.Final)
+		priorAssistant := s.priorAssistantContext()
 		s.rememberTurn(input, output)
 		if output == "" {
 			return "", fmt.Errorf("operator agent returned an empty response")
 		}
+		s.launchPersonaExtraction(runtime, input, priorAssistant)
 		if strings.HasSuffix(response.Final, "\n") {
 			return response.Final, nil
 		}
@@ -532,6 +558,158 @@ func (s *Session) recordTaskTurnEnd(stopReason operatoragent.TurnStopReason, ste
 		return
 	}
 	_ = s.Recorder.RecordTaskTurnEnd(string(stopReason), stepCount)
+}
+
+// composePersonaExcerpt assembles a short context snippet for the
+// persona extractor by combining the current PersonaSummary with
+// WeaknessSummary when present. Both are short markdown fragments
+// produced by CoreContext; concatenating them gives the extractor a
+// view of "who the user already is" plus "what limitations are
+// already known" so the P1+P2 prompt rules can flag duplicates and
+// conflicts. Returns empty string when both fields are empty so the
+// extractor prompt omits the section cleanly.
+func composePersonaExcerpt(coreContext model.CoreContext) string {
+	persona := strings.TrimSpace(coreContext.PersonaSummary)
+	weakness := strings.TrimSpace(coreContext.WeaknessSummary)
+	switch {
+	case persona == "" && weakness == "":
+		return ""
+	case persona == "":
+		return weakness
+	case weakness == "":
+		return persona
+	default:
+		return persona + "\n\n" + weakness
+	}
+}
+
+// priorAssistantContext returns the most recent assistant message in
+// the conversation history, or "" when no prior turn exists. The
+// persona extractor uses this strictly as disambiguation context so
+// the LLM can interpret short user replies like "经济管理" against the
+// preceding question; the prompt forbids extracting candidates from
+// this section.
+//
+// Called BEFORE rememberTurn appends the current turn, so the
+// returned string is the prior turn's assistant, not the current
+// one.
+func (s *Session) priorAssistantContext() string {
+	if n := len(s.History); n > 0 && s.History[n-1].Role == "assistant" {
+		return s.History[n-1].Content
+	}
+	return ""
+}
+
+// launchPersonaExtraction starts a fire-and-forget goroutine that
+// asks the configured PersonaExtractor to mine candidates from the
+// just-completed user turn, then writes them to the runtime's store.
+// The console turn does NOT wait on the result -- Handle returns to
+// the user immediately, the goroutine progresses in parallel.
+//
+// No goroutine is spawned when PersonaExtractor is nil (no LLM
+// configured) or userText is empty (legacy edge); the caller is
+// expected to have guarded both, but defensive checks here keep the
+// contract crisp for direct callers.
+//
+// Failures (LLM error, timeout, store error) are silently swallowed:
+// extraction is observability for the persona review queue, not
+// governance -- a failed mining attempt must never surface to the
+// user nor break the chat turn. Cost accounting still flows through
+// the extractor's usage sink (set up by app.OpenRuntime) so a failed
+// call that nonetheless billed tokens lands in the usage store.
+func (s *Session) launchPersonaExtraction(runtime Runtime, userText, priorAssistant string) {
+	if s == nil || s.PersonaExtractor == nil {
+		return
+	}
+	if strings.TrimSpace(userText) == "" {
+		return
+	}
+	sessionID := ""
+	if s.Recorder != nil {
+		sessionID = s.Recorder.SessionID()
+	}
+	agentID := defaultAgentID(strings.TrimSpace(s.DefaultAgentID))
+	now := time.Now()
+	if s.Now != nil {
+		now = s.Now()
+	}
+	timeout := s.PersonaExtractTimeout
+	if timeout <= 0 {
+		timeout = defaultPersonaExtractTimeout
+	}
+
+	// Snapshot the current persona / system-rules context so the
+	// extractor's P1+P2 prompt rules ("do not emit if already
+	// matching current persona", "mark conflict vs current persona")
+	// have something to compare against. BuildCoreContext failures
+	// are non-fatal: we still launch extraction with empty context
+	// rather than dropping the turn -- the parser will simply mark
+	// fewer conflicts. Snapshot synchronously here so the goroutine
+	// gets a stable view, decoupled from any subsequent vault
+	// mutations during the extraction window.
+	coreContext, _ := runtime.BuildCoreContext(6)
+
+	input := persona.PersonaExtractionInput{
+		UserText:              userText,
+		AssistantContext:      priorAssistant,
+		SourceKind:            persona.SourceConsole,
+		SourceSessionID:       sessionID,
+		SourceAgentID:         agentID,
+		ObservedAt:            now,
+		CurrentPersonaExcerpt: composePersonaExcerpt(coreContext),
+		SystemRulesExcerpt:    strings.TrimSpace(coreContext.SystemRulesSummary),
+	}
+	extractor := s.PersonaExtractor
+
+	s.personaExtractWG.Add(1)
+	go func() {
+		defer s.personaExtractWG.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		result, err := extractor.Extract(ctx, input)
+		if err != nil {
+			return
+		}
+		for _, candidate := range result.Candidates {
+			record := persona.PersonaCandidateRecord{
+				ID:        persona.NewCandidateID(now),
+				State:     persona.PersonaCandidateOpen,
+				DedupKey:  persona.DedupKey(candidate),
+				Candidate: candidate,
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			_, _, _ = runtime.RecordPersonaCandidate(record)
+		}
+	}()
+}
+
+// DrainPersonaExtractions blocks up to timeout for in-flight
+// fire-and-forget persona extractions to finish. Returns true on
+// clean drain, false when the timeout elapsed and goroutines were
+// abandoned. Abandoned goroutines may still complete after this
+// method returns; they will quietly write to the store if the runtime
+// is still usable, or no-op if the runtime has been closed.
+//
+// Console / TUI shells call this immediately before process exit so
+// that the user's most recent turn has a fair chance to land in the
+// review queue. The timeout should be short (a couple of seconds) so
+// shell exit is never noticeably delayed by a stuck LLM.
+func (s *Session) DrainPersonaExtractions(timeout time.Duration) bool {
+	if s == nil {
+		return true
+	}
+	done := make(chan struct{})
+	go func() {
+		s.personaExtractWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // persistResponseUsage translates per-loop-step ModelCallUsage entries
