@@ -564,6 +564,7 @@ func (s *Session) persistResponseUsage(runtime Runtime, usage []operatoragent.Mo
 			PromptTokens:     u.PromptTokens,
 			CompletionTokens: u.CompletionTokens,
 			RecordedAt:       u.StartedAt,
+			Purpose:          model.UsagePurposeChat,
 		})
 	}
 	return runtime.RecordUsage(records)

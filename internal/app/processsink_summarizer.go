@@ -154,6 +154,7 @@ func (s *modelProcessSinkSummarizer) runSummaryPrompt(system string, user string
 			PromptTokens:     resp.PromptTokens,
 			CompletionTokens: resp.CompletionTokens,
 			RecordedAt:       startedAt,
+			Purpose:          model.UsagePurposeProcessSink,
 		})
 	}
 

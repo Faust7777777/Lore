@@ -10,6 +10,16 @@ type HealthSnapshot struct {
 	CheckedAt        time.Time `json:"checked_at"`
 }
 
+// UsagePurpose names the Lore subsystem that billed a UsageRecord.
+// Stable string constants suitable for storage; new writers should use
+// these rather than free-form strings so the `lore usage` breakdown
+// stays consistent. Empty Purpose is allowed and means "unspecified".
+const (
+	UsagePurposeChat           = "chat"
+	UsagePurposeProcessSink    = "process_sink"
+	UsagePurposePersonaExtract = "persona_extract"
+)
+
 type UsageRecord struct {
 	Provider         string    `json:"provider"`
 	Model            string    `json:"model"`
@@ -18,6 +28,18 @@ type UsageRecord struct {
 	PromptTokens     int       `json:"prompt_tokens"`
 	CompletionTokens int       `json:"completion_tokens"`
 	RecordedAt       time.Time `json:"recorded_at"`
+	// Purpose distinguishes which Lore subsystem billed this model
+	// call. Values defined today: "chat" (operatoragent loop turn),
+	// "process_sink" (process-sink summarizer), "persona_extract"
+	// (persona candidate extractor). Older records that pre-date this
+	// field deserialize with Purpose == "" and remain valid; CLI/UI
+	// callers should treat the empty value as "unspecified". New
+	// writers are expected to populate Purpose; backfill of historic
+	// rows is intentionally not attempted -- the field exists so that
+	// future categories (e.g. background extractors) can be split out
+	// in `lore usage` without re-introducing the chat/extractor
+	// ambiguity that motivated this addition.
+	Purpose string `json:"purpose,omitempty"`
 }
 
 func (u UsageRecord) TotalTokens() int {
