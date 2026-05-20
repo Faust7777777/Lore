@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/persona"
 	"obsidian-harness/internal/store"
 )
 
@@ -18,15 +19,23 @@ type Store struct {
 	findings    map[string]model.Finding
 	usage       []model.UsageRecord
 	cursors     map[string]string
+	// Persona candidates are keyed by ID for direct lookup and by
+	// DedupKey for collision detection on Upsert. Both maps hold the
+	// same record values; the dedup index lets Upsert short-circuit
+	// without scanning the whole set.
+	personaCandidates       map[string]persona.PersonaCandidateRecord
+	personaCandidatesByKey  map[string]string
 }
 
 func New() *Store {
 	return &Store{
-		drafts:      make(map[string]model.Draft),
-		checkpoints: make(map[string]model.CheckpointDoc),
-		reports:     make(map[string]model.DailyReport),
-		findings:    make(map[string]model.Finding),
-		cursors:     make(map[string]string),
+		drafts:                 make(map[string]model.Draft),
+		checkpoints:            make(map[string]model.CheckpointDoc),
+		reports:                make(map[string]model.DailyReport),
+		findings:               make(map[string]model.Finding),
+		cursors:                make(map[string]string),
+		personaCandidates:      make(map[string]persona.PersonaCandidateRecord),
+		personaCandidatesByKey: make(map[string]string),
 	}
 }
 
@@ -51,6 +60,10 @@ func (s *Store) Usage() store.UsageStore {
 }
 
 func (s *Store) Cursors() store.CursorStore {
+	return s
+}
+
+func (s *Store) PersonaCandidates() store.PersonaCandidateStore {
 	return s
 }
 
@@ -307,4 +320,79 @@ func (s *Store) GetCursor(source string) (string, error) {
 		return "", store.ErrNotFound
 	}
 	return cursor, nil
+}
+
+func (s *Store) UpsertCandidate(record persona.PersonaCandidateRecord) (persona.PersonaCandidateRecord, bool, error) {
+	if record.ID == "" || record.DedupKey == "" {
+		return persona.PersonaCandidateRecord{}, false, store.ErrInvalidKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// ID-collision contract: re-inserting the same ID is idempotent
+	// only when the DedupKey matches. Reusing an ID for a different
+	// dedup identity would silently overwrite the original record
+	// and leave the by-key index pointing at a stale row; reject
+	// instead with ErrConflict so the caller can pick a fresh ID.
+	if existing, ok := s.personaCandidates[record.ID]; ok {
+		if existing.DedupKey == record.DedupKey {
+			return existing, false, nil
+		}
+		return persona.PersonaCandidateRecord{}, false, store.ErrConflict
+	}
+	if existingID, ok := s.personaCandidatesByKey[record.DedupKey]; ok {
+		return s.personaCandidates[existingID], false, nil
+	}
+	record.State = persona.NormalizeCandidateState(record.State)
+	s.personaCandidates[record.ID] = record
+	s.personaCandidatesByKey[record.DedupKey] = record.ID
+	return record, true, nil
+}
+
+func (s *Store) GetCandidate(id string) (persona.PersonaCandidateRecord, error) {
+	if id == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	record, ok := s.personaCandidates[id]
+	if !ok {
+		return persona.PersonaCandidateRecord{}, store.ErrNotFound
+	}
+	return record, nil
+}
+
+func (s *Store) ListCandidatesByState(state persona.PersonaCandidateState, limit int) ([]persona.PersonaCandidateRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	wantState := persona.NormalizeCandidateState(state)
+	out := make([]persona.PersonaCandidateRecord, 0, len(s.personaCandidates))
+	for _, record := range s.personaCandidates {
+		if persona.NormalizeCandidateState(record.State) != wantState {
+			continue
+		}
+		out = append(out, record)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].UpdatedAt.After(out[j].UpdatedAt)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (s *Store) UpdateCandidateState(id string, state persona.PersonaCandidateState, updatedAt time.Time) (persona.PersonaCandidateRecord, error) {
+	if id == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.personaCandidates[id]
+	if !ok {
+		return persona.PersonaCandidateRecord{}, store.ErrNotFound
+	}
+	record.State = persona.NormalizeCandidateState(state)
+	record.UpdatedAt = updatedAt
+	s.personaCandidates[id] = record
+	return record, nil
 }

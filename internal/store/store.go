@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/persona"
 )
 
 var (
@@ -51,6 +52,36 @@ type CursorStore interface {
 	GetCursor(source string) (string, error)
 }
 
+// PersonaCandidateStore persists LLM-mined persona update candidates
+// produced by internal/persona's extractor. The contract is small on
+// purpose -- P3 only persists; P4 wires console.Session to call
+// UpsertCandidate after each user turn, and P5+ adds the candidate ->
+// draft promotion via existing harness.ProposePersonaUpdate.
+//
+// Backends MUST enforce DedupKey uniqueness: a second
+// UpsertCandidate with a record whose DedupKey already exists returns
+// the stored record (with isNew=false) instead of inserting a new
+// row. This is the storage-level half of the extractor's "do not
+// emit the same fact twice" contract.
+type PersonaCandidateStore interface {
+	// UpsertCandidate inserts the record if its DedupKey is not yet
+	// present, or returns the existing record otherwise. isNew is
+	// true only when a fresh insertion occurred. The returned record
+	// reflects the stored row, including any backend-assigned
+	// timestamps.
+	UpsertCandidate(record persona.PersonaCandidateRecord) (stored persona.PersonaCandidateRecord, isNew bool, err error)
+	// GetCandidate returns the record with the given ID, or
+	// ErrNotFound if none exists.
+	GetCandidate(id string) (persona.PersonaCandidateRecord, error)
+	// ListCandidatesByState returns up to limit records in the given
+	// state, newest UpdatedAt first. limit <= 0 means "no cap".
+	ListCandidatesByState(state persona.PersonaCandidateState, limit int) ([]persona.PersonaCandidateRecord, error)
+	// UpdateCandidateState transitions a record to the new state,
+	// stamping UpdatedAt. Returns the post-transition record, or
+	// ErrNotFound when the ID does not exist.
+	UpdateCandidateState(id string, state persona.PersonaCandidateState, updatedAt time.Time) (persona.PersonaCandidateRecord, error)
+}
+
 type StateStore interface {
 	Drafts() DraftStore
 	ProcessSink() ProcessSinkStore
@@ -58,4 +89,5 @@ type StateStore interface {
 	Findings() FindingStore
 	Usage() UsageStore
 	Cursors() CursorStore
+	PersonaCandidates() PersonaCandidateStore
 }

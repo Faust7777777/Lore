@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/persona"
 	"obsidian-harness/internal/store"
 
 	_ "modernc.org/sqlite"
@@ -97,6 +98,10 @@ func (s *Store) Usage() store.UsageStore {
 }
 
 func (s *Store) Cursors() store.CursorStore {
+	return s
+}
+
+func (s *Store) PersonaCandidates() store.PersonaCandidateStore {
 	return s
 }
 
@@ -437,6 +442,132 @@ func (s *Store) GetCursor(source string) (string, error) {
 	return cursor, nil
 }
 
+func (s *Store) UpsertCandidate(record persona.PersonaCandidateRecord) (persona.PersonaCandidateRecord, bool, error) {
+	if strings.TrimSpace(record.ID) == "" || strings.TrimSpace(record.DedupKey) == "" {
+		return persona.PersonaCandidateRecord{}, false, store.ErrInvalidKey
+	}
+	// ID-collision pre-check: PRIMARY KEY would error on insert, but
+	// the contract distinguishes "same ID + same DedupKey" (idempotent
+	// retry, return existing) from "same ID + different DedupKey"
+	// (ErrConflict, caller picked a colliding ID for a different
+	// dedup identity). Doing the check in-process keeps the error
+	// semantics consistent across memory / json / sqlite.
+	if existing, err := s.GetCandidate(record.ID); err == nil {
+		if existing.DedupKey == record.DedupKey {
+			return existing, false, nil
+		}
+		return persona.PersonaCandidateRecord{}, false, store.ErrConflict
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return persona.PersonaCandidateRecord{}, false, err
+	}
+	record.State = persona.NormalizeCandidateState(record.State)
+	payload, err := marshalPayload(record)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, false, err
+	}
+	// Optimistic insert using ON CONFLICT(dedup_key) DO NOTHING.
+	// sqlite reports zero rows affected when the dedup key already
+	// exists; in that case we look up and return the existing row.
+	result, err := s.db.Exec(
+		`INSERT INTO persona_candidates (id, state, dedup_key, created_at, updated_at, observed_at, payload)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(dedup_key) DO NOTHING`,
+		record.ID,
+		string(record.State),
+		record.DedupKey,
+		timeString(record.CreatedAt),
+		timeString(record.UpdatedAt),
+		timeString(record.Candidate.ObservedAt),
+		payload,
+	)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, false, err
+	}
+	if rowsAffected == 1 {
+		return record, true, nil
+	}
+	existing, err := s.getCandidateByDedupKey(record.DedupKey)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, false, err
+	}
+	return existing, false, nil
+}
+
+func (s *Store) GetCandidate(id string) (persona.PersonaCandidateRecord, error) {
+	if strings.TrimSpace(id) == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	var payload string
+	err := s.db.QueryRow(`SELECT payload FROM persona_candidates WHERE id = ?`, id).Scan(&payload)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, mapSQLError(err)
+	}
+	return unmarshalPayload[persona.PersonaCandidateRecord](payload)
+}
+
+func (s *Store) getCandidateByDedupKey(key string) (persona.PersonaCandidateRecord, error) {
+	var payload string
+	err := s.db.QueryRow(`SELECT payload FROM persona_candidates WHERE dedup_key = ?`, key).Scan(&payload)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, mapSQLError(err)
+	}
+	return unmarshalPayload[persona.PersonaCandidateRecord](payload)
+}
+
+func (s *Store) ListCandidatesByState(state persona.PersonaCandidateState, limit int) ([]persona.PersonaCandidateRecord, error) {
+	wantState := persona.NormalizeCandidateState(state)
+	// When the caller asks for the Open queue, also surface any
+	// legacy rows whose stored state column is empty -- those should
+	// behave as Open per NormalizeCandidateState. Upsert normalizes
+	// on the write side too, so this branch only matters for rows
+	// written by older code paths or direct DB manipulation.
+	query := `SELECT payload FROM persona_candidates WHERE state = ? ORDER BY updated_at DESC`
+	args := []any{string(wantState)}
+	if wantState == persona.PersonaCandidateOpen {
+		query = `SELECT payload FROM persona_candidates WHERE state = ? OR state = '' ORDER BY updated_at DESC`
+	}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return decodePayloadRows[persona.PersonaCandidateRecord](rows)
+}
+
+func (s *Store) UpdateCandidateState(id string, state persona.PersonaCandidateState, updatedAt time.Time) (persona.PersonaCandidateRecord, error) {
+	if strings.TrimSpace(id) == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	record, err := s.GetCandidate(id)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	record.State = persona.NormalizeCandidateState(state)
+	record.UpdatedAt = updatedAt
+	payload, err := marshalPayload(record)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	if _, err := s.db.Exec(
+		`UPDATE persona_candidates SET state = ?, updated_at = ?, payload = ? WHERE id = ?`,
+		string(record.State),
+		timeString(updatedAt),
+		payload,
+		id,
+	); err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	return record, nil
+}
+
 func (s *Store) init() error {
 	stmts := []string{
 		`PRAGMA journal_mode = WAL`,
@@ -491,6 +622,21 @@ func (s *Store) init() error {
 			source TEXT PRIMARY KEY,
 			cursor TEXT NOT NULL
 		)`,
+		// persona_candidates stores LLM-mined persona update
+		// candidates (see internal/persona). dedup_key is UNIQUE so a
+		// duplicate UpsertCandidate returns the existing row instead
+		// of inserting. observed_at is exposed as its own column so
+		// future queries can range over time without parsing payload.
+		`CREATE TABLE IF NOT EXISTS persona_candidates (
+			id TEXT PRIMARY KEY,
+			state TEXT NOT NULL,
+			dedup_key TEXT NOT NULL UNIQUE,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			observed_at TEXT NOT NULL,
+			payload TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS persona_candidates_state_updated_at_idx ON persona_candidates(state, updated_at DESC)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -588,7 +734,13 @@ func (s *Store) migrateLegacyJSONIfNeeded(legacyJSONPath string) error {
 }
 
 func (s *Store) isEmpty() (bool, error) {
-	for _, table := range []string{"drafts", "checkpoints", "daily_reports", "audit_records", "findings", "usage_records", "cursors"} {
+	// Every persisted table participates in the migration guard:
+	// OpenWithJSONMigration only imports legacy JSON when the sqlite
+	// DB is empty across ALL tables. Forgetting a table here means a
+	// DB whose only content is in that table would be falsely treated
+	// as empty, and legacy JSON would clobber its peers. New tables
+	// added in later slices must be appended below.
+	for _, table := range []string{"drafts", "checkpoints", "daily_reports", "audit_records", "findings", "usage_records", "cursors", "persona_candidates"} {
 		var count int
 		if err := s.db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
 			return false, err

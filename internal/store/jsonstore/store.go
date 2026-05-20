@@ -9,18 +9,20 @@ import (
 	"time"
 
 	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/persona"
 	"obsidian-harness/internal/store"
 	"obsidian-harness/internal/vault"
 )
 
 type persistedState struct {
-	Drafts      map[string]model.Draft         `json:"drafts"`
-	Checkpoints map[string]model.CheckpointDoc `json:"checkpoints"`
-	Reports     map[string]model.DailyReport   `json:"reports"`
-	Audit       []model.AuditRecord            `json:"audit"`
-	Findings    map[string]model.Finding       `json:"findings"`
-	Usage       []model.UsageRecord            `json:"usage"`
-	Cursors     map[string]string              `json:"cursors"`
+	Drafts            map[string]model.Draft                    `json:"drafts"`
+	Checkpoints       map[string]model.CheckpointDoc            `json:"checkpoints"`
+	Reports           map[string]model.DailyReport              `json:"reports"`
+	Audit             []model.AuditRecord                       `json:"audit"`
+	Findings          map[string]model.Finding                  `json:"findings"`
+	Usage             []model.UsageRecord                       `json:"usage"`
+	Cursors           map[string]string                         `json:"cursors"`
+	PersonaCandidates map[string]persona.PersonaCandidateRecord `json:"persona_candidates,omitempty"`
 }
 
 type Store struct {
@@ -35,11 +37,12 @@ func New(path string, tempSuffix string) (*Store, error) {
 		path:       path,
 		tempSuffix: tempSuffix,
 		state: persistedState{
-			Drafts:      make(map[string]model.Draft),
-			Checkpoints: make(map[string]model.CheckpointDoc),
-			Reports:     make(map[string]model.DailyReport),
-			Findings:    make(map[string]model.Finding),
-			Cursors:     make(map[string]string),
+			Drafts:            make(map[string]model.Draft),
+			Checkpoints:       make(map[string]model.CheckpointDoc),
+			Reports:           make(map[string]model.DailyReport),
+			Findings:          make(map[string]model.Finding),
+			Cursors:           make(map[string]string),
+			PersonaCandidates: make(map[string]persona.PersonaCandidateRecord),
 		},
 	}
 
@@ -70,6 +73,10 @@ func (s *Store) Usage() store.UsageStore {
 }
 
 func (s *Store) Cursors() store.CursorStore {
+	return s
+}
+
+func (s *Store) PersonaCandidates() store.PersonaCandidateStore {
 	return s
 }
 
@@ -368,6 +375,11 @@ func (s *Store) load() error {
 	if s.state.Cursors == nil {
 		s.state.Cursors = make(map[string]string)
 	}
+	if s.state.PersonaCandidates == nil {
+		// Legacy stores predate persona candidates; populate the map
+		// so subsequent UpsertCandidate calls do not need a nil check.
+		s.state.PersonaCandidates = make(map[string]persona.PersonaCandidateRecord)
+	}
 	return nil
 }
 
@@ -378,6 +390,96 @@ func (s *Store) persistLocked() error {
 	}
 	_, err = vault.WriteFileAtomic(s.path, data, s.tempSuffix)
 	return err
+}
+
+func (s *Store) UpsertCandidate(record persona.PersonaCandidateRecord) (persona.PersonaCandidateRecord, bool, error) {
+	if record.ID == "" || record.DedupKey == "" {
+		return persona.PersonaCandidateRecord{}, false, store.ErrInvalidKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// ID-collision contract: re-inserting the same ID is idempotent
+	// only when the DedupKey matches. Reusing an ID for a different
+	// dedup identity would silently overwrite the original record;
+	// reject instead with ErrConflict so the caller can pick a fresh
+	// ID. Same contract enforced across all three backends.
+	if existing, ok := s.state.PersonaCandidates[record.ID]; ok {
+		if existing.DedupKey == record.DedupKey {
+			return existing, false, nil
+		}
+		return persona.PersonaCandidateRecord{}, false, store.ErrConflict
+	}
+	for _, existing := range s.state.PersonaCandidates {
+		if existing.DedupKey == record.DedupKey {
+			return existing, false, nil
+		}
+	}
+	record.State = persona.NormalizeCandidateState(record.State)
+	s.state.PersonaCandidates[record.ID] = record
+	if err := s.persistLocked(); err != nil {
+		// Roll back the in-memory insertion on persist failure so a
+		// subsequent retry can succeed without the dedup index
+		// blocking it. Failure here is rare (disk full) but ignoring
+		// it would leave the store in a state where the candidate is
+		// visible in-process but lost on restart.
+		delete(s.state.PersonaCandidates, record.ID)
+		return persona.PersonaCandidateRecord{}, false, err
+	}
+	return record, true, nil
+}
+
+func (s *Store) GetCandidate(id string) (persona.PersonaCandidateRecord, error) {
+	if id == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	record, ok := s.state.PersonaCandidates[id]
+	if !ok {
+		return persona.PersonaCandidateRecord{}, store.ErrNotFound
+	}
+	return record, nil
+}
+
+func (s *Store) ListCandidatesByState(state persona.PersonaCandidateState, limit int) ([]persona.PersonaCandidateRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	wantState := persona.NormalizeCandidateState(state)
+	out := make([]persona.PersonaCandidateRecord, 0, len(s.state.PersonaCandidates))
+	for _, record := range s.state.PersonaCandidates {
+		if persona.NormalizeCandidateState(record.State) != wantState {
+			continue
+		}
+		out = append(out, record)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].UpdatedAt.After(out[j].UpdatedAt)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (s *Store) UpdateCandidateState(id string, state persona.PersonaCandidateState, updatedAt time.Time) (persona.PersonaCandidateRecord, error) {
+	if id == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.state.PersonaCandidates[id]
+	if !ok {
+		return persona.PersonaCandidateRecord{}, store.ErrNotFound
+	}
+	previous := record
+	record.State = persona.NormalizeCandidateState(state)
+	record.UpdatedAt = updatedAt
+	s.state.PersonaCandidates[id] = record
+	if err := s.persistLocked(); err != nil {
+		s.state.PersonaCandidates[id] = previous
+		return persona.PersonaCandidateRecord{}, err
+	}
+	return record, nil
 }
 
 func reportKey(agentID string, day time.Time) string {

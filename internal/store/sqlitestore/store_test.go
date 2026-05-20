@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/persona"
 )
 
 func TestStorePersistsAcrossReload(t *testing.T) {
@@ -458,5 +459,117 @@ func TestOpenWithJSONMigrationBucketsUsageByLocalDay(t *testing.T) {
 	}
 	if prev.Calls != 0 {
 		t.Fatalf("migrated yesterday summary should be empty, got %+v", prev)
+	}
+}
+
+// TestOpenWithJSONMigrationSkipsWhenPersonaCandidatesPresent locks the
+// migration guard against the regression flagged in the P3 review: if
+// the sqlite DB contains ONLY persona candidates (no other tables
+// have rows), isEmpty() must still report non-empty so legacy JSON is
+// not imported on top. Forgetting persona_candidates in the isEmpty
+// table list would let the migration clobber a populated candidate
+// queue with stale legacy state.
+func TestOpenWithJSONMigrationSkipsWhenPersonaCandidatesPresent(t *testing.T) {
+	workDir := t.TempDir()
+	legacyPath := filepath.Join(workDir, "state", "store.json")
+	dbPath := filepath.Join(workDir, "state", "store.db")
+
+	// Phase 1: seed the sqlite DB with a single persona candidate.
+	{
+		st, err := New(dbPath)
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		candidate := persona.PersonaCandidate{
+			Field:           "major",
+			ProposedValue:   "economics",
+			EvidenceQuote:   "I study economics",
+			Confidence:      persona.ConfidenceHigh,
+			SourceKind:      persona.SourceConsole,
+			SourceSessionID: "lore-session",
+			ObservedAt:      time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC),
+		}
+		now := time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC)
+		rec := persona.PersonaCandidateRecord{
+			ID:        "seeded-1",
+			State:     persona.PersonaCandidateOpen,
+			DedupKey:  persona.DedupKey(candidate),
+			Candidate: candidate,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if _, isNew, err := st.UpsertCandidate(rec); err != nil || !isNew {
+			t.Fatalf("seed UpsertCandidate isNew=%v err=%v", isNew, err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatalf("seed Close() error = %v", err)
+		}
+	}
+
+	// Phase 2: stage a legacy JSON state that would, if imported,
+	// add a draft + a usage row. The migration guard must reject
+	// this because the seeded sqlite DB is NOT empty.
+	createdAt := time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC)
+	legacy := legacyJSONState{
+		Drafts: map[string]model.Draft{
+			"draft-legacy": {
+				ID:    "draft-legacy",
+				Kind:  model.DraftKindProgressSync,
+				State: model.DraftApproved,
+				Target: model.DocumentRef{
+					Path:        "progress.md",
+					Class:       model.DocClassProgressIndex,
+					BaseVersion: "legacy-v1",
+				},
+				Title:           "legacy draft",
+				Summary:         "should not be imported",
+				ProposedContent: "legacy content",
+				CreatedAt:       createdAt,
+				UpdatedAt:       createdAt,
+			},
+		},
+		Usage: []model.UsageRecord{{
+			RecordedAt:       createdAt,
+			PromptTokens:     7,
+			CompletionTokens: 1,
+		}},
+	}
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data, err := json.MarshalIndent(legacy, "", "  ")
+	if err != nil {
+		t.Fatalf("json.MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(legacyPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy) error = %v", err)
+	}
+
+	// Phase 3: reopen with the migration entrypoint and assert the
+	// legacy JSON did NOT land in the seeded DB.
+	st, err := OpenWithJSONMigration(dbPath, legacyPath)
+	if err != nil {
+		t.Fatalf("OpenWithJSONMigration() error = %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	if _, err := st.GetDraft("draft-legacy"); err == nil {
+		t.Fatalf("legacy draft was imported into a non-empty DB; migration guard broken")
+	}
+	summary, err := st.SummarizeUsage(createdAt)
+	if err != nil {
+		t.Fatalf("SummarizeUsage() error = %v", err)
+	}
+	if summary.Calls != 0 {
+		t.Fatalf("legacy usage imported into non-empty DB: %+v", summary)
+	}
+
+	// And the original seeded candidate must still be present.
+	got, err := st.GetCandidate("seeded-1")
+	if err != nil {
+		t.Fatalf("seeded candidate missing after migration call: %v", err)
+	}
+	if got.Candidate.ProposedValue != "economics" {
+		t.Fatalf("seeded candidate corrupted: %+v", got.Candidate)
 	}
 }
