@@ -641,6 +641,106 @@ func TestRunTUIOnceShowsResolveReadFinalTaskVisibility(t *testing.T) {
 	}
 }
 
+func TestRunPersonaMemoryCandidateAcceptanceScaffold(t *testing.T) {
+	t.Skip("activate after B candidate storage/console async/CLI review")
+
+	workDir := t.TempDir()
+	configureLLMTestEnv(t)
+
+	userMessage := "我每周三晚上都会复盘英语听力错题，这件事对我的学习计划很重要。"
+	var turnStdout bytes.Buffer
+	var turnStderr bytes.Buffer
+	exitCode := run([]string{"console", "--workdir", workDir, "--once", userMessage}, &turnStdout, &turnStderr)
+	if exitCode != 0 {
+		t.Fatalf("expected user turn to complete before async persona extraction, got %d, stderr = %q", exitCode, turnStderr.String())
+	}
+
+	var listStdout bytes.Buffer
+	var listStderr bytes.Buffer
+	exitCode = run([]string{"persona", "candidates", "list", "--workdir", workDir}, &listStdout, &listStderr)
+	if exitCode != 0 {
+		t.Fatalf("expected persona candidate list to succeed, got %d, stderr = %q", exitCode, listStderr.String())
+	}
+	listOutput := listStdout.String()
+	for _, expected := range []string{
+		"英语听力错题",
+		"candidate",
+		"lore persona candidates draft",
+	} {
+		if !strings.Contains(listOutput, expected) {
+			t.Fatalf("persona candidate list missing %q:\n%s", expected, listOutput)
+		}
+	}
+
+	candidateID := firstPersonaCandidateIDFromListOutput(t, listOutput)
+	var showStdout bytes.Buffer
+	var showStderr bytes.Buffer
+	exitCode = run([]string{"persona", "candidates", "show", "--workdir", workDir, candidateID}, &showStdout, &showStderr)
+	if exitCode != 0 {
+		t.Fatalf("expected persona candidate show to succeed, got %d, stderr = %q", exitCode, showStderr.String())
+	}
+	showOutput := showStdout.String()
+	for _, expected := range []string{
+		"英语听力错题",
+		"我每周三晚上都会复盘英语听力错题",
+		"Field:",
+		"Proposed value:",
+		"Evidence:",
+		"Reason:",
+		"Confidence:",
+		"Source:",
+		"Observed at:",
+	} {
+		if !strings.Contains(showOutput, expected) {
+			t.Fatalf("persona candidate show missing %q:\n%s", expected, showOutput)
+		}
+	}
+
+	runtime, err := openRuntimeForCLITest(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	drafts, err := runtime.ListDrafts()
+	if err != nil {
+		t.Fatalf("ListDrafts() error = %v", err)
+	}
+	for _, draft := range drafts {
+		if draft.Kind == model.DraftKindPersonaUpdate {
+			t.Fatalf("persona candidate acceptance must not auto-create persona update drafts: %+v", draft)
+		}
+	}
+
+	personaPath := filepath.Join(workDir, "vault", "人物画像.md")
+	if _, err := os.Stat(personaPath); err == nil {
+		data, readErr := os.ReadFile(personaPath)
+		if readErr != nil {
+			t.Fatalf("ReadFile(persona) error = %v", readErr)
+		}
+		if strings.Contains(string(data), "英语听力错题") {
+			t.Fatalf("persona candidate acceptance must not auto-write persona file:\n%s", string(data))
+		}
+	}
+}
+
+func firstPersonaCandidateIDFromListOutput(t *testing.T, output string) string {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 || strings.EqualFold(fields[0], "ID") {
+			continue
+		}
+		if strings.HasPrefix(fields[0], "pc-") {
+			return fields[0]
+		}
+	}
+	t.Fatalf("persona candidate list did not include a parseable candidate ID:\n%s", output)
+	return ""
+}
+
 func TestRunTUIInteractiveSurfacesActionErrorsInWorkbench(t *testing.T) {
 	workDir := t.TempDir()
 	configureLLMTestEnv(t)

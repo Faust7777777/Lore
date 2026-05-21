@@ -1,6 +1,7 @@
 param(
     [switch]$Full,
     [switch]$E2E,
+    [switch]$PersonaAcceptance,
     [int]$Repeat = 1,
     [switch]$SkipDiffCheck,
     [switch]$AssertClean
@@ -130,6 +131,10 @@ Push-Location $RepoRoot
 try {
     if (-not $SkipDiffCheck) {
         Invoke-NativeChecked -Label "git diff --check" -FilePath "git" -Arguments @("diff", "--check")
+    }
+
+    if ($PersonaAcceptance) {
+        throw "Persona acceptance gate is reserved until B candidate storage, console async extraction, and CLI review land. Activate by unskipping TestRunPersonaMemoryCandidateAcceptanceScaffold and replacing this guard with Invoke-GoGate."
     }
 
     Invoke-GoGate `
