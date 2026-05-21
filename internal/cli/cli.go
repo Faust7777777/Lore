@@ -905,12 +905,12 @@ func runFindingsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "candidates" {
-		fmt.Fprintln(stderr, "usage: lore persona candidates <list|show|dismiss|draft> [flags] [id]")
+		fmt.Fprintln(stderr, "usage: lore persona candidates <list|show|dismiss|draft|recover> [flags] [id]")
 		return 1
 	}
 	sub := args[1:]
 	if len(sub) == 0 {
-		fmt.Fprintln(stderr, "usage: lore persona candidates <list|show|dismiss|draft> [flags] [id]")
+		fmt.Fprintln(stderr, "usage: lore persona candidates <list|show|dismiss|draft|recover> [flags] [id]")
 		return 1
 	}
 	switch sub[0] {
@@ -933,7 +933,7 @@ func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		renderPersonaCandidateList(stdout, stateFilter, records)
 		return 0
-	case "show", "dismiss", "draft":
+	case "show", "dismiss":
 		workDir, candidateID, err := parsePersonaActionFlags("persona candidates "+sub[0], sub[1:], stderr)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -961,14 +961,65 @@ func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 				return 1
 			}
 			renderPersonaCandidateActionResult(stdout, "dismiss", record, "")
-		case "draft":
-			record, result, err := runtime.CreatePersonaDraftFromCandidate(candidateID, time.Now())
+		}
+		return 0
+	case "draft":
+		workDir, candidateID, retryRejected, err := parsePersonaDraftFlags(sub[1:], stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		defer closeRuntime(stderr, runtime, "persona candidates draft")
+		var record persona.PersonaCandidateRecord
+		var result model.PersonaUpdateProposalResult
+		if retryRejected {
+			record, result, err = runtime.RetryRejectedPersonaDraft(candidateID, time.Now())
+		} else {
+			record, result, err = runtime.CreatePersonaDraftFromCandidate(candidateID, time.Now())
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "persona candidates draft: %v\n", err)
+			return 1
+		}
+		action := "draft"
+		if retryRejected {
+			action = "draft (retry-rejected)"
+		}
+		renderPersonaCandidateActionResult(stdout, action, record, result.DraftID)
+		return 0
+	case "recover":
+		workDir, candidateID, draftID, forceDismiss, err := parsePersonaRecoverFlags(sub[1:], stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		defer closeRuntime(stderr, runtime, "persona candidates recover")
+		var record persona.PersonaCandidateRecord
+		if forceDismiss {
+			record, err = runtime.ForceDismissPartialPersonaCandidate(candidateID, time.Now())
 			if err != nil {
-				fmt.Fprintf(stderr, "persona candidates draft: %v\n", err)
+				fmt.Fprintf(stderr, "persona candidates recover: %v\n", err)
 				return 1
 			}
-			renderPersonaCandidateActionResult(stdout, "draft", record, result.DraftID)
+			renderPersonaCandidateActionResult(stdout, "recover --force-dismiss", record, "")
+			return 0
 		}
+		record, err = runtime.RecoverPersonaCandidateLink(candidateID, draftID, time.Now())
+		if err != nil {
+			fmt.Fprintf(stderr, "persona candidates recover: %v\n", err)
+			return 1
+		}
+		renderPersonaCandidateActionResult(stdout, "recover --link", record, record.DraftID)
 		return 0
 	default:
 		fmt.Fprintf(stderr, "persona candidates: unknown subcommand %q\n", sub[0])
@@ -1014,6 +1065,62 @@ func parsePersonaActionFlags(name string, args []string, stderr io.Writer) (stri
 		return "", "", err
 	}
 	return resolved, strings.TrimSpace(remaining[0]), nil
+}
+
+// parsePersonaDraftFlags accepts --workdir and the new --retry-rejected
+// flag, then a positional candidate ID. --retry-rejected routes the
+// CLI to RetryRejectedPersonaDraft instead of the default
+// CreatePersonaDraftFromCandidate, so the same `lore persona candidates
+// draft` surface covers both first-attempt promotion and recovery from
+// a rejected/expired/superseded draft.
+func parsePersonaDraftFlags(args []string, stderr io.Writer) (string, string, bool, error) {
+	flags := flag.NewFlagSet("persona candidates draft", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	retryRejected := flags.Bool("retry-rejected", false, "retry a candidate whose previous draft is rejected, expired, or superseded")
+	if err := flags.Parse(args); err != nil {
+		return "", "", false, err
+	}
+	remaining := flags.Args()
+	if len(remaining) == 0 || strings.TrimSpace(remaining[0]) == "" {
+		return "", "", false, fmt.Errorf("persona candidates draft: persona candidate id is required")
+	}
+	resolved, err := defaultWorkDir(*workDir)
+	if err != nil {
+		return "", "", false, err
+	}
+	return resolved, strings.TrimSpace(remaining[0]), *retryRejected, nil
+}
+
+// parsePersonaRecoverFlags accepts --workdir and the recover mode flags
+// --link <draft-id> and --force-dismiss. Exactly one of the two modes
+// must be supplied; both-set and neither-set are user errors so the
+// CLI can never silently default to one path.
+func parsePersonaRecoverFlags(args []string, stderr io.Writer) (string, string, string, bool, error) {
+	flags := flag.NewFlagSet("persona candidates recover", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	linkDraftID := flags.String("link", "", "link the candidate to an existing orphan persona_update draft")
+	forceDismiss := flags.Bool("force-dismiss", false, "abandon a partial drafted candidate by transitioning it to dismissed")
+	if err := flags.Parse(args); err != nil {
+		return "", "", "", false, err
+	}
+	remaining := flags.Args()
+	if len(remaining) == 0 || strings.TrimSpace(remaining[0]) == "" {
+		return "", "", "", false, fmt.Errorf("persona candidates recover: persona candidate id is required")
+	}
+	linkSet := strings.TrimSpace(*linkDraftID) != ""
+	if linkSet && *forceDismiss {
+		return "", "", "", false, fmt.Errorf("persona candidates recover: --link and --force-dismiss are mutually exclusive")
+	}
+	if !linkSet && !*forceDismiss {
+		return "", "", "", false, fmt.Errorf("persona candidates recover: exactly one of --link <draft-id> or --force-dismiss is required")
+	}
+	resolved, err := defaultWorkDir(*workDir)
+	if err != nil {
+		return "", "", "", false, err
+	}
+	return resolved, strings.TrimSpace(remaining[0]), strings.TrimSpace(*linkDraftID), *forceDismiss, nil
 }
 
 func renderPersonaCandidateList(stdout io.Writer, state persona.PersonaCandidateState, records []persona.PersonaCandidateRecord) {

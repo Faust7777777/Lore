@@ -25,6 +25,31 @@ var ErrPersonaCandidateAlreadyDrafted = errors.New("app: persona candidate alrea
 // re-extract by repeating the underlying user turn.
 var ErrPersonaCandidateDismissed = errors.New("app: persona candidate is dismissed")
 
+// ErrPersonaCandidatePartialStateRequired is returned by
+// RecoverPersonaCandidateLink and ForceDismissPartialPersonaCandidate
+// when the candidate is NOT in the partial state these recovery
+// commands target (State=Drafted && DraftID==""). A candidate in Open,
+// Drafted+linked, or Dismissed has no partial-failure scar to mend.
+var ErrPersonaCandidatePartialStateRequired = errors.New("app: persona candidate must be drafted with empty DraftID for recovery")
+
+// ErrPersonaCandidateLinkedStateRequired is returned by
+// RetryRejectedPersonaDraft when the candidate is NOT in the linked
+// drafted state (State=Drafted && DraftID!=""). Retrying a rejected
+// draft only makes sense when there is a previous draft to retry.
+var ErrPersonaCandidateLinkedStateRequired = errors.New("app: persona candidate must be drafted with non-empty DraftID for retry-rejected")
+
+// ErrPersonaDraftNotTerminalForRetry is returned by
+// RetryRejectedPersonaDraft when the linked draft has not reached a
+// terminal review state (rejected, expired, or superseded). A retry
+// must not race a still-pending review.
+var ErrPersonaDraftNotTerminalForRetry = errors.New("app: linked persona draft is not in a terminal rejected/expired/superseded state")
+
+// ErrPersonaDraftKindMismatch is returned by
+// RecoverPersonaCandidateLink when the --link target is not a
+// persona_update draft. Linking a candidate to an unrelated draft
+// would silently break the candidate -> draft contract.
+var ErrPersonaDraftKindMismatch = errors.New("app: target draft is not a persona_update draft")
+
 // RecordPersonaCandidate persists one persona candidate via the
 // runtime's store. Returns the stored record, an isNew flag (false
 // when the DedupKey already mapped to an existing row, see
@@ -87,6 +112,25 @@ func (r *Runtime) DismissPersonaCandidate(id string, now time.Time) (persona.Per
 		return current, nil
 	}
 	return r.Store.PersonaCandidates().UpdateCandidateState(id, persona.PersonaCandidateDismissed, now)
+}
+
+// buildPersonaProposalFromCandidate translates a PersonaCandidate
+// into the harness PersonaUpdateProposal contract. Shared by
+// CreatePersonaDraftFromCandidate and RetryRejectedPersonaDraft so
+// both code paths emit byte-identical proposals from the same
+// candidate data; divergence here would mean a retry-rejected draft
+// could fail validation that the original draft passed.
+func buildPersonaProposalFromCandidate(c persona.PersonaCandidate) model.PersonaUpdateProposal {
+	return model.PersonaUpdateProposal{
+		Field:         c.Field,
+		CurrentValue:  c.CurrentValue,
+		ProposedValue: c.ProposedValue,
+		Evidence:      c.EvidenceQuote,
+		Reason:        c.Reason,
+		Confidence:    string(c.Confidence),
+		Source:        string(c.SourceKind),
+		ObservedAt:    c.ObservedAt,
+	}
 }
 
 // CreatePersonaDraftFromCandidate promotes a stored candidate into a
@@ -183,16 +227,7 @@ func (r *Runtime) CreatePersonaDraftFromCandidate(id string, now time.Time) (per
 		return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, err
 	}
 
-	proposal := model.PersonaUpdateProposal{
-		Field:         claimed.Candidate.Field,
-		CurrentValue:  claimed.Candidate.CurrentValue,
-		ProposedValue: claimed.Candidate.ProposedValue,
-		Evidence:      claimed.Candidate.EvidenceQuote,
-		Reason:        claimed.Candidate.Reason,
-		Confidence:    string(claimed.Candidate.Confidence),
-		Source:        string(claimed.Candidate.SourceKind),
-		ObservedAt:    claimed.Candidate.ObservedAt,
-	}
+	proposal := buildPersonaProposalFromCandidate(claimed.Candidate)
 	result, err := r.Harness.ProposePersonaUpdate(proposal, now)
 	if err != nil {
 		// Propose failed; no draft created, no audit emitted.
@@ -294,4 +329,182 @@ func (r *Runtime) augmentPersonaDraftSummary(draftID string, candidate persona.P
 	}
 	draft.Summary = b.String()
 	return r.Store.Drafts().SaveDraft(draft)
+}
+
+// RecoverPersonaCandidateLink repairs the partial-failure state that
+// CreatePersonaDraftFromCandidate documents at lines 134-139: the
+// proposal succeeded and a draft exists in the store, but the
+// follow-up LinkCandidateDraft call did not persist. The candidate
+// is stuck in Drafted with DraftID == "" and a normal retry refuses
+// to re-propose, so without a recovery path the operator must reach
+// into sqlite by hand.
+//
+// This method takes the orphan draft ID the operator has located
+// (via `lore draft list` or audit log), verifies it exists and has
+// kind == persona_update, then performs the deferred link. The
+// candidate ends in Drafted with the supplied DraftID, indistinguishable
+// from a clean first-attempt completion.
+//
+// Errors:
+//   - store.ErrNotFound when the candidate ID does not exist.
+//   - ErrPersonaCandidatePartialStateRequired when the candidate is
+//     not in Drafted+empty (recover has nothing to repair).
+//   - ErrPersonaDraftKindMismatch when the draft exists but is not a
+//     persona_update draft (operator targeted the wrong draft).
+//   - any harness draft lookup or store link error verbatim.
+func (r *Runtime) RecoverPersonaCandidateLink(candidateID string, draftID string, now time.Time) (persona.PersonaCandidateRecord, error) {
+	if r == nil || r.Store == nil || r.Harness == nil {
+		return persona.PersonaCandidateRecord{}, fmt.Errorf("app: runtime is not initialized")
+	}
+	candidateID = strings.TrimSpace(candidateID)
+	draftID = strings.TrimSpace(draftID)
+	if draftID == "" {
+		return persona.PersonaCandidateRecord{}, fmt.Errorf("app: draft id is required for recover --link")
+	}
+	current, err := r.Store.PersonaCandidates().GetCandidate(candidateID)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	if current.State != persona.PersonaCandidateDrafted || strings.TrimSpace(current.DraftID) != "" {
+		return persona.PersonaCandidateRecord{}, ErrPersonaCandidatePartialStateRequired
+	}
+	draft, err := r.Harness.GetDraft(draftID)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	if draft.Kind != model.DraftKindPersonaUpdate {
+		return persona.PersonaCandidateRecord{}, ErrPersonaDraftKindMismatch
+	}
+	return r.Store.PersonaCandidates().LinkCandidateDraft(candidateID, draftID, now)
+}
+
+// ForceDismissPartialPersonaCandidate is the abandonment counterpart
+// to RecoverPersonaCandidateLink: instead of mending the partial
+// scar by supplying the orphan DraftID, the operator decides to
+// throw the partial state away (e.g. the orphan draft was already
+// rejected via lore draft review, or the candidate is no longer
+// worth pursuing). The candidate transitions to Dismissed, which
+// keeps its DedupKey as a tombstone so the same fact does not
+// re-emerge from the next console turn.
+//
+// This method ONLY operates on the partial state (State=Drafted &&
+// DraftID==""). The normal Dismiss path (DismissPersonaCandidate)
+// covers Open candidates and is idempotent on Dismissed; this method
+// fills the gap that exists because DismissPersonaCandidate
+// deliberately refuses Drafted candidates to avoid race-y reopens.
+//
+// Idempotent on already-dismissed: returning the existing record
+// rather than failing matches the ergonomics of DismissPersonaCandidate
+// so retrying the recover --force-dismiss CLI command is safe.
+//
+// Errors:
+//   - store.ErrNotFound when the candidate ID does not exist.
+//   - ErrPersonaCandidatePartialStateRequired when the candidate is
+//     Open or Drafted+linked (those paths have their own commands).
+func (r *Runtime) ForceDismissPartialPersonaCandidate(id string, now time.Time) (persona.PersonaCandidateRecord, error) {
+	if r == nil || r.Store == nil {
+		return persona.PersonaCandidateRecord{}, fmt.Errorf("app: runtime is not initialized")
+	}
+	id = strings.TrimSpace(id)
+	current, err := r.Store.PersonaCandidates().GetCandidate(id)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	if current.State == persona.PersonaCandidateDismissed {
+		return current, nil
+	}
+	if current.State != persona.PersonaCandidateDrafted || strings.TrimSpace(current.DraftID) != "" {
+		return persona.PersonaCandidateRecord{}, ErrPersonaCandidatePartialStateRequired
+	}
+	return r.Store.PersonaCandidates().UpdateCandidateState(id, persona.PersonaCandidateDismissed, now)
+}
+
+// isTerminalDraftStateForRetry reports whether a draft is in a state
+// that allows the operator to legitimately retry the candidate (the
+// reviewer either rejected the original draft, it expired without
+// review, or it was superseded by another draft). pending_review,
+// approved, applied, revision_requested, and conflicted are all
+// non-terminal for this purpose -- retrying then would either race
+// the reviewer or duplicate already-accepted work.
+func isTerminalDraftStateForRetry(state model.DraftState) bool {
+	switch state {
+	case model.DraftRejected, model.DraftExpired, model.DraftSuperseded:
+		return true
+	}
+	return false
+}
+
+// RetryRejectedPersonaDraft handles the candidate-lifecycle case the
+// P5+P6 contract intentionally left open: a candidate was promoted
+// to a persona_update draft, the reviewer rejected (or it expired /
+// was superseded), and the candidate is now stuck in Drafted with a
+// DraftID that points at a dead draft. CreatePersonaDraftFromCandidate
+// refuses to re-propose because it sees State=Drafted; without an
+// explicit retry path the candidate's underlying fact is unrecoverable
+// (its DedupKey would block re-extraction even if the user repeated
+// the source utterance).
+//
+// This method gates the retry on three checks:
+//
+//   - candidate.State == Drafted (otherwise nothing to retry)
+//   - candidate.DraftID != "" (otherwise recover --link is the right command)
+//   - linked draft.State in {Rejected, Expired, Superseded}
+//
+// The third check is critical: retrying while the prior draft is
+// still pending_review or already approved/applied would either race
+// the reviewer or duplicate accepted work. A pending review must be
+// reviewed; an approved / applied draft is not "retryable" -- the
+// outcome already exists.
+//
+// On success: a fresh draft is created via the same
+// harness.ProposePersonaUpdate path used by P5, augmented with the
+// candidate's evidence summary, and LinkCandidateDraft overwrites
+// the candidate's DraftID with the new draft ID. The previous
+// (rejected/expired/superseded) draft is intentionally NOT mutated:
+// it stays in the draft history as audit, and the candidate now
+// points forward to the active retry.
+//
+// Errors:
+//   - store.ErrNotFound when the candidate ID does not exist.
+//   - ErrPersonaCandidateLinkedStateRequired when candidate.State is
+//     not Drafted or DraftID is empty.
+//   - ErrPersonaDraftNotTerminalForRetry when the linked draft is in
+//     a non-terminal review state.
+//   - any harness draft lookup, propose, or store link error verbatim;
+//     the link error message includes the new draft ID so the operator
+//     can reconcile manually (the new draft exists, just unlinked).
+func (r *Runtime) RetryRejectedPersonaDraft(id string, now time.Time) (persona.PersonaCandidateRecord, model.PersonaUpdateProposalResult, error) {
+	if r == nil || r.Store == nil || r.Harness == nil {
+		return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, fmt.Errorf("app: runtime is not initialized")
+	}
+	id = strings.TrimSpace(id)
+	current, err := r.Store.PersonaCandidates().GetCandidate(id)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, err
+	}
+	if current.State != persona.PersonaCandidateDrafted || strings.TrimSpace(current.DraftID) == "" {
+		return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, ErrPersonaCandidateLinkedStateRequired
+	}
+	priorDraft, err := r.Harness.GetDraft(current.DraftID)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, err
+	}
+	if !isTerminalDraftStateForRetry(priorDraft.State) {
+		return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, fmt.Errorf("%w: linked draft %s is in state %q", ErrPersonaDraftNotTerminalForRetry, current.DraftID, priorDraft.State)
+	}
+
+	proposal := buildPersonaProposalFromCandidate(current.Candidate)
+	result, err := r.Harness.ProposePersonaUpdate(proposal, now)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, err
+	}
+	if augErr := r.augmentPersonaDraftSummary(result.DraftID, current.Candidate); augErr != nil {
+		// Non-fatal: the draft is usable, just less rich in summary.
+		_ = augErr
+	}
+	updated, err := r.Store.PersonaCandidates().LinkCandidateDraft(id, result.DraftID, now)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, result, fmt.Errorf("retry created new persona draft %s but failed to relink candidate %s: %w; the candidate still points at the old terminal draft %s and the new draft is orphan, reconcile via `lore persona candidates recover --link %s` or by rejecting the orphan draft", result.DraftID, id, err, current.DraftID, result.DraftID)
+	}
+	return updated, result, nil
 }

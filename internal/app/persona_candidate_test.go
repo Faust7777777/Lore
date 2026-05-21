@@ -570,3 +570,345 @@ func TestListPersonaCandidatesNormalizesEmptyStateToOpen(t *testing.T) {
 		t.Fatalf("list = %d, want 1 (empty state must normalize to Open)", len(list))
 	}
 }
+
+// makePartialDraftedCandidate seeds an Open candidate then forces it
+// into the partial-failure state (State=Drafted, DraftID="") that
+// CreatePersonaDraftFromCandidate exits with on LinkCandidateDraft
+// failure. Returns the candidate ID. Used by B-P8 recovery tests so
+// each test has a clean partial scar to mend.
+func makePartialDraftedCandidate(t *testing.T, runtime *Runtime, field, value, evidence string) string {
+	t.Helper()
+	id := seedPersonaCandidate(t, runtime, field, value, evidence)
+	if _, err := runtime.Store.PersonaCandidates().UpdateCandidateState(id, persona.PersonaCandidateDrafted, time.Date(2026, 5, 20, 11, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("force partial state: %v", err)
+	}
+	return id
+}
+
+func TestRecoverPersonaCandidateLinkSuccess(t *testing.T) {
+	runtime := openTestRuntime(t)
+	partialID := makePartialDraftedCandidate(t, runtime, "major", "economics", "I major in economics")
+
+	// Create an orphan persona_update draft directly through the
+	// harness so it exists in the store with no candidate -> draft
+	// link. This mirrors the production shape of the partial-failure
+	// scar that recover --link is meant to mend: the propose call
+	// succeeded, but the follow-up LinkCandidateDraft did not.
+	orphanResult, err := runtime.Harness.ProposePersonaUpdate(model.PersonaUpdateProposal{
+		Field:         "major",
+		ProposedValue: "economics",
+		Evidence:      "I major in economics",
+		Reason:        "orphan",
+		Confidence:    "high",
+		Source:        "console",
+		ObservedAt:    time.Date(2026, 5, 20, 10, 30, 0, 0, time.UTC),
+	}, time.Date(2026, 5, 20, 10, 35, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ProposePersonaUpdate (orphan): %v", err)
+	}
+
+	now := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
+	updated, err := runtime.RecoverPersonaCandidateLink(partialID, orphanResult.DraftID, now)
+	if err != nil {
+		t.Fatalf("RecoverPersonaCandidateLink: %v", err)
+	}
+	if updated.DraftID != orphanResult.DraftID {
+		t.Fatalf("DraftID = %q, want %q", updated.DraftID, orphanResult.DraftID)
+	}
+	if updated.State != persona.PersonaCandidateDrafted {
+		t.Fatalf("State = %q, want drafted", updated.State)
+	}
+	if !updated.UpdatedAt.Equal(now) {
+		t.Fatalf("UpdatedAt = %v, want %v", updated.UpdatedAt, now)
+	}
+}
+
+func TestRecoverPersonaCandidateLinkRejectsWhenStateOpen(t *testing.T) {
+	runtime := openTestRuntime(t)
+	candidateID := seedPersonaCandidate(t, runtime, "major", "economics", "I major in economics")
+
+	_, err := runtime.RecoverPersonaCandidateLink(candidateID, "draft-irrelevant", time.Now())
+	if !errors.Is(err, ErrPersonaCandidatePartialStateRequired) {
+		t.Fatalf("err = %v, want ErrPersonaCandidatePartialStateRequired", err)
+	}
+}
+
+func TestRecoverPersonaCandidateLinkRejectsWhenDraftIDNonEmpty(t *testing.T) {
+	runtime := openTestRuntime(t)
+	candidateID := seedPersonaCandidate(t, runtime, "major", "economics", "I major in economics")
+
+	// Promote to Drafted+linked via the normal path so the candidate
+	// has a real DraftID. Recover must refuse: a linked candidate has
+	// no partial scar to mend.
+	if _, _, err := runtime.CreatePersonaDraftFromCandidate(candidateID, time.Date(2026, 5, 20, 11, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("seed CreatePersonaDraftFromCandidate: %v", err)
+	}
+
+	_, err := runtime.RecoverPersonaCandidateLink(candidateID, "draft-other", time.Now())
+	if !errors.Is(err, ErrPersonaCandidatePartialStateRequired) {
+		t.Fatalf("err = %v, want ErrPersonaCandidatePartialStateRequired", err)
+	}
+}
+
+func TestRecoverPersonaCandidateLinkRejectsWhenDraftNotFound(t *testing.T) {
+	runtime := openTestRuntime(t)
+	partialID := makePartialDraftedCandidate(t, runtime, "major", "economics", "I major in economics")
+
+	_, err := runtime.RecoverPersonaCandidateLink(partialID, "draft-not-in-store", time.Now())
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("err = %v, want store.ErrNotFound", err)
+	}
+}
+
+func TestRecoverPersonaCandidateLinkRejectsWhenDraftKindMismatch(t *testing.T) {
+	runtime := openTestRuntime(t)
+	partialID := makePartialDraftedCandidate(t, runtime, "major", "economics", "I major in economics")
+
+	// Inject a non-persona-update draft directly so the recover call
+	// hits the kind-mismatch refusal. The draft does not need to be
+	// fully wired (no audit / no broker event) -- only its presence
+	// in the draft store + its Kind field matter to RecoverLink.
+	otherDraft := model.Draft{
+		ID:        "draft-markdown-unrelated",
+		Kind:      model.DraftKindMarkdownNoteWrite,
+		State:     model.DraftPendingReview,
+		Title:     "unrelated note",
+		CreatedAt: time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC),
+	}
+	if err := runtime.Store.Drafts().SaveDraft(otherDraft); err != nil {
+		t.Fatalf("SaveDraft (kind-mismatch fixture): %v", err)
+	}
+
+	_, err := runtime.RecoverPersonaCandidateLink(partialID, otherDraft.ID, time.Now())
+	if !errors.Is(err, ErrPersonaDraftKindMismatch) {
+		t.Fatalf("err = %v, want ErrPersonaDraftKindMismatch", err)
+	}
+}
+
+func TestForceDismissPartialPersonaCandidateSuccess(t *testing.T) {
+	runtime := openTestRuntime(t)
+	partialID := makePartialDraftedCandidate(t, runtime, "major", "economics", "I major in economics")
+
+	now := time.Date(2026, 5, 20, 13, 0, 0, 0, time.UTC)
+	updated, err := runtime.ForceDismissPartialPersonaCandidate(partialID, now)
+	if err != nil {
+		t.Fatalf("ForceDismissPartialPersonaCandidate: %v", err)
+	}
+	if updated.State != persona.PersonaCandidateDismissed {
+		t.Fatalf("State = %q, want dismissed", updated.State)
+	}
+	if !updated.UpdatedAt.Equal(now) {
+		t.Fatalf("UpdatedAt = %v, want %v", updated.UpdatedAt, now)
+	}
+	// DraftID stays empty -- force-dismiss abandons rather than links.
+	if strings.TrimSpace(updated.DraftID) != "" {
+		t.Fatalf("DraftID = %q, want empty (force-dismiss must not invent a link)", updated.DraftID)
+	}
+}
+
+func TestForceDismissPartialPersonaCandidateRejectsWhenStateOpen(t *testing.T) {
+	runtime := openTestRuntime(t)
+	candidateID := seedPersonaCandidate(t, runtime, "major", "economics", "I major in economics")
+
+	_, err := runtime.ForceDismissPartialPersonaCandidate(candidateID, time.Now())
+	if !errors.Is(err, ErrPersonaCandidatePartialStateRequired) {
+		t.Fatalf("err = %v, want ErrPersonaCandidatePartialStateRequired (Open is not partial)", err)
+	}
+}
+
+func TestForceDismissPartialPersonaCandidateRejectsWhenLinked(t *testing.T) {
+	runtime := openTestRuntime(t)
+	candidateID := seedPersonaCandidate(t, runtime, "major", "economics", "I major in economics")
+	if _, _, err := runtime.CreatePersonaDraftFromCandidate(candidateID, time.Date(2026, 5, 20, 11, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("seed CreatePersonaDraftFromCandidate: %v", err)
+	}
+
+	_, err := runtime.ForceDismissPartialPersonaCandidate(candidateID, time.Now())
+	if !errors.Is(err, ErrPersonaCandidatePartialStateRequired) {
+		t.Fatalf("err = %v, want ErrPersonaCandidatePartialStateRequired (linked candidate must not be force-dismissed)", err)
+	}
+}
+
+func TestForceDismissPartialPersonaCandidateIdempotentOnDismissed(t *testing.T) {
+	runtime := openTestRuntime(t)
+	partialID := makePartialDraftedCandidate(t, runtime, "major", "economics", "I major in economics")
+
+	first, err := runtime.ForceDismissPartialPersonaCandidate(partialID, time.Date(2026, 5, 20, 13, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("first force-dismiss: %v", err)
+	}
+	if first.State != persona.PersonaCandidateDismissed {
+		t.Fatalf("first State = %q, want dismissed", first.State)
+	}
+
+	second, err := runtime.ForceDismissPartialPersonaCandidate(partialID, time.Date(2026, 5, 20, 14, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("second force-dismiss: %v (want idempotent success)", err)
+	}
+	// Idempotent: state stays dismissed, UpdatedAt is NOT moved
+	// forward (we returned the existing record verbatim rather than
+	// re-writing it).
+	if second.State != persona.PersonaCandidateDismissed {
+		t.Fatalf("second State = %q, want dismissed", second.State)
+	}
+	if !second.UpdatedAt.Equal(first.UpdatedAt) {
+		t.Fatalf("second UpdatedAt = %v, want %v (idempotent must not re-stamp)", second.UpdatedAt, first.UpdatedAt)
+	}
+}
+
+func TestForceDismissPartialPersonaCandidateReturnsErrNotFound(t *testing.T) {
+	runtime := openTestRuntime(t)
+	if _, err := runtime.Bootstrap(time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	_, err := runtime.ForceDismissPartialPersonaCandidate("missing-id", time.Now())
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("err = %v, want store.ErrNotFound", err)
+	}
+}
+
+// seedLinkedAndRejectedPersonaCandidate runs the normal P5 promote
+// path, then rejects the resulting draft so the candidate is in
+// State=Drafted with DraftID pointing at a Rejected draft -- the
+// canonical input for RetryRejectedPersonaDraft. Returns
+// (candidateID, originalDraftID).
+func seedLinkedAndRejectedPersonaCandidate(t *testing.T, runtime *Runtime, field, value, evidence string) (string, string) {
+	t.Helper()
+	candidateID := seedPersonaCandidate(t, runtime, field, value, evidence)
+	_, result, err := runtime.CreatePersonaDraftFromCandidate(candidateID, time.Date(2026, 5, 20, 11, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("seed CreatePersonaDraftFromCandidate: %v", err)
+	}
+	if _, err := runtime.RejectDraft(result.DraftID); err != nil {
+		t.Fatalf("seed RejectDraft: %v", err)
+	}
+	return candidateID, result.DraftID
+}
+
+func TestRetryRejectedPersonaDraftSuccess(t *testing.T) {
+	runtime := openTestRuntime(t)
+	candidateID, originalDraftID := seedLinkedAndRejectedPersonaCandidate(t, runtime, "major", "economics", "I major in economics")
+
+	now := time.Date(2026, 5, 20, 13, 0, 0, 0, time.UTC)
+	updated, result, err := runtime.RetryRejectedPersonaDraft(candidateID, now)
+	if err != nil {
+		t.Fatalf("RetryRejectedPersonaDraft: %v", err)
+	}
+	if result.DraftID == "" {
+		t.Fatal("result.DraftID empty")
+	}
+	if result.DraftID == originalDraftID {
+		t.Fatalf("retry returned same DraftID %q as the rejected one (must mint a new draft)", result.DraftID)
+	}
+	if updated.State != persona.PersonaCandidateDrafted {
+		t.Fatalf("State = %q, want drafted", updated.State)
+	}
+	if updated.DraftID != result.DraftID {
+		t.Fatalf("candidate DraftID = %q, want %q (relinked to retry draft)", updated.DraftID, result.DraftID)
+	}
+	// Original rejected draft is untouched.
+	orig, err := runtime.Store.Drafts().GetDraft(originalDraftID)
+	if err != nil {
+		t.Fatalf("GetDraft(original): %v", err)
+	}
+	if orig.State != model.DraftRejected {
+		t.Fatalf("original draft state = %q, want rejected (retry must NOT mutate prior draft)", orig.State)
+	}
+	// New draft exists and is pending_review with the candidate's
+	// evidence augmented into the summary.
+	newDraft, err := runtime.Store.Drafts().GetDraft(result.DraftID)
+	if err != nil {
+		t.Fatalf("GetDraft(new): %v", err)
+	}
+	if newDraft.Kind != model.DraftKindPersonaUpdate {
+		t.Fatalf("new draft kind = %q, want persona_update", newDraft.Kind)
+	}
+	if newDraft.State != model.DraftPendingReview {
+		t.Fatalf("new draft state = %q, want pending_review", newDraft.State)
+	}
+	if !strings.Contains(newDraft.Summary, "I major in economics") {
+		t.Fatalf("new draft summary missing evidence:\n%s", newDraft.Summary)
+	}
+	// Exactly two persona_update drafts in store now: the rejected
+	// one and the retry one. No third duplicate.
+	drafts, err := runtime.Store.Drafts().ListDrafts()
+	if err != nil {
+		t.Fatalf("ListDrafts: %v", err)
+	}
+	count := 0
+	for _, d := range drafts {
+		if d.Kind == model.DraftKindPersonaUpdate {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("persona_update drafts = %d, want 2 (original rejected + retry)", count)
+	}
+}
+
+func TestRetryRejectedPersonaDraftRejectsWhenStateOpen(t *testing.T) {
+	runtime := openTestRuntime(t)
+	candidateID := seedPersonaCandidate(t, runtime, "major", "economics", "I major in economics")
+
+	_, _, err := runtime.RetryRejectedPersonaDraft(candidateID, time.Now())
+	if !errors.Is(err, ErrPersonaCandidateLinkedStateRequired) {
+		t.Fatalf("err = %v, want ErrPersonaCandidateLinkedStateRequired (Open candidate is not linked)", err)
+	}
+}
+
+func TestRetryRejectedPersonaDraftRejectsWhenDraftIDEmpty(t *testing.T) {
+	runtime := openTestRuntime(t)
+	partialID := makePartialDraftedCandidate(t, runtime, "major", "economics", "I major in economics")
+
+	_, _, err := runtime.RetryRejectedPersonaDraft(partialID, time.Now())
+	if !errors.Is(err, ErrPersonaCandidateLinkedStateRequired) {
+		t.Fatalf("err = %v, want ErrPersonaCandidateLinkedStateRequired (partial state has no linked draft)", err)
+	}
+}
+
+func TestRetryRejectedPersonaDraftRejectsWhenDraftStillPendingReview(t *testing.T) {
+	runtime := openTestRuntime(t)
+	candidateID := seedPersonaCandidate(t, runtime, "major", "economics", "I major in economics")
+	// Promote normally; draft sits in pending_review. Retry must
+	// refuse so we never race the reviewer.
+	if _, _, err := runtime.CreatePersonaDraftFromCandidate(candidateID, time.Date(2026, 5, 20, 11, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("seed CreatePersonaDraftFromCandidate: %v", err)
+	}
+
+	_, _, err := runtime.RetryRejectedPersonaDraft(candidateID, time.Now())
+	if !errors.Is(err, ErrPersonaDraftNotTerminalForRetry) {
+		t.Fatalf("err = %v, want ErrPersonaDraftNotTerminalForRetry", err)
+	}
+}
+
+func TestRetryRejectedPersonaDraftRejectsWhenDraftApproved(t *testing.T) {
+	runtime := openTestRuntime(t)
+	candidateID := seedPersonaCandidate(t, runtime, "major", "economics", "I major in economics")
+	_, result, err := runtime.CreatePersonaDraftFromCandidate(candidateID, time.Date(2026, 5, 20, 11, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("seed CreatePersonaDraftFromCandidate: %v", err)
+	}
+	// Approve the draft so it is in a non-terminal-for-retry state.
+	// (approved drafts go on to be applied -- there is no retry
+	// semantic for "already accepted".)
+	if _, err := runtime.ApproveDraft(result.DraftID); err != nil {
+		t.Fatalf("ApproveDraft: %v", err)
+	}
+
+	_, _, err = runtime.RetryRejectedPersonaDraft(candidateID, time.Now())
+	if !errors.Is(err, ErrPersonaDraftNotTerminalForRetry) {
+		t.Fatalf("err = %v, want ErrPersonaDraftNotTerminalForRetry for approved draft", err)
+	}
+}
+
+func TestRetryRejectedPersonaDraftReturnsErrNotFound(t *testing.T) {
+	runtime := openTestRuntime(t)
+	if _, err := runtime.Bootstrap(time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	_, _, err := runtime.RetryRejectedPersonaDraft("missing-id", time.Now())
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("err = %v, want store.ErrNotFound", err)
+	}
+}

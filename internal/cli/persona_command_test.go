@@ -390,3 +390,223 @@ func TestRunPersonaWithoutSubcommandShowsUsage(t *testing.T) {
 		t.Fatalf("stderr missing usage hint: %q", stderr.String())
 	}
 }
+
+// forcePartialDraftedCandidateCLI seeds an Open candidate then forces
+// it into the partial-failure state (Drafted + empty DraftID) using
+// UpdateCandidateState. The runtime is closed before return so the
+// CLI under test opens its own handle.
+func forcePartialDraftedCandidateCLI(t *testing.T, workDir, field, value, evidence string) string {
+	t.Helper()
+	candidateID := seedPersonaCandidateCLI(t, workDir, field, value, evidence)
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
+	if err != nil {
+		t.Fatalf("forcePartial OpenRuntime: %v", err)
+	}
+	if _, err := runtime.Store.PersonaCandidates().UpdateCandidateState(candidateID, persona.PersonaCandidateDrafted, time.Date(2026, 5, 20, 11, 0, 0, 0, time.UTC)); err != nil {
+		runtime.Close()
+		t.Fatalf("forcePartial UpdateCandidateState: %v", err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("forcePartial close runtime: %v", err)
+	}
+	return candidateID
+}
+
+// seedLinkedAndRejectedPersonaCandidateCLI runs the normal CLI promote
+// path and then rejects the resulting draft so the candidate is in
+// State=Drafted with DraftID pointing at a Rejected draft. Returns
+// (candidateID, originalDraftID).
+func seedLinkedAndRejectedPersonaCandidateCLI(t *testing.T, workDir, field, value, evidence string) (string, string) {
+	t.Helper()
+	candidateID := seedPersonaCandidateCLI(t, workDir, field, value, evidence)
+	var draftStdout bytes.Buffer
+	if exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, candidateID}, &bytes.Buffer{}, &draftStdout, &bytes.Buffer{}, "test"); exit != 0 {
+		t.Fatalf("seed draft exit = %d", exit)
+	}
+	draftID := extractDraftIDFromOutput(t, draftStdout.String())
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
+	if err != nil {
+		t.Fatalf("seedRejected OpenRuntime: %v", err)
+	}
+	if _, err := runtime.RejectDraft(draftID); err != nil {
+		runtime.Close()
+		t.Fatalf("seedRejected RejectDraft: %v", err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("seedRejected close runtime: %v", err)
+	}
+	return candidateID, draftID
+}
+
+func TestRunPersonaCandidatesRecoverForceDismiss(t *testing.T) {
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	partialID := forcePartialDraftedCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "recover", "--workdir", workDir, "--force-dismiss", partialID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr=%q", exit, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Action: recover --force-dismiss") {
+		t.Fatalf("output missing action label:\n%s", out)
+	}
+	if !strings.Contains(out, "State:  dismissed") {
+		t.Fatalf("output missing dismissed transition:\n%s", out)
+	}
+
+	// Verify in-store state via a fresh runtime handle.
+	runtime := openRuntimeForPersonaCLITest(t, workDir)
+	got, err := runtime.GetPersonaCandidate(partialID)
+	if err != nil {
+		t.Fatalf("post-recover GetPersonaCandidate: %v", err)
+	}
+	if got.State != persona.PersonaCandidateDismissed {
+		t.Fatalf("state = %q, want dismissed", got.State)
+	}
+	if strings.TrimSpace(got.DraftID) != "" {
+		t.Fatalf("DraftID = %q, want empty (force-dismiss must not invent a link)", got.DraftID)
+	}
+}
+
+func TestRunPersonaCandidatesRecoverLinkRepairsPartialState(t *testing.T) {
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	partialID := forcePartialDraftedCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	// Mint an orphan persona_update draft via the harness so the
+	// recover --link target exists. Closed before the CLI runs.
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
+	if err != nil {
+		t.Fatalf("orphan OpenRuntime: %v", err)
+	}
+	orphanResult, err := runtime.Harness.ProposePersonaUpdate(model.PersonaUpdateProposal{
+		Field:         "major",
+		ProposedValue: "economics",
+		Evidence:      "I major in economics",
+		Reason:        "orphan for recover test",
+		Confidence:    "high",
+		Source:        "console",
+		ObservedAt:    time.Date(2026, 5, 20, 10, 30, 0, 0, time.UTC),
+	}, time.Date(2026, 5, 20, 10, 35, 0, 0, time.UTC))
+	if err != nil {
+		runtime.Close()
+		t.Fatalf("orphan ProposePersonaUpdate: %v", err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("orphan close runtime: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "recover", "--workdir", workDir, "--link", orphanResult.DraftID, partialID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr=%q", exit, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Action: recover --link") {
+		t.Fatalf("output missing action label:\n%s", out)
+	}
+	if !strings.Contains(out, "State:  drafted") {
+		t.Fatalf("output missing drafted transition:\n%s", out)
+	}
+	if !strings.Contains(out, orphanResult.DraftID) {
+		t.Fatalf("output missing linked DraftID %q:\n%s", orphanResult.DraftID, out)
+	}
+
+	check := openRuntimeForPersonaCLITest(t, workDir)
+	got, err := check.GetPersonaCandidate(partialID)
+	if err != nil {
+		t.Fatalf("post-recover GetPersonaCandidate: %v", err)
+	}
+	if got.DraftID != orphanResult.DraftID {
+		t.Fatalf("candidate DraftID = %q, want %q", got.DraftID, orphanResult.DraftID)
+	}
+}
+
+func TestRunPersonaCandidatesRecoverRejectsWithoutModeFlag(t *testing.T) {
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	openRuntimeForPersonaCLITest(t, workDir)
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "recover", "--workdir", workDir, "pc-fake"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit when neither --link nor --force-dismiss supplied; stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "--link") || !strings.Contains(stderr.String(), "--force-dismiss") {
+		t.Fatalf("stderr should mention both mode flags: %q", stderr.String())
+	}
+}
+
+func TestRunPersonaCandidatesRecoverRejectsWithBothFlags(t *testing.T) {
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	openRuntimeForPersonaCLITest(t, workDir)
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "recover", "--workdir", workDir, "--link", "draft-x", "--force-dismiss", "pc-fake"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit when both mode flags supplied; stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "mutually exclusive") {
+		t.Fatalf("stderr should explain exclusivity: %q", stderr.String())
+	}
+}
+
+func TestRunPersonaCandidatesDraftRetryRejected(t *testing.T) {
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID, originalDraftID := seedLinkedAndRejectedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, "--retry-rejected", candidateID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr=%q", exit, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Action: draft (retry-rejected)") {
+		t.Fatalf("output missing retry action label:\n%s", out)
+	}
+	newDraftID := extractDraftIDFromOutput(t, out)
+	if newDraftID == originalDraftID {
+		t.Fatalf("retry returned same DraftID %q as the rejected one", newDraftID)
+	}
+
+	runtime := openRuntimeForPersonaCLITest(t, workDir)
+	got, err := runtime.GetPersonaCandidate(candidateID)
+	if err != nil {
+		t.Fatalf("post-retry GetPersonaCandidate: %v", err)
+	}
+	if got.DraftID != newDraftID {
+		t.Fatalf("candidate DraftID = %q, want %q", got.DraftID, newDraftID)
+	}
+	// Original rejected draft is preserved in store.
+	origDraft, err := runtime.Store.Drafts().GetDraft(originalDraftID)
+	if err != nil {
+		t.Fatalf("GetDraft(original): %v", err)
+	}
+	if origDraft.State != model.DraftRejected {
+		t.Fatalf("original draft state = %q, want rejected", origDraft.State)
+	}
+}
+
+func TestRunPersonaCandidatesDraftRetryRejectedRefusesPendingReview(t *testing.T) {
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+	// First draft puts candidate in linked+pending_review. Retry must
+	// refuse so the CLI never races the reviewer.
+	if exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, candidateID}, &bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{}, "test"); exit != 0 {
+		t.Fatalf("seed draft exit = %d", exit)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, "--retry-rejected", candidateID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for retry-rejected against pending_review draft; stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "terminal") && !strings.Contains(stderr.String(), "pending_review") {
+		t.Fatalf("stderr should explain non-terminal refusal: %q", stderr.String())
+	}
+}
