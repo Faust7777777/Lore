@@ -309,6 +309,62 @@ func TestRunPersonaCandidatesDraftIsIdempotentOnRetry(t *testing.T) {
 	}
 }
 
+func TestRunPersonaCandidatesListShowsDraftColumnForLinkedCandidate(t *testing.T) {
+	// B-P10: list output gains a DRAFT column so the operator can see
+	// each drafted candidate's linked DraftID without running show on
+	// every row. Empty DraftID (open / dismissed / partial-orphan)
+	// renders "-" so the column schema stays stable -- awk/cut
+	// pipelines do not need to branch on state filter.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var draftStdout bytes.Buffer
+	if exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, candidateID}, &bytes.Buffer{}, &draftStdout, &bytes.Buffer{}, "test"); exit != 0 {
+		t.Fatalf("draft exit = %d", exit)
+	}
+	draftID := extractDraftIDFromOutput(t, draftStdout.String())
+
+	var listStdout, listStderr bytes.Buffer
+	if exit := Run([]string{"persona", "candidates", "list", "--workdir", workDir, "--state", "drafted"}, &bytes.Buffer{}, &listStdout, &listStderr, "test"); exit != 0 {
+		t.Fatalf("list exit = %d, stderr=%q", exit, listStderr.String())
+	}
+	out := listStdout.String()
+	// Header must include the new column.
+	if !strings.Contains(out, "DRAFT") {
+		t.Fatalf("list header missing DRAFT column:\n%s", out)
+	}
+	// Data row must contain the linked DraftID verbatim.
+	if !strings.Contains(out, draftID) {
+		t.Fatalf("list row missing linked DraftID %q:\n%s", draftID, out)
+	}
+}
+
+func TestRunPersonaCandidatesListDraftColumnDashForOpen(t *testing.T) {
+	// Stable schema check: open candidates (no DraftID) must render
+	// the column as "-" so consumers piping through cut/awk see a
+	// constant number of columns. Blank would collapse adjacent tabs
+	// and break field offsets.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	if exit := Run([]string{"persona", "candidates", "list", "--workdir", workDir}, &bytes.Buffer{}, &stdout, &stderr, "test"); exit != 0 {
+		t.Fatalf("list exit = %d, stderr=%q", exit, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "DRAFT") {
+		t.Fatalf("list header missing DRAFT column on open state:\n%s", out)
+	}
+	// Find the data row (after the header) and assert it ends with
+	// "\t-\n" so the last column is the explicit dash.
+	dataRowSuffix := "\t-\n"
+	if !strings.Contains(out, dataRowSuffix) {
+		t.Fatalf("open candidate row should end with %q to keep 7-column schema stable:\n%s", dataRowSuffix, out)
+	}
+}
+
 func TestRunPersonaCandidatesShowIncludesLinkedDraftID(t *testing.T) {
 	// After `lore persona candidates draft <id>` links a DraftID onto
 	// the candidate, `lore persona candidates show <id>` must display

@@ -1136,21 +1136,31 @@ func renderPersonaCandidateList(stdout io.Writer, state persona.PersonaCandidate
 		fmt.Fprintln(stdout, "No candidates.")
 		return
 	}
-	fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", "ID", "FIELD", "PROPOSED", "CONFIDENCE", "CONFLICT", "SOURCE")
+	fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", "ID", "FIELD", "PROPOSED", "CONFIDENCE", "CONFLICT", "SOURCE", "DRAFT")
 	for _, record := range records {
 		conflict := "no"
 		if record.Candidate.Conflict {
 			conflict = "yes"
 		}
+		// DRAFT column carries the linked draft ID when the candidate
+		// has been promoted (State=Drafted with DraftID populated by
+		// LinkCandidateDraft). Empty / partial / open / dismissed
+		// rows render "-" rather than blank so awk/cut pipelines keep
+		// a stable 7-column schema regardless of state filter.
+		draftID := strings.TrimSpace(record.DraftID)
+		if draftID == "" {
+			draftID = "-"
+		}
 		fmt.Fprintf(
 			stdout,
-			"%s\t%s\t%s\t%s\t%s\t%s\n",
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			record.ID,
 			record.Candidate.Field,
 			clipOneLine(record.Candidate.ProposedValue, 40),
 			record.Candidate.Confidence,
 			conflict,
 			record.Candidate.SourceKind,
+			draftID,
 		)
 	}
 	fmt.Fprintln(stdout)
