@@ -134,7 +134,10 @@ try {
     }
 
     if ($PersonaAcceptance) {
-        throw "Persona acceptance gate is reserved until B candidate storage, console async extraction, and CLI review land. Activate by unskipping TestRunPersonaMemoryCandidateAcceptanceScaffold and replacing this guard with Invoke-GoGate."
+        Invoke-GoGate `
+            -Label "persona memory candidate acceptance" `
+            -Package "./cmd/obsidian-harness" `
+            -Run "TestRunPersonaMemoryCandidateAcceptanceScaffold$"
     }
 
     Invoke-GoGate `

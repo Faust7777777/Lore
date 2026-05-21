@@ -93,6 +93,14 @@ func newOperatorAgentTestServer(t *testing.T) *httptest.Server {
 				content = `{"title":"codex checkpoint 09:00-09:30","content":"## Summary\n- checkpoint summary from test provider"}`
 			case strings.Contains(systemPrompt, "day of external coding-agent checkpoints"):
 				content = `{"title":"codex daily report","content":"## Summary\n- daily summary from test provider"}`
+			case strings.Contains(systemPrompt, "extract candidate persona facts"):
+				// Persona extractor (B-P1+P2) shares the same /chat/completions
+				// endpoint as the operator agent. The acceptance scaffold uses
+				// a Chinese user utterance about a weekly English-listening
+				// review routine; we mirror it back as one candidate whose
+				// evidence_quote is a verbatim substring of the user text so
+				// the parser's NFKC substring validation passes.
+				content = personaExtractorAcceptancePayload(t)
 			case strings.Contains(userPrompt, "Tool result for vault_read"):
 				content = `{"type":"final","message":"Observation: 03-画像/人物背景.md\n- 海边自习\n- 电子商务\n- 长期写作目标\n\n最终散文\n\n海风把他的学习计划吹得很轻。人物背景里的海边自习、电子商务和长期写作目标，像几根清晰的线，把他从零散的日程牵回一个更安静的方向。"}`
 			case strings.Contains(userPrompt, "Tool result for vault_resolve"):
@@ -137,6 +145,13 @@ func newOperatorAgentTestServer(t *testing.T) *httptest.Server {
 				content = `{"title":"codex checkpoint 09:00-09:30","content":"## Summary\n- checkpoint summary from test provider"}`
 			case strings.Contains(systemPrompt, "day of external coding-agent checkpoints"):
 				content = `{"title":"codex daily report","content":"## Summary\n- daily summary from test provider"}`
+			case strings.Contains(systemPrompt, "extract candidate persona facts"):
+				// Persona extractor uses gpt-5.4 by default in
+				// configureLLMTestEnv, so it lands here on /responses
+				// rather than /chat/completions. Same scripted payload
+				// as the chat branch above so the acceptance gate is
+				// transport-agnostic.
+				content = personaExtractorAcceptancePayload(t)
 			case strings.Contains(userPrompt, "Tool result for vault_read"):
 				content = `{"type":"final","message":"Observation: 03-画像/人物背景.md\n- 海边自习\n- 电子商务\n- 长期写作目标\n\n最终散文\n\n海风把他的学习计划吹得很轻。人物背景里的海边自习、电子商务和长期写作目标，像几根清晰的线，把他从零散的日程牵回一个更安静的方向。"}`
 			case strings.Contains(userPrompt, "Tool result for vault_resolve"):
@@ -190,6 +205,38 @@ func configureLLMTestEnv(t *testing.T) {
 	t.Setenv("LORE_LLM_BASE_URL", server.URL)
 	t.Setenv("LORE_LLM_API_KEY", "secret")
 	t.Setenv("LORE_LLM_MODEL", "gpt-5.4")
+}
+
+// personaExtractorAcceptancePayload returns the JSON body the fake
+// LLM server replies with when the persona extractor system prompt
+// is detected. The evidence_quote MUST be a verbatim substring of
+// the acceptance scaffold's user utterance ("我每周三晚上都会复盘英语听力错题，
+// 这件事对我的学习计划很重要。") so persona.parseExtractionResponse's
+// NFKC substring validation does not discard the candidate. Field /
+// proposed_value / reason / confidence pick values the
+// TestRunPersonaMemoryCandidateAcceptanceScaffold list+show
+// assertions can grep for ("英语听力错题" appears in both
+// proposed_value and evidence_quote, reason is non-empty so the
+// "Reason:" label renders in `persona candidates show`).
+func personaExtractorAcceptancePayload(t *testing.T) string {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"candidates": []any{
+			map[string]any{
+				"field":          "study_routine",
+				"proposed_value": "每周三晚上复盘英语听力错题",
+				"evidence_quote": "我每周三晚上都会复盘英语听力错题",
+				"reason":         "用户陈述一个稳定的每周复盘习惯",
+				"confidence":     "high",
+				"conflict":       false,
+			},
+		},
+		"warnings": []any{},
+	})
+	if err != nil {
+		t.Fatalf("marshal persona extractor payload: %v", err)
+	}
+	return string(payload)
 }
 
 func TestRunDefaultsToStatus(t *testing.T) {
@@ -642,8 +689,6 @@ func TestRunTUIOnceShowsResolveReadFinalTaskVisibility(t *testing.T) {
 }
 
 func TestRunPersonaMemoryCandidateAcceptanceScaffold(t *testing.T) {
-	t.Skip("activate after B candidate storage/console async/CLI review")
-
 	workDir := t.TempDir()
 	configureLLMTestEnv(t)
 
