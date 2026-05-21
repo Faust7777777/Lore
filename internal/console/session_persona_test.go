@@ -1,6 +1,7 @@
 package console
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -345,5 +346,153 @@ func TestSessionDrainPersonaExtractionsTimesOutOnSlowExtractor(t *testing.T) {
 	// Goroutine is parked on the gate. A 50ms drain must time out.
 	if drained := session.DrainPersonaExtractions(50 * time.Millisecond); drained {
 		t.Fatal("DrainPersonaExtractions returned true while goroutine still parked at gate")
+	}
+}
+
+func TestSessionHandleExtractionFailureWritesLoggerLine(t *testing.T) {
+	// B-P9 contract: a failing extractor must leave one structured
+	// line on PersonaExtractLogger so operators can `tail` the workdir
+	// log to diagnose "why are there zero candidates after a chat
+	// session". The user turn itself still succeeds; the swallow
+	// behavior of TestSessionHandleExtractionFailureDoesNotFailUserTurn
+	// is preserved -- only the silent part changes.
+	session, _, runtime := newLoopSession(t)
+	var buf bytes.Buffer
+	session.PersonaExtractLogger = &buf
+	session.PersonaExtractor = &scriptedPersonaExtractor{
+		err: errors.New("upstream provider unavailable"),
+	}
+
+	if _, err := session.Handle("anything", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if !session.DrainPersonaExtractions(time.Second) {
+		t.Fatal("DrainPersonaExtractions timed out")
+	}
+
+	logLine := buf.String()
+	if logLine == "" {
+		t.Fatalf("PersonaExtractLogger empty; want one failure line")
+	}
+	for _, want := range []string{"stage=extract", "upstream provider unavailable"} {
+		if !strings.Contains(logLine, want) {
+			t.Fatalf("log line missing %q:\n%s", want, logLine)
+		}
+	}
+	if got := strings.Count(strings.TrimSuffix(logLine, "\n"), "\n"); got != 0 {
+		t.Fatalf("log lines count = %d (want exactly one trailing-newline-terminated record), raw=%q", got+1, logLine)
+	}
+}
+
+func TestSessionHandleStoreFailureWritesLoggerLine(t *testing.T) {
+	// B-P9 contract: store-side failures (sqlite error, dedup race,
+	// etc.) also surface to the persona log. Distinct stage label so
+	// downstream readers / awk filters can separate LLM mining bugs
+	// from persistence bugs.
+	session, _, runtime := newLoopSession(t)
+	runtime.personaErr = errors.New("disk full")
+	var buf bytes.Buffer
+	session.PersonaExtractLogger = &buf
+	session.PersonaExtractor = &scriptedPersonaExtractor{
+		result: persona.PersonaExtractionResult{
+			Candidates: []persona.PersonaCandidate{newPersonaCandidate("major", "history", "I study history")},
+		},
+	}
+
+	if _, err := session.Handle("I study history", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if !session.DrainPersonaExtractions(time.Second) {
+		t.Fatal("DrainPersonaExtractions timed out")
+	}
+
+	logLine := buf.String()
+	for _, want := range []string{"stage=store", "disk full"} {
+		if !strings.Contains(logLine, want) {
+			t.Fatalf("log line missing %q:\n%s", want, logLine)
+		}
+	}
+}
+
+func TestSessionHandleExtractionSuccessLeavesLoggerSilent(t *testing.T) {
+	// Success path must never write to the log. Real-world workdirs
+	// run for weeks; if every successful extraction left a line the
+	// file would grow without bound and dilute the failures operators
+	// are actually looking for when they tail it.
+	session, _, runtime := newLoopSession(t)
+	var buf bytes.Buffer
+	session.PersonaExtractLogger = &buf
+	session.PersonaExtractor = &scriptedPersonaExtractor{
+		result: persona.PersonaExtractionResult{
+			Candidates: []persona.PersonaCandidate{newPersonaCandidate("major", "history", "I study history")},
+		},
+	}
+
+	if _, err := session.Handle("I study history", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if !session.DrainPersonaExtractions(time.Second) {
+		t.Fatal("DrainPersonaExtractions timed out")
+	}
+	if got := buf.String(); got != "" {
+		t.Fatalf("logger received output on success path:\n%s", got)
+	}
+}
+
+func TestSessionHandleNilLoggerSurvivesFailure(t *testing.T) {
+	// PersonaExtractLogger nil must NOT panic the goroutine. The
+	// legacy P4 wiring path -- tests that do not bother with
+	// observability, and embedders that have not wired a log file --
+	// must still tolerate extractor failures gracefully.
+	session, _, runtime := newLoopSession(t)
+	// Intentionally do not set PersonaExtractLogger.
+	session.PersonaExtractor = &scriptedPersonaExtractor{
+		err: errors.New("nil-logger probe"),
+	}
+
+	if _, err := session.Handle("anything", runtime); err != nil {
+		t.Fatalf("Handle() error = %v, want extractor failure to be swallowed", err)
+	}
+	if !session.DrainPersonaExtractions(time.Second) {
+		t.Fatal("DrainPersonaExtractions timed out (panic in goroutine?)")
+	}
+}
+
+func TestSessionHandleExtractionTimeoutWritesLoggerLine(t *testing.T) {
+	// Slow-LLM path: extractor blocks past PersonaExtractTimeout,
+	// ctx.Done fires, the scripted extractor returns ctx.Err(), and
+	// the log records a "context deadline exceeded" or "canceled"
+	// signal under stage=extract. This is the failure shape an
+	// operator hits when LORE_LLM_BASE_URL points at a slow / hung
+	// provider and is the most likely real-world reason to grep the
+	// log file.
+	session, _, runtime := newLoopSession(t)
+	var buf bytes.Buffer
+	session.PersonaExtractLogger = &buf
+	session.PersonaExtractTimeout = 25 * time.Millisecond
+	gate := make(chan struct{}) // intentionally never closed
+	session.PersonaExtractor = &scriptedPersonaExtractor{
+		result: persona.PersonaExtractionResult{},
+		start:  gate,
+	}
+
+	if _, err := session.Handle("anything", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	// Drain budget comfortably exceeds the extractor timeout so the
+	// goroutine has time to exit via ctx.Done and write the line.
+	if !session.DrainPersonaExtractions(time.Second) {
+		t.Fatal("DrainPersonaExtractions timed out; goroutine did not exit on ctx deadline")
+	}
+
+	logLine := buf.String()
+	if logLine == "" {
+		t.Fatal("PersonaExtractLogger empty after timeout; want one stage=extract line")
+	}
+	if !strings.Contains(logLine, "stage=extract") {
+		t.Fatalf("log line missing stage=extract:\n%s", logLine)
+	}
+	if !strings.Contains(logLine, "deadline") && !strings.Contains(logLine, "context") && !strings.Contains(logLine, "canceled") {
+		t.Fatalf("log line should mention context/deadline/canceled:\n%s", logLine)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -99,6 +100,21 @@ type Session struct {
 	// PersonaExtractTimeout caps a single fire-and-forget extraction.
 	// Zero or negative falls back to defaultPersonaExtractTimeout.
 	PersonaExtractTimeout time.Duration
+	// PersonaExtractLogger receives one line per persona-extraction
+	// failure (LLM call error, parser refusal, store write error). Nil
+	// disables logging silently -- matching the legacy P4 behavior --
+	// so unit tests and embedders that do not need observability stay
+	// dependency-free. Console / TUI callers wire this from
+	// runtime.PersonaExtractLogger which OpenRuntime points at
+	// <StateDir>/logs/persona-extract.log so operators can `tail` the
+	// file while running real-world sessions.
+	//
+	// Each line is a single \n-terminated UTF-8 record:
+	//   <RFC3339Nano UTC>\tstage=<extract|store>\tsession=<id>\terror=<quoted>\n
+	// The format is intentionally line-per-event tab-delimited so a
+	// future `lore persona errors` reader or a plain `awk` / `grep`
+	// pipeline can parse it without a structured log dependency.
+	PersonaExtractLogger io.Writer
 	// personaExtractWG tracks in-flight extraction goroutines so the
 	// shell can call DrainPersonaExtractions before exit.
 	personaExtractWG sync.WaitGroup
@@ -668,6 +684,7 @@ func (s *Session) launchPersonaExtraction(runtime Runtime, userText, priorAssist
 		defer cancel()
 		result, err := extractor.Extract(ctx, input)
 		if err != nil {
+			s.logPersonaExtractError("extract", sessionID, err)
 			return
 		}
 		for _, candidate := range result.Candidates {
@@ -679,9 +696,32 @@ func (s *Session) launchPersonaExtraction(runtime Runtime, userText, priorAssist
 				CreatedAt: now,
 				UpdatedAt: now,
 			}
-			_, _, _ = runtime.RecordPersonaCandidate(record)
+			if _, _, storeErr := runtime.RecordPersonaCandidate(record); storeErr != nil {
+				s.logPersonaExtractError("store", sessionID, storeErr)
+			}
 		}
 	}()
+}
+
+// logPersonaExtractError emits a single tab-delimited line to
+// PersonaExtractLogger describing a failure inside the fire-and-forget
+// extraction goroutine. The format is documented on the Session field:
+// timestamp\tstage=...\tsession=...\terror="..."\n. Nil logger or nil
+// session is a silent no-op so legacy P4 callers / unit tests that do
+// not wire a logger keep their existing behavior.
+func (s *Session) logPersonaExtractError(stage, sessionID string, err error) {
+	if s == nil || s.PersonaExtractLogger == nil || err == nil {
+		return
+	}
+	msg := strings.ReplaceAll(err.Error(), "\n", " ")
+	fmt.Fprintf(
+		s.PersonaExtractLogger,
+		"%s\tstage=%s\tsession=%s\terror=%q\n",
+		time.Now().UTC().Format(time.RFC3339Nano),
+		stage,
+		sessionID,
+		msg,
+	)
 }
 
 // DrainPersonaExtractions blocks up to timeout for in-flight

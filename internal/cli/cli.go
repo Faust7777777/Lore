@@ -432,6 +432,8 @@ func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 	// ordering is LIFO, so this drain runs BEFORE closeRuntime even
 	// though it is registered later.
 	session.PersonaExtractor = runtime.PersonaExtractor
+	session.PersonaExtractLogger = runtime.PersonaExtractLogger
+	session.PersonaExtractTimeout = runtime.PersonaExtractTimeout
 	defer session.DrainPersonaExtractions(consolePersonaDrainTimeout)
 	if err := configureSessionRecorder(session, runtime, resume, resumeID, stdin, stdout, stderr, "console"); err != nil {
 		fmt.Fprintf(stderr, "console: %v\n", err)
@@ -502,6 +504,8 @@ func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 	// Same persona extractor wiring + drain defer as the console
 	// path; see RunConsoleCommand for the LIFO ordering rationale.
 	session.PersonaExtractor = runtime.PersonaExtractor
+	session.PersonaExtractLogger = runtime.PersonaExtractLogger
+	session.PersonaExtractTimeout = runtime.PersonaExtractTimeout
 	defer session.DrainPersonaExtractions(consolePersonaDrainTimeout)
 	if err := configureSessionRecorder(session, runtime, resume, resumeID, stdin, stdout, stderr, "tui"); err != nil {
 		fmt.Fprintf(stderr, "tui: %v\n", err)

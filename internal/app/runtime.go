@@ -2,7 +2,10 @@ package app
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"obsidian-harness/internal/adapter/codexjsonl"
@@ -14,6 +17,22 @@ import (
 	"obsidian-harness/internal/store/sqlitestore"
 	"obsidian-harness/internal/vault"
 )
+
+// personaExtractLogFile is the workdir-local path (relative to
+// StateDir) that OpenRuntime opens for persona-extraction failure
+// logging. Operators tail this file while running real-world sessions
+// to see why extraction produced zero candidates -- LLM error, parser
+// refusal, or store write error. The file is append-only and never
+// rotated by lore itself; sessions are bounded enough that growth is
+// negligible (one line per failure, not per turn).
+const personaExtractLogFile = "logs/persona-extract.log"
+
+// personaExtractTimeoutEnv overrides the default 8 second per-call
+// extraction timeout. Accepts any time.ParseDuration syntax (e.g.
+// "12s", "1m"). Invalid values are ignored with no error -- the
+// console / TUI shells fall back to defaultPersonaExtractTimeout --
+// because a malformed env value should never break a chat session.
+const personaExtractTimeoutEnv = "LORE_LLM_PERSONA_EXTRACT_TIMEOUT"
 
 type Runtime struct {
 	Config                   config.Config
@@ -30,6 +49,27 @@ type Runtime struct {
 	// reads the same LORE_LLM_* env as the operator agent.
 	PersonaExtractor    persona.PersonaCandidateExtractor
 	personaExtractorErr error
+	// PersonaExtractLogger is the io.Writer the console / TUI shells
+	// hand to Session.PersonaExtractLogger so fire-and-forget extraction
+	// failures (LLM error, parser refusal, store write error) land in
+	// a file the operator can `tail`. OpenRuntime points this at
+	// <StateDir>/logs/persona-extract.log when the file opens cleanly;
+	// open failures leave it nil so extraction still runs silently
+	// instead of breaking the chat. Tests can override the field
+	// directly to inject a bytes.Buffer.
+	PersonaExtractLogger io.Writer
+	// personaExtractLogCloser holds the *os.File when OpenRuntime owns
+	// the underlying file handle, so Runtime.Close can release it. Nil
+	// when PersonaExtractLogger was injected by a test or when the
+	// open failed.
+	personaExtractLogCloser io.Closer
+	// PersonaExtractTimeout caps a single fire-and-forget extraction.
+	// Sourced from LORE_LLM_PERSONA_EXTRACT_TIMEOUT (any time.ParseDuration
+	// syntax) when OpenRuntime constructs the runtime. Zero or invalid
+	// env values leave this zero so the Session falls through to
+	// defaultPersonaExtractTimeout. Console / TUI shells wire this onto
+	// Session.PersonaExtractTimeout alongside the extractor itself.
+	PersonaExtractTimeout time.Duration
 }
 
 type DemoP0BResult struct {
@@ -73,6 +113,7 @@ func OpenRuntimeWithConfigOptions(workDir string, opts config.LoadOptions) (*Run
 	}
 	processSinkSummarizer, processSinkErr := defaultProcessSinkSummarizer()
 	personaExtractor, personaErr := defaultPersonaExtractor()
+	personaLogger, personaLogCloser := openPersonaExtractLog(cfg.Paths.StateDir)
 	runtime := &Runtime{
 		Config:                   cfg,
 		ConfigDiagnostics:        diagnostics,
@@ -82,6 +123,9 @@ func OpenRuntimeWithConfigOptions(workDir string, opts config.LoadOptions) (*Run
 		processSinkSummarizerErr: processSinkErr,
 		PersonaExtractor:         personaExtractor,
 		personaExtractorErr:      personaErr,
+		PersonaExtractLogger:     personaLogger,
+		personaExtractLogCloser:  personaLogCloser,
+		PersonaExtractTimeout:    parsePersonaExtractTimeoutEnv(),
 	}
 	// Second-phase wiring: route summarizer cost records into the
 	// runtime's usage store. The sink is a no-op for non-model-backed
@@ -100,13 +144,63 @@ func OpenRuntimeWithConfigOptions(workDir string, opts config.LoadOptions) (*Run
 }
 
 func (r *Runtime) Close() error {
-	if r == nil || r.Store == nil {
+	if r == nil {
+		return nil
+	}
+	if r.personaExtractLogCloser != nil {
+		// Best-effort close. We deliberately swallow the error here:
+		// the persona log is observability-only, and a failing close
+		// on a fire-and-forget writer should not mask a real store
+		// close failure that the caller cares about.
+		_ = r.personaExtractLogCloser.Close()
+		r.personaExtractLogCloser = nil
+	}
+	if r.Store == nil {
 		return nil
 	}
 	if closer, ok := any(r.Store).(interface{ Close() error }); ok {
 		return closer.Close()
 	}
 	return nil
+}
+
+// openPersonaExtractLog opens the workdir-local log file the console
+// fire-and-forget extractor writes failure lines to. Returns
+// (nil, nil) when the directory cannot be created or the file cannot
+// be opened so the runtime stays usable without observability rather
+// than refusing to boot. Callers must close the returned io.Closer
+// (Runtime.Close does this).
+func openPersonaExtractLog(stateDir string) (io.Writer, io.Closer) {
+	if stateDir == "" {
+		return nil, nil
+	}
+	dir := filepath.Join(stateDir, filepath.Dir(personaExtractLogFile))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, nil
+	}
+	path := filepath.Join(stateDir, personaExtractLogFile)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, nil
+	}
+	return f, f
+}
+
+// parsePersonaExtractTimeoutEnv reads LORE_LLM_PERSONA_EXTRACT_TIMEOUT
+// and returns the parsed duration, or zero when unset / invalid /
+// non-positive. The Session falls back to defaultPersonaExtractTimeout
+// when this is zero, so a malformed env value behaves identically to
+// "env not set" -- safer than failing the runtime open.
+func parsePersonaExtractTimeoutEnv() time.Duration {
+	raw := strings.TrimSpace(os.Getenv(personaExtractTimeoutEnv))
+	if raw == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
 }
 
 func (r *Runtime) Bootstrap(now time.Time) ([]model.DocumentRef, error) {
