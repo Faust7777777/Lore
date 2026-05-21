@@ -309,6 +309,35 @@ func TestRunPersonaCandidatesDraftIsIdempotentOnRetry(t *testing.T) {
 	}
 }
 
+func TestRunPersonaCandidatesShowIncludesLinkedDraftID(t *testing.T) {
+	// After `lore persona candidates draft <id>` links a DraftID onto
+	// the candidate, `lore persona candidates show <id>` must display
+	// that DraftID so operators can trace the candidate -> draft
+	// relationship from the candidate view alone.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	id := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var draftStdout bytes.Buffer
+	if exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, id}, &bytes.Buffer{}, &draftStdout, &bytes.Buffer{}, "test"); exit != 0 {
+		t.Fatalf("draft exit = %d", exit)
+	}
+	draftID := extractDraftIDFromOutput(t, draftStdout.String())
+
+	var showStdout, showStderr bytes.Buffer
+	if exit := Run([]string{"persona", "candidates", "show", "--workdir", workDir, id}, &bytes.Buffer{}, &showStdout, &showStderr, "test"); exit != 0 {
+		t.Fatalf("show exit = %d, stderr=%q", exit, showStderr.String())
+	}
+	showOut := showStdout.String()
+	if !strings.Contains(showOut, "State:          drafted") {
+		t.Fatalf("show output missing drafted state:\n%s", showOut)
+	}
+	wantLine := "Draft:          " + draftID
+	if !strings.Contains(showOut, wantLine) {
+		t.Fatalf("show output missing labeled %q line:\n%s", wantLine, showOut)
+	}
+}
+
 // extractDraftIDFromOutput pulls the "Draft:  <id> ..." line out of
 // the renderPersonaCandidateActionResult output so tests can compare
 // DraftIDs across CLI invocations without parsing the full record.

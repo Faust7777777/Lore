@@ -1054,6 +1054,9 @@ func renderPersonaCandidateDetail(stdout io.Writer, record persona.PersonaCandid
 	fmt.Fprintln(stdout, "=================")
 	fmt.Fprintf(stdout, "ID:             %s\n", record.ID)
 	fmt.Fprintf(stdout, "State:          %s\n", record.State)
+	if strings.TrimSpace(record.DraftID) != "" {
+		fmt.Fprintf(stdout, "Draft:          %s\n", record.DraftID)
+	}
 	fmt.Fprintf(stdout, "Field:          %s\n", record.Candidate.Field)
 	fmt.Fprintf(stdout, "Proposed value: %s\n", record.Candidate.ProposedValue)
 	if strings.TrimSpace(record.Candidate.CurrentValue) != "" {
