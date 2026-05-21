@@ -568,6 +568,109 @@ func (s *Store) UpdateCandidateState(id string, state persona.PersonaCandidateSt
 	return record, nil
 }
 
+func (s *Store) LinkCandidateDraft(id string, draftID string, updatedAt time.Time) (persona.PersonaCandidateRecord, error) {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(draftID) == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	record, err := s.GetCandidate(id)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	record.State = persona.PersonaCandidateDrafted
+	record.DraftID = draftID
+	record.UpdatedAt = updatedAt
+	payload, err := marshalPayload(record)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	if _, err := s.db.Exec(
+		`UPDATE persona_candidates SET state = ?, updated_at = ?, payload = ? WHERE id = ?`,
+		string(record.State),
+		timeString(updatedAt),
+		payload,
+		id,
+	); err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	return record, nil
+}
+
+func (s *Store) ClaimCandidateForDraft(id string, now time.Time) (persona.PersonaCandidateRecord, error) {
+	if strings.TrimSpace(id) == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	// Run the read, the state guard, and the write inside a single
+	// transaction so two concurrent claimers cannot both observe
+	// state='open' before either writes. sqlite serializes writes
+	// per connection (the store opens with MaxOpenConns=1), but the
+	// transaction is what guarantees atomicity even under future
+	// connection pool changes.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var existingPayload string
+	if err := tx.QueryRow(`SELECT payload FROM persona_candidates WHERE id = ?`, id).Scan(&existingPayload); err != nil {
+		return persona.PersonaCandidateRecord{}, mapSQLError(err)
+	}
+	record, err := unmarshalPayload[persona.PersonaCandidateRecord](existingPayload)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	if persona.NormalizeCandidateState(record.State) != persona.PersonaCandidateOpen {
+		return persona.PersonaCandidateRecord{}, store.ErrConflict
+	}
+	record.State = persona.PersonaCandidateDrafted
+	record.DraftID = ""
+	record.UpdatedAt = now
+	payload, err := marshalPayload(record)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	// Belt-and-suspenders: scope the UPDATE to id AND the
+	// just-observed state so even if the transaction isolation
+	// somehow allowed a torn read, only one writer wins. With Begin
+	// + QueryRow + Exec sharing the same tx this is redundant on
+	// sqlite, but it is the kind of guard that survives backend
+	// migrations and is essentially free.
+	//
+	// Include state='' in the Open match so legacy rows -- the same
+	// ones ListCandidatesByState(Open) surfaces via the empty-state
+	// OR branch above -- can be claimed without a confusing
+	// ErrConflict. The Go-level NormalizeCandidateState read above
+	// already gated on Open-equivalence, so this only widens the
+	// SQL filter to match what the read just accepted.
+	result, err := tx.Exec(
+		`UPDATE persona_candidates SET state = ?, updated_at = ?, payload = ? WHERE id = ? AND (state = ? OR state = '')`,
+		string(persona.PersonaCandidateDrafted),
+		timeString(now),
+		payload,
+		id,
+		string(persona.PersonaCandidateOpen),
+	)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	if affected != 1 {
+		return persona.PersonaCandidateRecord{}, store.ErrConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	tx = nil
+	return record, nil
+}
+
 func (s *Store) init() error {
 	stmts := []string{
 		`PRAGMA journal_mode = WAL`,

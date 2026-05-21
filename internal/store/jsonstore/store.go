@@ -482,6 +482,53 @@ func (s *Store) UpdateCandidateState(id string, state persona.PersonaCandidateSt
 	return record, nil
 }
 
+func (s *Store) LinkCandidateDraft(id string, draftID string, updatedAt time.Time) (persona.PersonaCandidateRecord, error) {
+	if id == "" || draftID == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.state.PersonaCandidates[id]
+	if !ok {
+		return persona.PersonaCandidateRecord{}, store.ErrNotFound
+	}
+	previous := record
+	record.State = persona.PersonaCandidateDrafted
+	record.DraftID = draftID
+	record.UpdatedAt = updatedAt
+	s.state.PersonaCandidates[id] = record
+	if err := s.persistLocked(); err != nil {
+		s.state.PersonaCandidates[id] = previous
+		return persona.PersonaCandidateRecord{}, err
+	}
+	return record, nil
+}
+
+func (s *Store) ClaimCandidateForDraft(id string, now time.Time) (persona.PersonaCandidateRecord, error) {
+	if id == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.state.PersonaCandidates[id]
+	if !ok {
+		return persona.PersonaCandidateRecord{}, store.ErrNotFound
+	}
+	if persona.NormalizeCandidateState(record.State) != persona.PersonaCandidateOpen {
+		return persona.PersonaCandidateRecord{}, store.ErrConflict
+	}
+	previous := record
+	record.State = persona.PersonaCandidateDrafted
+	record.DraftID = ""
+	record.UpdatedAt = now
+	s.state.PersonaCandidates[id] = record
+	if err := s.persistLocked(); err != nil {
+		s.state.PersonaCandidates[id] = previous
+		return persona.PersonaCandidateRecord{}, err
+	}
+	return record, nil
+}
+
 func reportKey(agentID string, day time.Time) string {
 	return agentID + "|" + model.NormalizeDay(day).Format("2006-01-02")
 }

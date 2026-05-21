@@ -396,3 +396,40 @@ func (s *Store) UpdateCandidateState(id string, state persona.PersonaCandidateSt
 	s.personaCandidates[id] = record
 	return record, nil
 }
+
+func (s *Store) LinkCandidateDraft(id string, draftID string, updatedAt time.Time) (persona.PersonaCandidateRecord, error) {
+	if id == "" || draftID == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.personaCandidates[id]
+	if !ok {
+		return persona.PersonaCandidateRecord{}, store.ErrNotFound
+	}
+	record.State = persona.PersonaCandidateDrafted
+	record.DraftID = draftID
+	record.UpdatedAt = updatedAt
+	s.personaCandidates[id] = record
+	return record, nil
+}
+
+func (s *Store) ClaimCandidateForDraft(id string, now time.Time) (persona.PersonaCandidateRecord, error) {
+	if id == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.personaCandidates[id]
+	if !ok {
+		return persona.PersonaCandidateRecord{}, store.ErrNotFound
+	}
+	if persona.NormalizeCandidateState(record.State) != persona.PersonaCandidateOpen {
+		return persona.PersonaCandidateRecord{}, store.ErrConflict
+	}
+	record.State = persona.PersonaCandidateDrafted
+	record.DraftID = ""
+	record.UpdatedAt = now
+	s.personaCandidates[id] = record
+	return record, nil
+}

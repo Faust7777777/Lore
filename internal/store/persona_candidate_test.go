@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -474,6 +475,106 @@ func TestPersonaCandidateStoreIdempotentRetryOnSameIDAndKey(t *testing.T) {
 			}
 			if !stored.CreatedAt.Equal(first.CreatedAt) {
 				t.Fatalf("idempotent retry replaced CreatedAt: got %v want %v", stored.CreatedAt, first.CreatedAt)
+			}
+		})
+	}
+}
+
+func TestClaimCandidateForDraftIsAtomicUnderConcurrency(t *testing.T) {
+	// 16 goroutines call ClaimCandidateForDraft on the same seeded
+	// candidate. Exactly one MUST return success; the rest MUST
+	// return store.ErrConflict (or another non-nil error -- never
+	// silently succeed). The test runs against all three backends
+	// since the duplicate-prevention contract is store-level.
+	for _, bf := range backends(t) {
+		t.Run(bf.name, func(t *testing.T) {
+			s := bf.open(t)
+			rec := sampleCandidate("race-1", "major", "economics", "I study economics")
+			if _, _, err := s.UpsertCandidate(rec); err != nil {
+				t.Fatalf("UpsertCandidate() error = %v", err)
+			}
+
+			const goroutines = 16
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			errs := make([]error, goroutines)
+			records := make([]persona.PersonaCandidateRecord, goroutines)
+			for i := 0; i < goroutines; i++ {
+				wg.Add(1)
+				go func(idx int) {
+					defer wg.Done()
+					<-start
+					records[idx], errs[idx] = s.ClaimCandidateForDraft("race-1", time.Now())
+				}(i)
+			}
+			close(start)
+			wg.Wait()
+
+			wins := 0
+			conflicts := 0
+			other := 0
+			for _, err := range errs {
+				switch {
+				case err == nil:
+					wins++
+				case errors.Is(err, store.ErrConflict):
+					conflicts++
+				default:
+					other++
+				}
+			}
+			if wins != 1 {
+				t.Fatalf("wins = %d, want exactly 1 (errs = %v)", wins, errs)
+			}
+			if other != 0 {
+				t.Fatalf("unexpected non-conflict errors = %d (%v)", other, errs)
+			}
+			if conflicts != goroutines-1 {
+				t.Fatalf("conflicts = %d, want %d", conflicts, goroutines-1)
+			}
+
+			// Final state: the single winner's record must be in
+			// Drafted with empty DraftID.
+			final, err := s.GetCandidate("race-1")
+			if err != nil {
+				t.Fatalf("GetCandidate() error = %v", err)
+			}
+			if final.State != persona.PersonaCandidateDrafted {
+				t.Fatalf("final state = %q, want drafted", final.State)
+			}
+			if final.DraftID != "" {
+				t.Fatalf("final DraftID = %q, want empty (claim does not set DraftID)", final.DraftID)
+			}
+		})
+	}
+}
+
+func TestClaimCandidateForDraftRejectsDismissed(t *testing.T) {
+	for _, bf := range backends(t) {
+		t.Run(bf.name, func(t *testing.T) {
+			s := bf.open(t)
+			rec := sampleCandidate("dismissed-1", "major", "economics", "I study economics")
+			if _, _, err := s.UpsertCandidate(rec); err != nil {
+				t.Fatalf("UpsertCandidate() error = %v", err)
+			}
+			if _, err := s.UpdateCandidateState("dismissed-1", persona.PersonaCandidateDismissed, time.Now()); err != nil {
+				t.Fatalf("UpdateCandidateState() error = %v", err)
+			}
+			_, err := s.ClaimCandidateForDraft("dismissed-1", time.Now())
+			if !errors.Is(err, store.ErrConflict) {
+				t.Fatalf("Claim on dismissed candidate err = %v, want store.ErrConflict", err)
+			}
+		})
+	}
+}
+
+func TestClaimCandidateForDraftReturnsNotFoundForMissingID(t *testing.T) {
+	for _, bf := range backends(t) {
+		t.Run(bf.name, func(t *testing.T) {
+			s := bf.open(t)
+			_, err := s.ClaimCandidateForDraft("missing", time.Now())
+			if !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("err = %v, want store.ErrNotFound", err)
 			}
 		})
 	}

@@ -80,6 +80,37 @@ type PersonaCandidateStore interface {
 	// stamping UpdatedAt. Returns the post-transition record, or
 	// ErrNotFound when the ID does not exist.
 	UpdateCandidateState(id string, state persona.PersonaCandidateState, updatedAt time.Time) (persona.PersonaCandidateRecord, error)
+	// LinkCandidateDraft atomically sets State = Drafted, populates
+	// DraftID, and stamps UpdatedAt on the candidate identified by
+	// id. Implementations MUST ensure both fields land or neither
+	// does, so that an operator-visible retry of the
+	// app.Runtime.CreatePersonaDraftFromCandidate flow can detect
+	// "already linked to draft X" instead of producing a second
+	// draft. Returns the post-transition record, or ErrNotFound
+	// when the ID does not exist; empty draftID returns
+	// ErrInvalidKey.
+	LinkCandidateDraft(id string, draftID string, updatedAt time.Time) (persona.PersonaCandidateRecord, error)
+	// ClaimCandidateForDraft atomically transitions Open ->
+	// Drafted (with DraftID still empty) so the caller can safely
+	// invoke harness.ProposePersonaUpdate without a concurrent
+	// caller producing a duplicate draft. Implementations MUST
+	// perform the read-and-write as a single compare-and-set under
+	// their backend's locking; the in-process pre-check that
+	// app.Runtime.CreatePersonaDraftFromCandidate does for fast
+	// idempotent / dismissed paths is NOT sufficient on its own
+	// because two callers can both pass that pre-check before
+	// either marks the candidate Drafted.
+	//
+	// Returns:
+	//   - the claimed record (State = Drafted, DraftID = "") on
+	//     success;
+	//   - ErrNotFound when the ID does not exist;
+	//   - ErrConflict when the candidate exists but is not in the
+	//     Open state (already claimed, drafted, or dismissed); the
+	//     caller should re-read and route through the same
+	//     non-Open branches the pre-check uses;
+	//   - ErrInvalidKey when id is empty.
+	ClaimCandidateForDraft(id string, now time.Time) (persona.PersonaCandidateRecord, error)
 }
 
 type StateStore interface {

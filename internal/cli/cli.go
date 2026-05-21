@@ -17,6 +17,7 @@ import (
 	"obsidian-harness/internal/mcp"
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/operatoragent"
+	"obsidian-harness/internal/persona"
 	"obsidian-harness/internal/sessionlog"
 	"obsidian-harness/internal/tui"
 )
@@ -132,6 +133,8 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 		return runDraftCommand(args[1:], stdout, stderr)
 	case "findings":
 		return runFindingsCommand(args[1:], stdout, stderr)
+	case "persona":
+		return runPersonaCommand(args[1:], stdout, stderr)
 	case "usage":
 		return runUsageCommand(args[1:], stdout, stderr)
 	case "process-sink":
@@ -197,6 +200,7 @@ Commands:
   daemon               Run the vault watcher daemon / one-shot scan
   draft                Review and act on pending drafts
   findings             Inspect and close post-scan governance findings
+  persona              Review LLM-mined persona update candidates
   usage [workdir]      Summarize model-call usage and token cost
   process-sink         Inspect checkpoint and daily report status
   smoke                Run verification smoke checks (for example: smoke p0)
@@ -896,6 +900,190 @@ func runFindingsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	default:
 		fmt.Fprintf(stderr, "findings: unknown subcommand %q\n", args[0])
 		return 1
+	}
+}
+
+func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "candidates" {
+		fmt.Fprintln(stderr, "usage: lore persona candidates <list|show|dismiss|draft> [flags] [id]")
+		return 1
+	}
+	sub := args[1:]
+	if len(sub) == 0 {
+		fmt.Fprintln(stderr, "usage: lore persona candidates <list|show|dismiss|draft> [flags] [id]")
+		return 1
+	}
+	switch sub[0] {
+	case "list":
+		workDir, stateFilter, limit, err := parsePersonaListFlags(sub[1:], stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		defer closeRuntime(stderr, runtime, "persona candidates list")
+		records, err := runtime.ListPersonaCandidates(stateFilter, limit)
+		if err != nil {
+			fmt.Fprintf(stderr, "persona candidates list: %v\n", err)
+			return 1
+		}
+		renderPersonaCandidateList(stdout, stateFilter, records)
+		return 0
+	case "show", "dismiss", "draft":
+		workDir, candidateID, err := parsePersonaActionFlags("persona candidates "+sub[0], sub[1:], stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		runtime, err := app.OpenRuntime(workDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "open runtime: %v\n", err)
+			return 1
+		}
+		defer closeRuntime(stderr, runtime, "persona candidates "+sub[0])
+
+		switch sub[0] {
+		case "show":
+			record, err := runtime.GetPersonaCandidate(candidateID)
+			if err != nil {
+				fmt.Fprintf(stderr, "persona candidates show: %v\n", err)
+				return 1
+			}
+			renderPersonaCandidateDetail(stdout, record)
+		case "dismiss":
+			record, err := runtime.DismissPersonaCandidate(candidateID, time.Now())
+			if err != nil {
+				fmt.Fprintf(stderr, "persona candidates dismiss: %v\n", err)
+				return 1
+			}
+			renderPersonaCandidateActionResult(stdout, "dismiss", record, "")
+		case "draft":
+			record, result, err := runtime.CreatePersonaDraftFromCandidate(candidateID, time.Now())
+			if err != nil {
+				fmt.Fprintf(stderr, "persona candidates draft: %v\n", err)
+				return 1
+			}
+			renderPersonaCandidateActionResult(stdout, "draft", record, result.DraftID)
+		}
+		return 0
+	default:
+		fmt.Fprintf(stderr, "persona candidates: unknown subcommand %q\n", sub[0])
+		return 1
+	}
+}
+
+func parsePersonaListFlags(args []string, stderr io.Writer) (string, persona.PersonaCandidateState, int, error) {
+	flags := flag.NewFlagSet("persona candidates list", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	limit := flags.Int("limit", 20, "maximum candidates to show")
+	state := flags.String("state", "open", "candidate state to list: open, drafted, dismissed")
+	if err := flags.Parse(args); err != nil {
+		return "", "", 0, err
+	}
+	resolved, err := defaultWorkDir(*workDir)
+	if err != nil {
+		return "", "", 0, err
+	}
+	wantState := persona.NormalizeCandidateState(persona.PersonaCandidateState(strings.TrimSpace(*state)))
+	switch wantState {
+	case persona.PersonaCandidateOpen, persona.PersonaCandidateDrafted, persona.PersonaCandidateDismissed:
+	default:
+		return "", "", 0, fmt.Errorf("persona candidates list: --state must be one of open, drafted, dismissed")
+	}
+	return resolved, wantState, *limit, nil
+}
+
+func parsePersonaActionFlags(name string, args []string, stderr io.Writer) (string, string, error) {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	if err := flags.Parse(args); err != nil {
+		return "", "", err
+	}
+	remaining := flags.Args()
+	if len(remaining) == 0 || strings.TrimSpace(remaining[0]) == "" {
+		return "", "", fmt.Errorf("%s: persona candidate id is required", name)
+	}
+	resolved, err := defaultWorkDir(*workDir)
+	if err != nil {
+		return "", "", err
+	}
+	return resolved, strings.TrimSpace(remaining[0]), nil
+}
+
+func renderPersonaCandidateList(stdout io.Writer, state persona.PersonaCandidateState, records []persona.PersonaCandidateRecord) {
+	fmt.Fprintln(stdout, "Persona Candidates")
+	fmt.Fprintln(stdout, "==================")
+	fmt.Fprintf(stdout, "State: %s\n", state)
+	fmt.Fprintln(stdout)
+	if len(records) == 0 {
+		fmt.Fprintln(stdout, "No candidates.")
+		return
+	}
+	fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", "ID", "FIELD", "PROPOSED", "CONFIDENCE", "CONFLICT", "SOURCE")
+	for _, record := range records {
+		conflict := "no"
+		if record.Candidate.Conflict {
+			conflict = "yes"
+		}
+		fmt.Fprintf(
+			stdout,
+			"%s\t%s\t%s\t%s\t%s\t%s\n",
+			record.ID,
+			record.Candidate.Field,
+			clipOneLine(record.Candidate.ProposedValue, 40),
+			record.Candidate.Confidence,
+			conflict,
+			record.Candidate.SourceKind,
+		)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Next:")
+	fmt.Fprintln(stdout, "  lore persona candidates show <id>")
+	fmt.Fprintln(stdout, "  lore persona candidates draft <id>")
+	fmt.Fprintln(stdout, "  lore persona candidates dismiss <id>")
+}
+
+func renderPersonaCandidateDetail(stdout io.Writer, record persona.PersonaCandidateRecord) {
+	fmt.Fprintln(stdout, "Persona Candidate")
+	fmt.Fprintln(stdout, "=================")
+	fmt.Fprintf(stdout, "ID:             %s\n", record.ID)
+	fmt.Fprintf(stdout, "State:          %s\n", record.State)
+	fmt.Fprintf(stdout, "Field:          %s\n", record.Candidate.Field)
+	fmt.Fprintf(stdout, "Proposed value: %s\n", record.Candidate.ProposedValue)
+	if strings.TrimSpace(record.Candidate.CurrentValue) != "" {
+		fmt.Fprintf(stdout, "Current value:  %s\n", record.Candidate.CurrentValue)
+	}
+	fmt.Fprintf(stdout, "Evidence:       %s\n", record.Candidate.EvidenceQuote)
+	if strings.TrimSpace(record.Candidate.Reason) != "" {
+		fmt.Fprintf(stdout, "Reason:         %s\n", record.Candidate.Reason)
+	}
+	fmt.Fprintf(stdout, "Confidence:     %s\n", record.Candidate.Confidence)
+	fmt.Fprintf(stdout, "Conflict:       %v\n", record.Candidate.Conflict)
+	fmt.Fprintf(stdout, "Source:         %s\n", record.Candidate.SourceKind)
+	if strings.TrimSpace(record.Candidate.SourceSessionID) != "" {
+		fmt.Fprintf(stdout, "Session:        %s\n", record.Candidate.SourceSessionID)
+	}
+	fmt.Fprintf(stdout, "Observed at:    %s\n", record.Candidate.ObservedAt.Format(time.RFC3339))
+	fmt.Fprintf(stdout, "Created at:     %s\n", record.CreatedAt.Format(time.RFC3339))
+	fmt.Fprintf(stdout, "Updated at:     %s\n", record.UpdatedAt.Format(time.RFC3339))
+	fmt.Fprintf(stdout, "Dedup key:      %s\n", record.DedupKey)
+}
+
+func renderPersonaCandidateActionResult(stdout io.Writer, action string, record persona.PersonaCandidateRecord, draftID string) {
+	fmt.Fprintln(stdout, "Persona Candidate Updated")
+	fmt.Fprintln(stdout, "=========================")
+	fmt.Fprintf(stdout, "Action: %s\n", action)
+	fmt.Fprintf(stdout, "ID:     %s\n", record.ID)
+	fmt.Fprintf(stdout, "State:  %s\n", record.State)
+	fmt.Fprintf(stdout, "Field:  %s\n", record.Candidate.Field)
+	if draftID != "" {
+		fmt.Fprintf(stdout, "Draft:  %s (pending_review; use `lore draft review %s`)\n", draftID, draftID)
 	}
 }
 

@@ -2,6 +2,7 @@ package sqlitestore
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/persona"
+	"obsidian-harness/internal/store"
 )
 
 func TestStorePersistsAcrossReload(t *testing.T) {
@@ -571,5 +573,88 @@ func TestOpenWithJSONMigrationSkipsWhenPersonaCandidatesPresent(t *testing.T) {
 	}
 	if got.Candidate.ProposedValue != "economics" {
 		t.Fatalf("seeded candidate corrupted: %+v", got.Candidate)
+	}
+}
+
+// TestClaimCandidateForDraftAcceptsEmptyStateLegacyRow locks the
+// reviewer-flagged sqlite-specific consistency: a row with state=''
+// is visible in the Open queue via the legacy-compat OR branch in
+// ListCandidatesByState, so ClaimCandidateForDraft must also accept
+// it instead of returning ErrConflict. We can't reach this state
+// through the public API today (Upsert normalizes), so the test
+// forces it via raw SQL -- the exact path through which a legacy
+// store or future schema change could leak such a row.
+func TestClaimCandidateForDraftAcceptsEmptyStateLegacyRow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "store.db")
+	st, err := New(path)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	candidate := persona.PersonaCandidate{
+		Field:         "major",
+		ProposedValue: "economics",
+		EvidenceQuote: "I study economics",
+		Confidence:    persona.ConfidenceHigh,
+		SourceKind:    persona.SourceConsole,
+		ObservedAt:    time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC),
+	}
+	now := time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC)
+	rec := persona.PersonaCandidateRecord{
+		ID:        "legacy-empty-state",
+		State:     persona.PersonaCandidateOpen,
+		DedupKey:  persona.DedupKey(candidate),
+		Candidate: candidate,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if _, _, err := st.UpsertCandidate(rec); err != nil {
+		t.Fatalf("UpsertCandidate() error = %v", err)
+	}
+	// Force the on-disk state column to empty. This simulates a
+	// legacy row written by an older build (or a raw DB edit). The
+	// payload retains state="open" but the indexed column does not.
+	if _, err := st.db.Exec(`UPDATE persona_candidates SET state = '' WHERE id = ?`, "legacy-empty-state"); err != nil {
+		t.Fatalf("force-state UPDATE error = %v", err)
+	}
+
+	// The Open list must surface this row (P3 legacy-compat OR).
+	openList, err := st.ListCandidatesByState(persona.PersonaCandidateOpen, 0)
+	if err != nil {
+		t.Fatalf("ListCandidatesByState() error = %v", err)
+	}
+	if len(openList) != 1 || openList[0].ID != "legacy-empty-state" {
+		t.Fatalf("Open list does not include the empty-state row: %+v", openList)
+	}
+
+	// ClaimCandidateForDraft must accept the row instead of
+	// returning ErrConflict -- the read-side and write-side guards
+	// must agree on what counts as Open.
+	claimed, err := st.ClaimCandidateForDraft("legacy-empty-state", now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ClaimCandidateForDraft() error = %v, want nil (legacy empty-state row must be claimable)", err)
+	}
+	if claimed.State != persona.PersonaCandidateDrafted {
+		t.Fatalf("claimed.State = %q, want drafted", claimed.State)
+	}
+	if claimed.DraftID != "" {
+		t.Fatalf("claimed.DraftID = %q, want empty (claim only flips state)", claimed.DraftID)
+	}
+
+	// The on-disk state column should now be 'drafted' (the claim
+	// normalized away from the empty-state legacy value).
+	var diskState string
+	if err := st.db.QueryRow(`SELECT state FROM persona_candidates WHERE id = ?`, "legacy-empty-state").Scan(&diskState); err != nil {
+		t.Fatalf("post-claim state read error = %v", err)
+	}
+	if diskState != string(persona.PersonaCandidateDrafted) {
+		t.Fatalf("post-claim disk state = %q, want drafted", diskState)
+	}
+
+	// And a second Claim must now hit the proper Drafted guard and
+	// return ErrConflict (no further claims allowed).
+	if _, err := st.ClaimCandidateForDraft("legacy-empty-state", now.Add(2*time.Hour)); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("second claim err = %v, want store.ErrConflict", err)
 	}
 }

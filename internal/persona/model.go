@@ -157,6 +157,17 @@ type PersonaCandidateRecord struct {
 	Candidate PersonaCandidate      `json:"candidate"`
 	CreatedAt time.Time             `json:"created_at"`
 	UpdatedAt time.Time             `json:"updated_at"`
+	// DraftID, when non-empty, links the candidate to the
+	// model.Draft.ID that was created from it by
+	// app.Runtime.CreatePersonaDraftFromCandidate. Set together with
+	// State = PersonaCandidateDrafted via store.LinkCandidateDraft so
+	// the two transition atomically. Idempotent re-promotion of the
+	// same candidate returns the linked draft instead of creating a
+	// duplicate. Empty for Open / Dismissed states, or for legacy
+	// records that pre-date P5 -- callers should treat empty DraftID
+	// on a Drafted record as an inconsistent legacy state requiring
+	// manual operator action.
+	DraftID string `json:"draft_id,omitempty"`
 }
 
 // NormalizeText returns the canonical comparison form for persona
