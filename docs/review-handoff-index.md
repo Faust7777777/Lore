@@ -4,7 +4,7 @@ Standalone index for the review handoff documents under `docs/archive/review-han
 
 Updated: 2026-05-23
 
-Total handoff documents indexed: 102
+Total handoff documents indexed: 103
 
 ## Current Workstreams
 
@@ -15,6 +15,7 @@ Total handoff documents indexed: 102
 - [B-P11a Usage Purpose Breakdown](archive/review-handoff/review-handoff-b-line-p11a-usage-purpose-breakdown-2026-05-22.md)
 - [B-P11c Persona Errors Reader](archive/review-handoff/review-handoff-b-line-p11c-persona-errors-reader-2026-05-23.md)
 - [B-line CLI Hint Batch](archive/review-handoff/review-handoff-b-line-cli-hint-batch-2026-05-23.md)
+- [B-P11e Persona Summary Dashboard](archive/review-handoff/review-handoff-b-line-p11e-persona-summary-dashboard-2026-05-23.md)
 - [Persona Acceptance Gate Scaffold](archive/review-handoff/review-handoff-codex53-persona-acceptance-gate-scaffold-2026-05-20.md)
 - [Persona Gate Plan Alignment](archive/review-handoff/review-handoff-codex53-persona-gate-plan-alignment-2026-05-22.md)
 - [SQLite Persona Retry CAS Hardening](archive/review-handoff/review-handoff-codex53-persona-retry-cas-2026-05-22.md)
@@ -29,6 +30,7 @@ Total handoff documents indexed: 102
 - [review-handoff-b-line-p10-list-draft-column-2026-05-22.md](archive/review-handoff/review-handoff-b-line-p10-list-draft-column-2026-05-22.md)
 - [review-handoff-b-line-p11a-usage-purpose-breakdown-2026-05-22.md](archive/review-handoff/review-handoff-b-line-p11a-usage-purpose-breakdown-2026-05-22.md)
 - [review-handoff-b-line-p11c-persona-errors-reader-2026-05-23.md](archive/review-handoff/review-handoff-b-line-p11c-persona-errors-reader-2026-05-23.md)
+- [review-handoff-b-line-p11e-persona-summary-dashboard-2026-05-23.md](archive/review-handoff/review-handoff-b-line-p11e-persona-summary-dashboard-2026-05-23.md)
 - [review-handoff-b-line-p8-candidate-lifecycle-recovery-2026-05-22.md](archive/review-handoff/review-handoff-b-line-p8-candidate-lifecycle-recovery-2026-05-22.md)
 - [review-handoff-b-line-p9-extraction-observability-2026-05-22.md](archive/review-handoff/review-handoff-b-line-p9-extraction-observability-2026-05-22.md)
 - [review-handoff-codex53.md](archive/review-handoff/review-handoff-codex53.md)

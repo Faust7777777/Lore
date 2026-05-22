@@ -94,6 +94,12 @@ lore persona candidates recover <id> [--workdir <p>] --force-dismiss
 
 lore persona errors [--workdir <p>] [--tail N] [--stage extract|store|parse_warning] [--since <duration>]
 
+lore persona summary [--workdir <p>]
+   - one-page dashboard combining candidate counts (open /
+     drafted-linked / drafted-orphan / dismissed) with extract-log
+     stage counts and last-entry timestamp
+   - read-only: never mutates store or log
+
 lore usage [--days N] [--workdir <p>]
    - daily DAY / CALLS / PROMPT / COMPLETION / TOTAL table
    - "By purpose:" block aggregating across the window
@@ -344,6 +350,9 @@ the linked review-handoff for the original analysis.
 | `ae8a5ec` | B-P11d batch | dismiss hint pointing at recover / draft reject |
 | `c5e857a` | B-P11d batch | draft surface typed-error hints (4 cases) |
 | `4418201` | B-P11d batch | recover surface typed-error hints (3 cases) |
+| `f24acd4` | test | production-path persona extract failure coverage (console) |
+| `bc007ae` | test | production-path persona extract failure coverage (TUI mirror) |
+| `b1808ee` | B-P11e | lore persona summary one-page dashboard |
 
 Plus per-slice handoffs under
 `docs/archive/review-handoff/review-handoff-b-line-*` and the

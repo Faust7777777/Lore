@@ -222,6 +222,22 @@ lore persona candidates recover --workdir $work --force-dismiss $partialID
 **Expected** after `recover --force-dismiss`: the candidate is
 `dismissed`, DraftID stays empty.
 
+## 9a. One-page dashboard
+
+```powershell
+lore persona summary --workdir $work
+```
+
+**Expected**: a `Persona Memory Summary` block listing candidate
+counts per state (with `drafted` split into `linked` and
+`partial-orphan`), then an `Extract log:` section with total
+entries, per-stage counts (`extract` / `store` / `parse_warning`,
+plus `(malformed)` for any lines that fail to parse), and the
+RFC3339 timestamp of the most recent entry. A fresh workdir shows
+all zeros and `(no log file yet)`. Use this command at any point
+during the test to get a single-glance health check without
+running `list` three times plus `errors --tail`.
+
 ## 10. Look at the cost split
 
 ```powershell
