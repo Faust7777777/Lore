@@ -714,11 +714,10 @@ func (s *Store) ClaimCandidateForRetry(id string, expectedDraftID string, now ti
 		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
 	}
 	// Same transactional CAS pattern as ClaimCandidateForDraft.
-	// The UPDATE narrows by id, state='drafted', AND the existing
-	// draft_id stored inside payload via a Go-side check (sqlite has
-	// no json_extract dependency used elsewhere in this file). The
-	// extra RowsAffected==1 belt-and-suspenders gives a clean failure
-	// signal if a peer transitioned the row in between.
+	// DraftID lives inside payload, so the UPDATE also matches the
+	// exact payload observed by the SELECT. That prevents a stale
+	// reader from overwriting a peer's cleared/relinked payload after
+	// the Go-side DraftID check has already run.
 	tx, err := s.db.Begin()
 	if err != nil {
 		return persona.PersonaCandidateRecord{}, err
@@ -746,17 +745,14 @@ func (s *Store) ClaimCandidateForRetry(id string, expectedDraftID string, now ti
 	if err != nil {
 		return persona.PersonaCandidateRecord{}, err
 	}
-	// UPDATE filter is intentionally just (id, state='drafted'):
-	// the Go-side check above already verified DraftID matches; the
-	// state guard prevents a race where a peer dismissed the
-	// candidate (state=dismissed) between SELECT and UPDATE.
 	result, err := tx.Exec(
-		`UPDATE persona_candidates SET state = ?, updated_at = ?, payload = ? WHERE id = ? AND state = ?`,
+		`UPDATE persona_candidates SET state = ?, updated_at = ?, payload = ? WHERE id = ? AND state = ? AND payload = ?`,
 		string(persona.PersonaCandidateDrafted),
 		timeString(now),
 		payload,
 		id,
 		string(persona.PersonaCandidateDrafted),
+		existingPayload,
 	)
 	if err != nil {
 		return persona.PersonaCandidateRecord{}, err
