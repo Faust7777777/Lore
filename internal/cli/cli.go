@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -1298,6 +1299,48 @@ func renderUsageReport(stdout io.Writer, days int, daily []model.UsageSummary) {
 			summary.TotalTokens,
 		)
 	}
+	// B-P11a: surface a per-purpose breakdown so operators can see
+	// what fraction of cost went to chat vs persona_extract vs
+	// process_sink. Aggregate across the queried window because
+	// printing breakdown rows under every DAY row would crowd the
+	// table; the daily DAY/CALLS/PROMPT/COMPLETION/TOTAL line still
+	// answers "what did today cost overall".
+	purposeTotals := map[string]model.UsagePurposeStats{}
+	for _, summary := range daily {
+		for purpose, stats := range summary.PurposeBreakdown {
+			agg := purposeTotals[purpose]
+			agg.Calls += stats.Calls
+			agg.PromptTokens += stats.PromptTokens
+			agg.CompletionTokens += stats.CompletionTokens
+			purposeTotals[purpose] = agg
+		}
+	}
+	if len(purposeTotals) > 0 {
+		purposes := make([]string, 0, len(purposeTotals))
+		for purpose := range purposeTotals {
+			purposes = append(purposes, purpose)
+		}
+		sort.Strings(purposes)
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "By purpose:")
+		for _, purpose := range purposes {
+			label := purpose
+			if label == "" {
+				label = "unspecified"
+			}
+			stats := purposeTotals[purpose]
+			fmt.Fprintf(
+				stdout,
+				"  %-16s %d calls / %d prompt + %d completion = %d tokens\n",
+				label,
+				stats.Calls,
+				stats.PromptTokens,
+				stats.CompletionTokens,
+				stats.TotalTokens(),
+			)
+		}
+	}
+
 	fmt.Fprintln(stdout)
 	fmt.Fprintf(
 		stdout,

@@ -308,6 +308,11 @@ func (s *Store) SummarizeUsage(day time.Time) (model.UsageSummary, error) {
 
 	normalized := model.NormalizeUsageDay(day)
 	summary := model.UsageSummary{Day: normalized}
+	// B-P11a: populate PurposeBreakdown in the same pass so the JSON
+	// store mirrors the sqlite + memory implementations. Records
+	// pre-dating the Purpose field deserialize with Purpose == ""
+	// and collapse into that bucket.
+	breakdown := map[string]model.UsagePurposeStats{}
 	for _, record := range s.state.Usage {
 		if !model.NormalizeUsageDay(record.RecordedAt).Equal(normalized) {
 			continue
@@ -315,8 +320,16 @@ func (s *Store) SummarizeUsage(day time.Time) (model.UsageSummary, error) {
 		summary.Calls++
 		summary.PromptTokens += record.PromptTokens
 		summary.CompletionTokens += record.CompletionTokens
+		stats := breakdown[record.Purpose]
+		stats.Calls++
+		stats.PromptTokens += record.PromptTokens
+		stats.CompletionTokens += record.CompletionTokens
+		breakdown[record.Purpose] = stats
 	}
 	summary.TotalTokens = summary.PromptTokens + summary.CompletionTokens
+	if len(breakdown) > 0 {
+		summary.PurposeBreakdown = breakdown
+	}
 	return summary, nil
 }
 

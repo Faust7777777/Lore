@@ -287,6 +287,10 @@ func (s *Store) SummarizeUsage(day time.Time) (model.UsageSummary, error) {
 
 	normalized := model.NormalizeUsageDay(day)
 	summary := model.UsageSummary{Day: normalized}
+	// B-P11a: populate PurposeBreakdown in the same pass. Memory
+	// records carry Purpose directly so no extra unmarshal step;
+	// records with an empty Purpose collapse into the "" bucket.
+	breakdown := map[string]model.UsagePurposeStats{}
 	for _, record := range s.usage {
 		if !model.NormalizeUsageDay(record.RecordedAt).Equal(normalized) {
 			continue
@@ -294,8 +298,16 @@ func (s *Store) SummarizeUsage(day time.Time) (model.UsageSummary, error) {
 		summary.Calls++
 		summary.PromptTokens += record.PromptTokens
 		summary.CompletionTokens += record.CompletionTokens
+		stats := breakdown[record.Purpose]
+		stats.Calls++
+		stats.PromptTokens += record.PromptTokens
+		stats.CompletionTokens += record.CompletionTokens
+		breakdown[record.Purpose] = stats
 	}
 	summary.TotalTokens = summary.PromptTokens + summary.CompletionTokens
+	if len(breakdown) > 0 {
+		summary.PurposeBreakdown = breakdown
+	}
 	return summary, nil
 }
 

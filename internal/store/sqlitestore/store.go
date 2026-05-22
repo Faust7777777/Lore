@@ -401,18 +401,56 @@ func (s *Store) AppendUsage(record model.UsageRecord) error {
 
 func (s *Store) SummarizeUsage(day time.Time) (model.UsageSummary, error) {
 	summary := model.UsageSummary{Day: model.NormalizeUsageDay(day)}
-	err := s.db.QueryRow(
-		`SELECT COUNT(*),
-		        COALESCE(SUM(prompt_tokens), 0),
-		        COALESCE(SUM(completion_tokens), 0)
+	// B-P11a: SummarizeUsage now scans payloads instead of relying on
+	// pure SQL aggregates so it can populate PurposeBreakdown in the
+	// same pass. The day's record count is small enough (one row per
+	// LLM call, even a busy day stays in the low hundreds) that
+	// pulling payloads and decoding in Go is cheaper than introducing
+	// a json_extract dependency on a new SQLite feature.
+	rows, err := s.db.Query(
+		`SELECT prompt_tokens, completion_tokens, payload
 		   FROM usage_records
 		  WHERE day = ?`,
 		usageDayString(day),
-	).Scan(&summary.Calls, &summary.PromptTokens, &summary.CompletionTokens)
+	)
 	if err != nil {
 		return model.UsageSummary{}, err
 	}
+	defer rows.Close()
+	breakdown := map[string]model.UsagePurposeStats{}
+	for rows.Next() {
+		var prompt, completion int
+		var payload string
+		if scanErr := rows.Scan(&prompt, &completion, &payload); scanErr != nil {
+			return model.UsageSummary{}, scanErr
+		}
+		summary.Calls++
+		summary.PromptTokens += prompt
+		summary.CompletionTokens += completion
+		purpose := ""
+		if payload != "" {
+			if rec, jsonErr := unmarshalPayload[model.UsageRecord](payload); jsonErr == nil {
+				purpose = rec.Purpose
+			}
+			// Unmarshal failure (corrupt row, schema drift) silently
+			// folds into the empty-purpose bucket; the top-line
+			// Calls/Tokens still increment from the SQL columns so
+			// the report stays consistent even if a record cannot be
+			// decoded.
+		}
+		stats := breakdown[purpose]
+		stats.Calls++
+		stats.PromptTokens += prompt
+		stats.CompletionTokens += completion
+		breakdown[purpose] = stats
+	}
+	if err := rows.Err(); err != nil {
+		return model.UsageSummary{}, err
+	}
 	summary.TotalTokens = summary.PromptTokens + summary.CompletionTokens
+	if len(breakdown) > 0 {
+		summary.PurposeBreakdown = breakdown
+	}
 	return summary, nil
 }
 

@@ -52,6 +52,33 @@ type UsageSummary struct {
 	PromptTokens     int       `json:"prompt_tokens"`
 	CompletionTokens int       `json:"completion_tokens"`
 	TotalTokens      int       `json:"total_tokens"`
+	// PurposeBreakdown disaggregates the day's calls and tokens by
+	// UsagePurpose so `lore usage` can show operators what fraction
+	// of cost went to chat vs persona_extract vs process_sink. Keyed
+	// by the Purpose string ("chat", "persona_extract", etc.); empty
+	// or absent Purpose collapses to the empty-string bucket.
+	// Stores populate this in SummarizeUsage from the same scan that
+	// fills Calls/PromptTokens/CompletionTokens; pre-B-P11 records
+	// (no Purpose field) deserialize as Purpose="" and land in the
+	// empty bucket so legacy data still surfaces.
+	PurposeBreakdown map[string]UsagePurposeStats `json:"purpose_breakdown,omitempty"`
+}
+
+// UsagePurposeStats holds the per-Purpose aggregate inside a
+// UsageSummary.PurposeBreakdown map. Sum of all bucket Calls equals
+// the parent UsageSummary.Calls, same for tokens, so a caller can
+// reconcile the breakdown against the top-line totals.
+type UsagePurposeStats struct {
+	Calls            int `json:"calls"`
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+}
+
+// TotalTokens is a convenience accessor on the bucket; equivalent to
+// PromptTokens + CompletionTokens. Kept off the JSON form to avoid
+// drift if the two fields are ever recomputed independently.
+func (u UsagePurposeStats) TotalTokens() int {
+	return u.PromptTokens + u.CompletionTokens
 }
 
 // NormalizeUsageDay buckets a timestamp into the local calendar day
