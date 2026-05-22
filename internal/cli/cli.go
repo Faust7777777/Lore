@@ -909,8 +909,19 @@ func runFindingsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "candidates" {
-		fmt.Fprintln(stderr, "usage: lore persona candidates <list|show|dismiss|draft|recover> [flags] [id]")
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: lore persona <candidates|errors> [args]")
+		fmt.Fprintln(stderr, "  candidates  list/show/dismiss/draft/recover persona memory candidates")
+		fmt.Fprintln(stderr, "  errors      tail the persona extraction failure log")
+		return 1
+	}
+	switch args[0] {
+	case "candidates":
+		// handled below
+	case "errors":
+		return runPersonaErrorsCommand(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "persona: unknown subcommand %q\n", args[0])
 		return 1
 	}
 	sub := args[1:]
@@ -1126,6 +1137,187 @@ func parsePersonaRecoverFlags(args []string, stderr io.Writer) (string, string, 
 		return "", "", "", false, err
 	}
 	return resolved, strings.TrimSpace(remaining[0]), strings.TrimSpace(*linkDraftID), *forceDismiss, nil
+}
+
+// runPersonaErrorsCommand is the read-side counterpart to the
+// persona-extract.log file the console fire-and-forget goroutine
+// writes from B-P9. Operators can now `lore persona errors --tail
+// 20 --stage extract` instead of computing the workdir-relative
+// log path and tailing the file manually. This closes the
+// observability loop: B-P9 wires the writer, B-P11c wires the
+// reader. The runtime still owns the file path layout (via
+// Runtime.PersonaExtractLogPath), so a future move of the log to
+// a different subpath needs no CLI change.
+func runPersonaErrorsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	workDir, tail, stageFilter, since, err := parsePersonaErrorsFlags(args, stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	runtime, err := app.OpenRuntime(workDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "open runtime: %v\n", err)
+		return 1
+	}
+	defer closeRuntime(stderr, runtime, "persona errors")
+	return renderPersonaExtractErrors(stdout, stderr, runtime.PersonaExtractLogPath(), tail, stageFilter, since, time.Now().UTC())
+}
+
+func parsePersonaErrorsFlags(args []string, stderr io.Writer) (workDir string, tail int, stage string, since time.Duration, err error) {
+	flags := flag.NewFlagSet("persona errors", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	workDirFlag := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	tailFlag := flags.Int("tail", 20, "show only the last N matching lines (0 = no limit)")
+	stageFlag := flags.String("stage", "", "filter by stage: extract, store, parse_warning (empty = all)")
+	sinceFlag := flags.Duration("since", 0, "only show lines newer than this duration (e.g. 1h, 30m; 0 = no time filter)")
+	if parseErr := flags.Parse(args); parseErr != nil {
+		err = parseErr
+		return
+	}
+	if *tailFlag < 0 {
+		err = fmt.Errorf("persona errors: --tail must be >= 0")
+		return
+	}
+	if s := strings.TrimSpace(*stageFlag); s != "" {
+		switch s {
+		case "extract", "store", "parse_warning":
+		default:
+			err = fmt.Errorf("persona errors: --stage must be one of extract, store, parse_warning")
+			return
+		}
+	}
+	if *sinceFlag < 0 {
+		err = fmt.Errorf("persona errors: --since must be >= 0")
+		return
+	}
+	resolved, resolveErr := defaultWorkDir(*workDirFlag)
+	if resolveErr != nil {
+		err = resolveErr
+		return
+	}
+	workDir = resolved
+	tail = *tailFlag
+	stage = strings.TrimSpace(*stageFlag)
+	since = *sinceFlag
+	return
+}
+
+// personaLogEntry is the parsed shape of a single persona-extract.log
+// line. Lines that fail to parse (malformed, truncated) are still
+// retained with parsed=false so the operator sees the raw line; the
+// stage/since filters skip them rather than crashing.
+type personaLogEntry struct {
+	raw    string
+	ts     time.Time
+	stage  string
+	parsed bool
+}
+
+func parsePersonaLogLine(raw string) personaLogEntry {
+	fields := strings.Split(raw, "\t")
+	if len(fields) < 4 {
+		return personaLogEntry{raw: raw}
+	}
+	ts, err := time.Parse(time.RFC3339Nano, fields[0])
+	if err != nil {
+		return personaLogEntry{raw: raw}
+	}
+	if !strings.HasPrefix(fields[1], "stage=") {
+		return personaLogEntry{raw: raw, ts: ts}
+	}
+	return personaLogEntry{
+		raw:    raw,
+		ts:     ts,
+		stage:  strings.TrimPrefix(fields[1], "stage="),
+		parsed: true,
+	}
+}
+
+// renderPersonaExtractErrors reads the persona-extract.log file at
+// logPath, applies the requested filters, and prints a tail-style
+// report to stdout. now is parameter-injected so tests can pin a
+// stable "now" against the file's RFC3339Nano timestamps when
+// exercising the --since filter.
+func renderPersonaExtractErrors(stdout, stderr io.Writer, logPath string, tail int, stageFilter string, since time.Duration, now time.Time) int {
+	header := func() {
+		fmt.Fprintln(stdout, "Persona Extraction Errors")
+		fmt.Fprintln(stdout, "=========================")
+		fmt.Fprintf(stdout, "Source: %s\n", logPath)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			header()
+			fmt.Fprintln(stdout)
+			fmt.Fprintln(stdout, "No log file yet. Either extraction has not produced any failures in this workdir, or the runtime has not been opened here.")
+			return 0
+		}
+		fmt.Fprintf(stderr, "persona errors: read log: %v\n", err)
+		return 1
+	}
+
+	var cutoff time.Time
+	if since > 0 {
+		cutoff = now.Add(-since)
+	}
+
+	var all []personaLogEntry
+	for _, raw := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		all = append(all, parsePersonaLogLine(raw))
+	}
+
+	filtered := make([]personaLogEntry, 0, len(all))
+	for _, e := range all {
+		if stageFilter != "" && (!e.parsed || e.stage != stageFilter) {
+			continue
+		}
+		if since > 0 {
+			if e.ts.IsZero() || e.ts.Before(cutoff) {
+				continue
+			}
+		}
+		filtered = append(filtered, e)
+	}
+
+	shown := filtered
+	if tail > 0 && len(filtered) > tail {
+		shown = filtered[len(filtered)-tail:]
+	}
+
+	header()
+	var filterParts []string
+	if tail > 0 {
+		filterParts = append(filterParts, fmt.Sprintf("tail=%d", tail))
+	}
+	if stageFilter != "" {
+		filterParts = append(filterParts, fmt.Sprintf("stage=%s", stageFilter))
+	}
+	if since > 0 {
+		filterParts = append(filterParts, fmt.Sprintf("since=%s", since))
+	}
+	if len(filterParts) > 0 {
+		fmt.Fprintf(stdout, "Filter: %s\n", strings.Join(filterParts, ", "))
+	}
+	fmt.Fprintln(stdout)
+
+	if len(shown) == 0 {
+		fmt.Fprintln(stdout, "No matching entries.")
+		return 0
+	}
+
+	for _, e := range shown {
+		fmt.Fprintln(stdout, e.raw)
+	}
+	fmt.Fprintln(stdout)
+	if len(filtered) != len(all) {
+		fmt.Fprintf(stdout, "%d of %d entries shown (filtered from %d total).\n", len(shown), len(filtered), len(all))
+	} else {
+		fmt.Fprintf(stdout, "%d of %d entries shown.\n", len(shown), len(all))
+	}
+	return 0
 }
 
 func renderPersonaCandidateList(stdout io.Writer, state persona.PersonaCandidateState, records []persona.PersonaCandidateRecord) {

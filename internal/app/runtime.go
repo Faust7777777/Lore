@@ -164,6 +164,19 @@ func (r *Runtime) Close() error {
 	return nil
 }
 
+// PersonaExtractLogPath returns the workdir-local path of the
+// persona extraction failure log file -- the same file OpenRuntime
+// opens for write through PersonaExtractLogger. Read-side callers
+// (e.g. `lore persona errors`) use this to locate the file without
+// duplicating the path layout. Returns "" when the runtime or its
+// config is not initialized.
+func (r *Runtime) PersonaExtractLogPath() string {
+	if r == nil || r.Config.Paths.StateDir == "" {
+		return ""
+	}
+	return filepath.Join(r.Config.Paths.StateDir, personaExtractLogFile)
+}
+
 // openPersonaExtractLog opens the workdir-local log file the console
 // fire-and-forget extractor writes failure lines to. Returns
 // (nil, nil) when the directory cannot be created or the file cannot

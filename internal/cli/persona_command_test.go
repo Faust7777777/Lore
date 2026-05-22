@@ -442,8 +442,14 @@ func TestRunPersonaWithoutSubcommandShowsUsage(t *testing.T) {
 	if exitCode == 0 {
 		t.Fatalf("expected non-zero exit for no subcommand")
 	}
-	if !strings.Contains(stderr.String(), "lore persona candidates") {
-		t.Fatalf("stderr missing usage hint: %q", stderr.String())
+	// B-P11c reworked the usage line to dispatch between the
+	// candidates and errors subgroups; assert both surfaces are
+	// mentioned so the operator sees the full menu when typing
+	// `lore persona` with no further args.
+	for _, want := range []string{"lore persona", "candidates", "errors"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing usage hint %q: %q", want, stderr.String())
+		}
 	}
 }
 
