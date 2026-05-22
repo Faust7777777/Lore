@@ -172,8 +172,7 @@ func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput stri
 // contains a "[truncated ...]" marker (placed by B-line), the marker is
 // preserved even when the preceding content must be cut.
 func renderObservationExcerpt(text string, maxRunes int) string {
-	flat := strings.ReplaceAll(text, "\n", " ")
-	flat = strings.TrimSpace(flat)
+	flat := strings.Join(strings.Fields(text), " ")
 	runes := []rune(flat)
 	if len(runes) <= maxRunes {
 		return flat

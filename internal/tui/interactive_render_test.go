@@ -235,6 +235,13 @@ func TestRenderObservationExcerptPreservesTruncatedMarker(t *testing.T) {
 	}
 }
 
+func TestRenderObservationExcerptCollapsesWhitespace(t *testing.T) {
+	result := renderObservationExcerpt("line1\r\nline2\ttagged  extra", 80)
+	if result != "line1 line2 tagged extra" {
+		t.Fatalf("should collapse \\r\\n and \\t into single spaces, got: %q", result)
+	}
+}
+
 func TestRenderInteractiveConversationRunningState(t *testing.T) {
 	vm := WorkbenchViewModel{}
 	result := renderInteractiveConversation(vm, "", true, "show status", 80)
