@@ -144,6 +144,9 @@ Current implemented behavior:
 - Daemon post-scan now detects out-of-band ordinary note changes and governed/process-sink changes through audit records plus persisted open findings.
 - Local CLI can inspect and close findings with `lore findings list`, `lore findings resolve <id>`, and `lore findings ignore <id>`.
 - Lore external transcript JSONL import is available through `import-external-jsonl`; it writes process-sink checkpoints/reports through the same 30-minute window pipeline as Codex import.
+- ToolRegistry is now the canonical live MCP schema/dispatch source; the old `internal/mcp/tool_contract.go` fallback no longer exists.
+- Task/Turn visibility is implemented and gated: operator-agent responses include visible tool steps and observation excerpts, console/TUI/sessionlog preserve them, and the fake-model acceptance scenario covers `vault_resolve -> vault_read -> final`.
+- Persona memory candidate pipeline exists on the local path: async LLM extraction, persisted candidates, evidence validation, `persona_extract` usage purpose, CLI list/show/dismiss/draft/recover, and an opt-in persona acceptance gate.
 
 ## User's Intended Business Workflow
 
@@ -160,12 +163,14 @@ The workflow to preserve:
 
 ## Current Gaps
 
-The biggest remaining feature is richer post-scan reconciliation beyond locally visible findings.
-
 Still missing:
 
 - Richer post-scan reconciliation beyond open findings, such as conflict markers or draft creation for governed changes.
 - Incremental attach/sync mode for Lore external transcript JSONL. Current external transcript import is one-shot only.
+- Persona candidates do not update `人物画像.md` directly; they still require explicit draft creation and the existing local review/apply path.
+- External transcript import is not yet connected to persona candidate extraction; the stable extraction path is the local console/TUI conversation flow.
+- Pending approval queue is still a TUI placeholder; draft review/apply exists through local CLI/agent paths.
+- Usage has CLI/status visibility and per-purpose breakdowns, but product-level soft warnings and richer usage panels are still future work.
 
 Potentially stale:
 
@@ -173,9 +178,10 @@ Potentially stale:
 
 ## Recommended Next Steps
 
-1. Run full verification and hand the feature line to Codex 5.3 for boundary review.
+1. Stabilize persona memory candidate governance, especially retry/recover edge cases and manual draft promotion UX.
 2. Decide whether locally visible open findings are sufficient for v1, or whether conflict markers/draft creation are needed before release.
-3. If needed, add external transcript attach/sync after the one-shot Lore JSONL schema is reviewed.
+3. Add a runtime pending-action queue so shell confirmation and future approvals can surface in the TUI approval pane.
+4. If needed, add external transcript attach/sync after the one-shot Lore JSONL schema is reviewed.
 
 ## Roles
 
@@ -190,7 +196,7 @@ Potentially stale:
 Preferred verification:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ".\scripts\verify.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\release-gate.ps1
 ```
 
 Targeted checks for this line:
@@ -198,6 +204,7 @@ Targeted checks for this line:
 ```powershell
 .\.tools\go\bin\go.exe test ./internal/mcp -run TestMCPV1ExposesOnlyReadAndProposalTools -count=1 -v
 .\.tools\go\bin\go.exe test ./internal/orchestrator -run TestApplyPersonaUpdateDraft -count=1 -v
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\release-gate.ps1 -PersonaAcceptance -SkipDiffCheck
 ```
 
 ## Worktree State At This Handoff
@@ -208,4 +215,4 @@ Before editing, run:
 git status --short
 ```
 
-At the time this handoff was updated, the worktree contains the v1 external-agent governance feature line. Do not treat it as a single small diff.
+At the time this handoff was refreshed, the repository had already split and committed the v1 external-agent governance, Task/Turn visibility, and persona candidate lines. Treat `git log --oneline` and `git status --short` as authoritative.
