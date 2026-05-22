@@ -233,6 +233,112 @@ func TestRunPersonaCandidatesDismissTransitionsState(t *testing.T) {
 	}
 }
 
+func TestRunPersonaCandidatesDraftOnDismissedSurfacesTombstoneHint(t *testing.T) {
+	// UX polish: dismissing a candidate parks its DedupKey as a
+	// tombstone. A naive operator who then tries `draft <id>` sees
+	// only "app: persona candidate is dismissed" -- they need to
+	// know the tombstone semantics so they can choose between
+	// repeating the utterance or accepting that the fact is closed.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+	if exit := Run([]string{"persona", "candidates", "dismiss", "--workdir", workDir, candidateID}, &bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{}, "test"); exit != 0 {
+		t.Fatalf("seed dismiss exit = %d", exit)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, candidateID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for draft on dismissed candidate; stdout=%q", stdout.String())
+	}
+	for _, want := range []string{
+		"persona candidate is dismissed",
+		"DedupKey",
+		"tombstone",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing hint fragment %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
+func TestRunPersonaCandidatesDraftOnPartialOrphanSurfacesRecoverHint(t *testing.T) {
+	// Mirror of the dismiss hint for the draft path. When the
+	// candidate is in (Drafted, DraftID=""), a blind `draft <id>`
+	// trips ErrPersonaCandidateAlreadyDrafted. The hint should
+	// tell the operator the two recover branches with the actual
+	// candidate ID baked in.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	partialID := forcePartialDraftedCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, partialID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for draft on partial orphan; stdout=%q", stdout.String())
+	}
+	for _, want := range []string{
+		"already drafted",
+		"partial-orphan",
+		"recover --link",
+		"recover --force-dismiss " + partialID,
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing hint fragment %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
+func TestRunPersonaCandidatesDraftRetryRejectedOnOpenSurfacesHint(t *testing.T) {
+	// --retry-rejected on an Open candidate trips
+	// ErrPersonaCandidateLinkedStateRequired. Hint should point
+	// the operator at the first-time-promote command (no flag).
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, "--retry-rejected", candidateID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit; stdout=%q", stdout.String())
+	}
+	for _, want := range []string{
+		"--retry-rejected only applies",
+		"lore persona candidates draft " + candidateID,
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing hint fragment %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
+func TestRunPersonaCandidatesDraftRetryRejectedOnPendingDraftSurfacesHint(t *testing.T) {
+	// --retry-rejected on a candidate whose linked draft is still
+	// pending_review trips ErrPersonaDraftNotTerminalForRetry. The
+	// hint should walk the operator through reject/review.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+	if exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, candidateID}, &bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{}, "test"); exit != 0 {
+		t.Fatalf("seed draft exit = %d", exit)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, "--retry-rejected", candidateID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit; stdout=%q", stdout.String())
+	}
+	for _, want := range []string{
+		"linked draft is still in flight",
+		"lore draft reject",
+		"retry-rejected only fires after",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing hint fragment %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
 func TestRunPersonaCandidatesDismissOnDraftedSurfacesRecoverHint(t *testing.T) {
 	// UX polish: dismiss deliberately refuses Drafted candidates
 	// (the linked draft owns the review path). The CLI should not

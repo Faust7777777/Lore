@@ -1014,6 +1014,7 @@ func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		if err != nil {
 			fmt.Fprintf(stderr, "persona candidates draft: %v\n", err)
+			renderPersonaDraftErrorHint(stderr, candidateID, retryRejected, err)
 			return 1
 		}
 		action := "draft"
@@ -1160,6 +1161,45 @@ func parsePersonaRecoverFlags(args []string, stderr io.Writer) (string, string, 
 		return "", "", "", false, err
 	}
 	return resolved, strings.TrimSpace(remaining[0]), strings.TrimSpace(*linkDraftID), *forceDismiss, nil
+}
+
+// renderPersonaDraftErrorHint maps the typed errors returned by
+// CreatePersonaDraftFromCandidate and RetryRejectedPersonaDraft
+// into operator-facing follow-up commands. The base error message
+// is already printed; this helper appends a "hint:" block telling
+// the operator which CLI command actually addresses the situation
+// (recover --link, recover --force-dismiss, retry-rejected, the
+// `lore draft review` path, etc.). Matches the dismiss-hint shape
+// at the `case "dismiss":` branch so the operator sees the same
+// idiom across persona-candidate failures.
+func renderPersonaDraftErrorHint(stderr io.Writer, candidateID string, retryRejected bool, err error) {
+	switch {
+	case errors.Is(err, app.ErrPersonaCandidateDismissed):
+		fmt.Fprintln(stderr, "  hint: this candidate was dismissed; its DedupKey is a tombstone.")
+		fmt.Fprintln(stderr, "        the underlying fact will not be re-extracted from a console turn unless")
+		fmt.Fprintln(stderr, "        the user repeats the utterance with materially different evidence.")
+	case errors.Is(err, app.ErrPersonaCandidateAlreadyDrafted):
+		fmt.Fprintln(stderr, "  hint: the candidate is in the partial-orphan shape (Drafted with empty DraftID).")
+		fmt.Fprintln(stderr, "        either link it to the orphan persona_update draft (find via `lore draft list`):")
+		fmt.Fprintf(stderr, "          lore persona candidates recover --link <draft-id> %s\n", candidateID)
+		fmt.Fprintln(stderr, "        or abandon it (DedupKey kept as tombstone):")
+		fmt.Fprintf(stderr, "          lore persona candidates recover --force-dismiss %s\n", candidateID)
+	case errors.Is(err, app.ErrPersonaCandidateLinkedStateRequired):
+		if retryRejected {
+			fmt.Fprintln(stderr, "  hint: --retry-rejected only applies to candidates already promoted once.")
+			fmt.Fprintf(stderr, "        for a first-time promote, drop the flag:\n          lore persona candidates draft %s\n", candidateID)
+			fmt.Fprintln(stderr, "        for a candidate in the partial-orphan shape (Drafted, no DraftID),")
+			fmt.Fprintln(stderr, "        use `recover --link` or `recover --force-dismiss` instead.")
+		}
+	case errors.Is(err, app.ErrPersonaDraftNotTerminalForRetry):
+		fmt.Fprintln(stderr, "  hint: the linked draft is still in flight (pending_review / approved / applied).")
+		fmt.Fprintln(stderr, "        review it via:")
+		fmt.Fprintln(stderr, "          lore draft list                      # locate the linked draft")
+		fmt.Fprintln(stderr, "          lore draft review <draft-id>         # inspect it")
+		fmt.Fprintln(stderr, "          lore draft reject <draft-id>         # if you want to retry afterwards")
+		fmt.Fprintln(stderr, "        retry-rejected only fires after the linked draft reaches rejected /")
+		fmt.Fprintln(stderr, "        expired / superseded.")
+	}
 }
 
 // runPersonaErrorsCommand is the read-side counterpart to the
