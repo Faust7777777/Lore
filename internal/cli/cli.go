@@ -911,9 +911,10 @@ func runFindingsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: lore persona <candidates|errors> [args]")
+		fmt.Fprintln(stderr, "usage: lore persona <candidates|errors|summary> [args]")
 		fmt.Fprintln(stderr, "  candidates  list/show/dismiss/draft/recover persona memory candidates")
 		fmt.Fprintln(stderr, "  errors      tail the persona extraction failure log")
+		fmt.Fprintln(stderr, "  summary     one-page dashboard of candidate counts and error counts")
 		return 1
 	}
 	switch args[0] {
@@ -921,6 +922,8 @@ func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		// handled below
 	case "errors":
 		return runPersonaErrorsCommand(args[1:], stdout, stderr)
+	case "summary":
+		return runPersonaSummaryCommand(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "persona: unknown subcommand %q\n", args[0])
 		return 1
@@ -1244,6 +1247,136 @@ func renderPersonaRecoverErrorHint(stderr io.Writer, candidateID, draftID string
 				fmt.Fprintln(stderr, "          lore draft list")
 			}
 		}
+	}
+}
+
+// runPersonaSummaryCommand prints a one-page dashboard combining
+// the answers `lore persona candidates list --state ...` and `lore
+// persona errors` would give if the operator ran each separately.
+// Reads only; never mutates store or log file. Intended as the
+// fastest "what is the health of this workdir's persona pipeline"
+// answer for both the operator's manual test cookbook and
+// regression triage.
+func runPersonaSummaryCommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("persona summary", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	workDirFlag := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	workDir, err := defaultWorkDir(*workDirFlag)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	runtime, err := app.OpenRuntime(workDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "open runtime: %v\n", err)
+		return 1
+	}
+	defer closeRuntime(stderr, runtime, "persona summary")
+
+	openList, err := runtime.ListPersonaCandidates(persona.PersonaCandidateOpen, 0)
+	if err != nil {
+		fmt.Fprintf(stderr, "persona summary: list open: %v\n", err)
+		return 1
+	}
+	draftedList, err := runtime.ListPersonaCandidates(persona.PersonaCandidateDrafted, 0)
+	if err != nil {
+		fmt.Fprintf(stderr, "persona summary: list drafted: %v\n", err)
+		return 1
+	}
+	dismissedList, err := runtime.ListPersonaCandidates(persona.PersonaCandidateDismissed, 0)
+	if err != nil {
+		fmt.Fprintf(stderr, "persona summary: list dismissed: %v\n", err)
+		return 1
+	}
+	draftedLinked := 0
+	draftedOrphan := 0
+	for _, r := range draftedList {
+		if strings.TrimSpace(r.DraftID) == "" {
+			draftedOrphan++
+		} else {
+			draftedLinked++
+		}
+	}
+
+	renderPersonaSummary(stdout, workDir, runtime.PersonaExtractLogPath(),
+		len(openList), draftedLinked, draftedOrphan, len(dismissedList))
+	return 0
+}
+
+// renderPersonaSummary writes the dashboard block. Split out so a
+// pure unit test can drive it with synthetic counts + a seeded log
+// file without OpenRuntime.
+func renderPersonaSummary(stdout io.Writer, workDir, logPath string, openN, draftedLinked, draftedOrphan, dismissedN int) {
+	fmt.Fprintln(stdout, "Persona Memory Summary")
+	fmt.Fprintln(stdout, "======================")
+	fmt.Fprintf(stdout, "Workdir: %s\n", workDir)
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Candidates:")
+	fmt.Fprintf(stdout, "  %-12s %d\n", "open", openN)
+	fmt.Fprintf(stdout, "  %-12s %d (linked %d, partial-orphan %d)\n", "drafted", draftedLinked+draftedOrphan, draftedLinked, draftedOrphan)
+	fmt.Fprintf(stdout, "  %-12s %d\n", "dismissed", dismissedN)
+
+	// Extract log section: read counts by stage, plus the timestamp
+	// of the most recent entry as a freshness signal. Missing log
+	// file is rendered as a single "—" line rather than a stat error
+	// because a fresh workdir that has never seen a failure is a
+	// valid healthy state.
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Extract log:")
+	fmt.Fprintf(stdout, "  source: %s\n", logPath)
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintln(stdout, "  (no log file yet)")
+			return
+		}
+		fmt.Fprintf(stdout, "  (read error: %v)\n", err)
+		return
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		fmt.Fprintln(stdout, "  (empty)")
+		return
+	}
+
+	totals := map[string]int{}
+	var latest time.Time
+	total := 0
+	for _, raw := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		entry := parsePersonaLogLine(raw)
+		total++
+		if entry.parsed {
+			totals[entry.stage]++
+			if entry.ts.After(latest) {
+				latest = entry.ts
+			}
+		} else {
+			totals["(malformed)"]++
+		}
+	}
+	fmt.Fprintf(stdout, "  total entries: %d\n", total)
+	if len(totals) > 0 {
+		fmt.Fprintln(stdout, "  by stage:")
+		stages := make([]string, 0, len(totals))
+		for s := range totals {
+			stages = append(stages, s)
+		}
+		sort.Strings(stages)
+		for _, s := range stages {
+			fmt.Fprintf(stdout, "    %-16s %d\n", s, totals[s])
+		}
+	}
+	if !latest.IsZero() {
+		fmt.Fprintf(stdout, "  last entry: %s\n", latest.UTC().Format(time.RFC3339))
+	} else {
+		fmt.Fprintln(stdout, "  last entry: —")
 	}
 }
 
