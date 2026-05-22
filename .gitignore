@@ -4,6 +4,7 @@ dist/
 tmp/
 .tmp/
 .smoke-workdir/
+--workdir/
 *.exe
 *.test
 *.out
