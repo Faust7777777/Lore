@@ -134,6 +134,26 @@ func TestRunPersonaCandidatesListStateFilter(t *testing.T) {
 	}
 }
 
+func TestRunPersonaCandidatesListRejectsNegativeLimit(t *testing.T) {
+	// Numeric-flag consistency: parsePersonaErrorsFlags --tail and
+	// parseUsageFlags --days both reject negative values. --limit
+	// previously fell through and was silently treated as "no cap"
+	// by the store, surprising the operator. Verify the rejection
+	// hits before OpenRuntime so a typo fails fast without touching
+	// disk.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	exitCode := Run([]string{"persona", "candidates", "list", "--workdir", workDir, "--limit", "-1"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exitCode == 0 {
+		t.Fatalf("expected non-zero exit for --limit -1; stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "--limit must be >= 0") {
+		t.Fatalf("stderr missing --limit validation message: %q", stderr.String())
+	}
+}
+
 func TestRunPersonaCandidatesListRejectsInvalidState(t *testing.T) {
 	configtest.IsolateHome(t)
 	workDir := t.TempDir()

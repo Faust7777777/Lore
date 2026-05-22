@@ -1047,10 +1047,19 @@ func parsePersonaListFlags(args []string, stderr io.Writer) (string, persona.Per
 	flags := flag.NewFlagSet("persona candidates list", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
-	limit := flags.Int("limit", 20, "maximum candidates to show")
+	limit := flags.Int("limit", 20, "maximum candidates to show (0 = no limit)")
 	state := flags.String("state", "open", "candidate state to list: open, drafted, dismissed")
 	if err := flags.Parse(args); err != nil {
 		return "", "", 0, err
+	}
+	// Reject negative limit explicitly: the store contract treats
+	// limit <= 0 as "no cap", so a user typing --limit -1 would
+	// silently get unlimited output. Matching the strict-validation
+	// shape of parsePersonaErrorsFlags --tail and parseUsageFlags
+	// --days so the CLI surface behaves consistently across
+	// numeric flags.
+	if *limit < 0 {
+		return "", "", 0, fmt.Errorf("persona candidates list: --limit must be >= 0")
 	}
 	resolved, err := defaultWorkDir(*workDir)
 	if err != nil {
