@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -974,6 +975,19 @@ func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			record, err := runtime.DismissPersonaCandidate(candidateID, time.Now())
 			if err != nil {
 				fmt.Fprintf(stderr, "persona candidates dismiss: %v\n", err)
+				// Operator hint when the candidate is in any
+				// Drafted shape: dismiss deliberately refuses
+				// to handle drafted candidates because the
+				// linked draft (if any) needs to flow through
+				// the harness review path first. Surface the
+				// two follow-up commands so the operator does
+				// not have to dig through docs.
+				if errors.Is(err, app.ErrPersonaCandidateAlreadyDrafted) {
+					fmt.Fprintln(stderr, "  hint: drafted candidates are not dismissed directly.")
+					fmt.Fprintf(stderr, "        if the candidate is in the partial-orphan shape (DraftID empty), abandon it via:\n")
+					fmt.Fprintf(stderr, "          lore persona candidates recover --force-dismiss %s\n", candidateID)
+					fmt.Fprintln(stderr, "        otherwise reject the linked draft first via `lore draft reject <draft-id>`.")
+				}
 				return 1
 			}
 			renderPersonaCandidateActionResult(stdout, "dismiss", record, "")

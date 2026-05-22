@@ -233,6 +233,40 @@ func TestRunPersonaCandidatesDismissTransitionsState(t *testing.T) {
 	}
 }
 
+func TestRunPersonaCandidatesDismissOnDraftedSurfacesRecoverHint(t *testing.T) {
+	// UX polish: dismiss deliberately refuses Drafted candidates
+	// (the linked draft owns the review path). The CLI should not
+	// just print the raw error; it should tell the operator which
+	// follow-up command to use -- recover --force-dismiss for the
+	// partial-orphan shape, or `lore draft reject` for a linked
+	// draft. Otherwise the operator has to dig through docs.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	// Promote the candidate to Drafted (linked) via the normal CLI path.
+	if exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, candidateID}, &bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{}, "test"); exit != 0 {
+		t.Fatalf("seed draft exit = %d", exit)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "dismiss", "--workdir", workDir, candidateID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit when dismissing a drafted candidate; stdout=%q", stdout.String())
+	}
+	for _, want := range []string{
+		"persona candidates dismiss",
+		"persona candidate already drafted",
+		"recover --force-dismiss",
+		"lore draft reject",
+		candidateID,
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing hint fragment %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
 func TestRunPersonaCandidatesDraftCreatesPersonaUpdateDraft(t *testing.T) {
 	configtest.IsolateHome(t)
 	workDir := t.TempDir()
