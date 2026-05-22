@@ -139,8 +139,40 @@ confirming `TestSessionHandleStoreFailureWritesLoggerLine` fails on
   `Get-Content -Tail N` or `awk` directly. A native CLI command
   could ship as B-P11c if the file path becomes ergonomically
   unfriendly for the PM persona.
-- Parser warnings (`internal/persona/model.go:100`) are still
+- ~~Parser warnings (`internal/persona/model.go:100`) are still
   inside the parser's returned result and not propagated to the
-  log. They land in the structured `PersonaExtractionResult.Warnings`
-  field but no consumer reads them today. Surfacing them is a
-  separate slice (would need a `stage=parse_warning` line).
+  log.~~ Addressed in the round-2 fix below.
+
+## Round 2 fix (reviewer-flagged blocker)
+
+Reviewer found that the original B-P9 log only covered the
+`extractor.Extract(ctx, input)` returning err path. The most common
+"zero candidates after a chat" outcome is parser-side: paraphrased
+evidence_quote, low confidence, empty evidence, or NEVER-extract
+rule matches make the parser drop candidates and emit
+`result.Warnings` while returning `(result, nil)`. The original
+session.go branch saw err==nil, processed `result.Candidates`
+(which was empty), and left no log line -- defeating the operator's
+diagnostic goal.
+
+Fix: when `len(result.Candidates) == 0` and `result.Warnings` is
+non-empty, emit one `stage=parse_warning` log line per warning.
+Suppressed on the success path (at least one candidate landed) so
+the parser's incidental sibling-discard warnings do not flood the
+log during normal operation -- the diagnostic value of the log file
+comes from focusing on the zero-candidate case.
+
+Tests added:
+
+- `TestSessionHandleParserWarningsLoggedWhenZeroCandidates`: scripted
+  extractor returns empty Candidates + 2 Warnings, asserts both
+  warnings land as `stage=parse_warning` lines.
+- `TestSessionHandleParserWarningsSuppressedOnSuccess`: scripted
+  extractor returns 1 Candidate + 1 sibling-discard Warning,
+  asserts no `parse_warning` line in the log; the kept candidate
+  still lands in the store.
+
+Load-bearing verified by temporarily removing the
+`parse_warning` block in `launchPersonaExtraction` and confirming
+`TestSessionHandleParserWarningsLoggedWhenZeroCandidates` fails on
+`stage=parse_warning count = 0, want 2`, then restoring.

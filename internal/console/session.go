@@ -687,6 +687,21 @@ func (s *Session) launchPersonaExtraction(runtime Runtime, userText, priorAssist
 			s.logPersonaExtractError("extract", sessionID, err)
 			return
 		}
+		// Parser warnings explain the most common "zero candidates"
+		// outcome that is not a transport error: paraphrased
+		// evidence_quote, low confidence, empty evidence, conflict
+		// vs. current persona, etc. The parser returns these in
+		// result.Warnings with err==nil so the extract-stage branch
+		// above does not see them. Surface them as stage=parse_warning
+		// only when no candidate landed, so the operator's tail of
+		// the log focuses on the diagnostic cases and a successful
+		// extraction does not flood the log with informational notes
+		// the parser also emits for partial discards.
+		if len(result.Candidates) == 0 {
+			for _, warning := range result.Warnings {
+				s.logPersonaExtractError("parse_warning", sessionID, errors.New(warning))
+			}
+		}
 		for _, candidate := range result.Candidates {
 			record := persona.PersonaCandidateRecord{
 				ID:        persona.NewCandidateID(now),

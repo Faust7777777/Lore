@@ -458,6 +458,86 @@ func TestSessionHandleNilLoggerSurvivesFailure(t *testing.T) {
 	}
 }
 
+func TestSessionHandleParserWarningsLoggedWhenZeroCandidates(t *testing.T) {
+	// Reviewer-flagged blocker: parser discards (paraphrased
+	// evidence_quote, low confidence, empty evidence) leave
+	// result.Candidates empty with err==nil and warnings in
+	// result.Warnings. The fire-and-forget loop must surface these
+	// as stage=parse_warning lines so the operator's tail of the
+	// log explains "why are there zero candidates after this chat".
+	session, _, runtime := newLoopSession(t)
+	var buf bytes.Buffer
+	session.PersonaExtractLogger = &buf
+	session.PersonaExtractor = &scriptedPersonaExtractor{
+		result: persona.PersonaExtractionResult{
+			Warnings: []string{
+				"candidate[0]: evidence_quote not a substring of user_text",
+				"candidate[1]: confidence=low discarded",
+			},
+		},
+	}
+
+	if _, err := session.Handle("anything", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if !session.DrainPersonaExtractions(time.Second) {
+		t.Fatal("DrainPersonaExtractions timed out")
+	}
+
+	logOut := buf.String()
+	if got := strings.Count(logOut, "stage=parse_warning"); got != 2 {
+		t.Fatalf("stage=parse_warning count = %d, want 2; log:\n%s", got, logOut)
+	}
+	for _, want := range []string{
+		"evidence_quote not a substring of user_text",
+		"confidence=low discarded",
+	} {
+		if !strings.Contains(logOut, want) {
+			t.Fatalf("log missing warning %q:\n%s", want, logOut)
+		}
+	}
+	// Confirm no store-side fallout: zero candidates means no
+	// RecordPersonaCandidate calls.
+	if got := runtime.recordedPersonaCandidates(); len(got) != 0 {
+		t.Fatalf("candidates recorded despite parser discards: %+v", got)
+	}
+}
+
+func TestSessionHandleParserWarningsSuppressedOnSuccess(t *testing.T) {
+	// When parser warnings co-exist with at least one kept
+	// candidate, the warnings are informational (some siblings were
+	// discarded but a useful one landed). Logging them on success
+	// would flood the log file in real use because the parser emits
+	// a warning for every individually-discarded candidate inside a
+	// multi-candidate response. The contract is: log warnings only
+	// when zero candidates landed, so the diagnostic value is high
+	// and the noise is bounded.
+	session, _, runtime := newLoopSession(t)
+	var buf bytes.Buffer
+	session.PersonaExtractLogger = &buf
+	session.PersonaExtractor = &scriptedPersonaExtractor{
+		result: persona.PersonaExtractionResult{
+			Candidates: []persona.PersonaCandidate{newPersonaCandidate("major", "history", "I study history")},
+			Warnings:   []string{"candidate[1]: low confidence sibling discarded"},
+		},
+	}
+
+	if _, err := session.Handle("I study history", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if !session.DrainPersonaExtractions(time.Second) {
+		t.Fatal("DrainPersonaExtractions timed out")
+	}
+
+	if got := buf.String(); strings.Contains(got, "parse_warning") {
+		t.Fatalf("logger should be silent on success path even with sibling warnings:\n%s", got)
+	}
+	// The kept candidate still landed in the store.
+	if got := runtime.recordedPersonaCandidates(); len(got) != 1 {
+		t.Fatalf("candidates recorded = %d, want 1 (kept candidate must still land)", len(got))
+	}
+}
+
 func TestSessionHandleExtractionTimeoutWritesLoggerLine(t *testing.T) {
 	// Slow-LLM path: extractor blocks past PersonaExtractTimeout,
 	// ctx.Done fires, the scripted extractor returns ctx.Err(), and
