@@ -709,6 +709,72 @@ func (s *Store) ClaimCandidateForDraft(id string, now time.Time) (persona.Person
 	return record, nil
 }
 
+func (s *Store) ClaimCandidateForRetry(id string, expectedDraftID string, now time.Time) (persona.PersonaCandidateRecord, error) {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(expectedDraftID) == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	// Same transactional CAS pattern as ClaimCandidateForDraft.
+	// The UPDATE narrows by id, state='drafted', AND the existing
+	// draft_id stored inside payload via a Go-side check (sqlite has
+	// no json_extract dependency used elsewhere in this file). The
+	// extra RowsAffected==1 belt-and-suspenders gives a clean failure
+	// signal if a peer transitioned the row in between.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var existingPayload string
+	if err := tx.QueryRow(`SELECT payload FROM persona_candidates WHERE id = ?`, id).Scan(&existingPayload); err != nil {
+		return persona.PersonaCandidateRecord{}, mapSQLError(err)
+	}
+	record, err := unmarshalPayload[persona.PersonaCandidateRecord](existingPayload)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	if record.State != persona.PersonaCandidateDrafted || record.DraftID != expectedDraftID {
+		return persona.PersonaCandidateRecord{}, store.ErrConflict
+	}
+	record.DraftID = ""
+	record.UpdatedAt = now
+	payload, err := marshalPayload(record)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	// UPDATE filter is intentionally just (id, state='drafted'):
+	// the Go-side check above already verified DraftID matches; the
+	// state guard prevents a race where a peer dismissed the
+	// candidate (state=dismissed) between SELECT and UPDATE.
+	result, err := tx.Exec(
+		`UPDATE persona_candidates SET state = ?, updated_at = ?, payload = ? WHERE id = ? AND state = ?`,
+		string(persona.PersonaCandidateDrafted),
+		timeString(now),
+		payload,
+		id,
+		string(persona.PersonaCandidateDrafted),
+	)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	if affected != 1 {
+		return persona.PersonaCandidateRecord{}, store.ErrConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	tx = nil
+	return record, nil
+}
+
 func (s *Store) init() error {
 	stmts := []string{
 		`PRAGMA journal_mode = WAL`,

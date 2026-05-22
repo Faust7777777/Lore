@@ -265,6 +265,9 @@ func (s *linkFailingPersonaStore) LinkCandidateDraft(id string, draftID string, 
 func (s *linkFailingPersonaStore) ClaimCandidateForDraft(id string, now time.Time) (persona.PersonaCandidateRecord, error) {
 	return s.inner.ClaimCandidateForDraft(id, now)
 }
+func (s *linkFailingPersonaStore) ClaimCandidateForRetry(id string, expectedDraftID string, now time.Time) (persona.PersonaCandidateRecord, error) {
+	return s.inner.ClaimCandidateForRetry(id, expectedDraftID, now)
+}
 
 // stateStoreWithPersonaWrapper wraps a real store.StateStore but
 // substitutes the PersonaCandidates accessor with linkFailingPersonaStore.
@@ -276,12 +279,14 @@ type stateStoreWithPersonaWrapper struct {
 	persona store.PersonaCandidateStore
 }
 
-func (s *stateStoreWithPersonaWrapper) Drafts() store.DraftStore           { return s.inner.Drafts() }
-func (s *stateStoreWithPersonaWrapper) ProcessSink() store.ProcessSinkStore { return s.inner.ProcessSink() }
-func (s *stateStoreWithPersonaWrapper) Audit() store.AuditStore             { return s.inner.Audit() }
-func (s *stateStoreWithPersonaWrapper) Findings() store.FindingStore        { return s.inner.Findings() }
-func (s *stateStoreWithPersonaWrapper) Usage() store.UsageStore             { return s.inner.Usage() }
-func (s *stateStoreWithPersonaWrapper) Cursors() store.CursorStore          { return s.inner.Cursors() }
+func (s *stateStoreWithPersonaWrapper) Drafts() store.DraftStore { return s.inner.Drafts() }
+func (s *stateStoreWithPersonaWrapper) ProcessSink() store.ProcessSinkStore {
+	return s.inner.ProcessSink()
+}
+func (s *stateStoreWithPersonaWrapper) Audit() store.AuditStore      { return s.inner.Audit() }
+func (s *stateStoreWithPersonaWrapper) Findings() store.FindingStore { return s.inner.Findings() }
+func (s *stateStoreWithPersonaWrapper) Usage() store.UsageStore      { return s.inner.Usage() }
+func (s *stateStoreWithPersonaWrapper) Cursors() store.CursorStore   { return s.inner.Cursors() }
 func (s *stateStoreWithPersonaWrapper) PersonaCandidates() store.PersonaCandidateStore {
 	return s.persona
 }
@@ -462,6 +467,14 @@ func (s *barrierClaimStore) ClaimCandidateForDraft(id string, now time.Time) (pe
 	<-s.release
 	return s.inner.ClaimCandidateForDraft(id, now)
 }
+func (s *barrierClaimStore) ClaimCandidateForRetry(id string, expectedDraftID string, now time.Time) (persona.PersonaCandidateRecord, error) {
+	// Same barrier semantics as ClaimCandidateForDraft so the retry
+	// concurrency test can park N goroutines and release them at
+	// once, exercising the store-level CAS that prevents duplicate
+	// retry drafts.
+	<-s.release
+	return s.inner.ClaimCandidateForRetry(id, expectedDraftID, now)
+}
 
 func TestCreatePersonaDraftFromCandidateConcurrentCallsOnlyOneSucceeds(t *testing.T) {
 	// The reviewer-required concurrent claim test: spawn N
@@ -555,6 +568,177 @@ func TestCreatePersonaDraftFromCandidateConcurrentCallsOnlyOneSucceeds(t *testin
 	}
 	if count != 1 {
 		t.Fatalf("persona_update drafts in store = %d, want 1 across %d concurrent callers", count, goroutines)
+	}
+}
+
+func TestRetryRejectedPersonaDraftConcurrentCallsOnlyOneSucceeds(t *testing.T) {
+	// Mirror of TestCreatePersonaDraftFromCandidateConcurrentCallsOnlyOneSucceeds
+	// for the retry path. Reviewer-flagged blocker: without
+	// ClaimCandidateForRetry the terminal-state check passes for
+	// every concurrent caller and they all ProposePersonaUpdate,
+	// producing duplicate retry drafts that LinkCandidateDraft just
+	// overwrites silently. The CAS must guarantee exactly one retry
+	// winner regardless of how many goroutines race.
+	runtime := openTestRuntime(t)
+	candidateID, originalDraftID := seedLinkedAndRejectedPersonaCandidate(t, runtime, "major", "economics", "I major in economics")
+
+	originalStore := runtime.Store
+	release := make(chan struct{})
+	wrapper := &stateStoreWithPersonaWrapper{
+		inner: originalStore,
+		persona: &barrierClaimStore{
+			inner:   originalStore.PersonaCandidates(),
+			release: release,
+		},
+	}
+	runtime.Store = wrapper
+	t.Cleanup(func() { runtime.Store = originalStore })
+
+	const goroutines = 8
+	var wg sync.WaitGroup
+	errs := make([]error, goroutines)
+	results := make([]model.PersonaUpdateProposalResult, goroutines)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			_, results[idx], errs[idx] = runtime.RetryRejectedPersonaDraft(candidateID, time.Date(2026, 5, 21, 14, 0, 0, idx, time.UTC))
+		}(i)
+	}
+	// Park goroutines on the barrier, then release together.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	winners := 0
+	losers := 0
+	other := 0
+	winnerDraftID := ""
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			winners++
+			winnerDraftID = results[i].DraftID
+		case strings.Contains(err.Error(), "retry conflicted"):
+			losers++
+		default:
+			other++
+			t.Logf("unexpected err on goroutine %d: %v", i, err)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("winners = %d, want exactly 1 (errs = %v)", winners, errs)
+	}
+	if other != 0 {
+		t.Fatalf("got %d unexpected errors that were neither nil nor retry-conflict: %v", other, errs)
+	}
+	if losers != goroutines-1 {
+		t.Fatalf("losers = %d, want %d", losers, goroutines-1)
+	}
+	if winnerDraftID == "" || winnerDraftID == originalDraftID {
+		t.Fatalf("winner DraftID = %q, want a fresh non-empty ID different from %q", winnerDraftID, originalDraftID)
+	}
+
+	// Drafts table holds exactly two persona_update drafts: the
+	// original rejected one, and the single retry winner.
+	drafts, err := originalStore.Drafts().ListDrafts()
+	if err != nil {
+		t.Fatalf("ListDrafts() error = %v", err)
+	}
+	personaCount := 0
+	sawOriginal := false
+	sawWinner := false
+	for _, d := range drafts {
+		if d.Kind != model.DraftKindPersonaUpdate {
+			continue
+		}
+		personaCount++
+		if d.ID == originalDraftID {
+			sawOriginal = true
+		}
+		if d.ID == winnerDraftID {
+			sawWinner = true
+		}
+	}
+	if personaCount != 2 {
+		t.Fatalf("persona_update drafts in store = %d, want 2 (original rejected + 1 retry winner)", personaCount)
+	}
+	if !sawOriginal || !sawWinner {
+		t.Fatalf("missing draft entry: original=%v winner=%v", sawOriginal, sawWinner)
+	}
+}
+
+func TestRetryRejectedPersonaDraftLinkFailureDoesNotDuplicate(t *testing.T) {
+	// Reviewer-flagged blocker: after a successful ProposePersonaUpdate
+	// during retry, if LinkCandidateDraft fails, the candidate stays
+	// in (Drafted, "") and the new draft is orphan. A blind subsequent
+	// retry must NOT propose again -- the candidate's empty DraftID
+	// routes through ErrPersonaCandidateLinkedStateRequired at the
+	// top guard. Combined with the orphan staying in the draft store,
+	// the operator's recovery path is recover --link <orphan>.
+	runtime := openTestRuntime(t)
+	candidateID, originalDraftID := seedLinkedAndRejectedPersonaCandidate(t, runtime, "major", "economics", "I major in economics")
+
+	originalStore := runtime.Store
+	failingPersona := &linkFailingPersonaStore{
+		inner:   originalStore.PersonaCandidates(),
+		linkErr: errors.New("simulated relink failure"),
+	}
+	runtime.Store = &stateStoreWithPersonaWrapper{
+		inner:   originalStore,
+		persona: failingPersona,
+	}
+	t.Cleanup(func() { runtime.Store = originalStore })
+
+	// First retry: ClaimCandidateForRetry succeeds, ProposePersonaUpdate
+	// succeeds, LinkCandidateDraft fails -> orphan draft + wrapped error.
+	_, firstResult, firstErr := runtime.RetryRejectedPersonaDraft(candidateID, time.Date(2026, 5, 21, 14, 0, 0, 0, time.UTC))
+	if firstErr == nil {
+		t.Fatal("first retry error = nil, want LinkCandidateDraft failure wrapped")
+	}
+	if firstResult.DraftID == "" || firstResult.DraftID == originalDraftID {
+		t.Fatalf("first retry result DraftID = %q, want a fresh non-empty ID different from %q", firstResult.DraftID, originalDraftID)
+	}
+	orphanDraftID := firstResult.DraftID
+	if !strings.Contains(firstErr.Error(), "recover --link "+orphanDraftID) {
+		t.Fatalf("first retry error missing recover hint with orphan id %q: %v", orphanDraftID, firstErr)
+	}
+
+	// Confirm candidate is in the partial-orphan shape (Drafted, "").
+	current, err := originalStore.PersonaCandidates().GetCandidate(candidateID)
+	if err != nil {
+		t.Fatalf("GetCandidate after first retry: %v", err)
+	}
+	if current.State != persona.PersonaCandidateDrafted {
+		t.Fatalf("State after link-failure = %q, want drafted", current.State)
+	}
+	if strings.TrimSpace(current.DraftID) != "" {
+		t.Fatalf("DraftID after link-failure = %q, want empty (partial-orphan shape)", current.DraftID)
+	}
+
+	// Second (blind) retry MUST refuse: candidate has empty DraftID,
+	// the top guard returns ErrPersonaCandidateLinkedStateRequired,
+	// ProposePersonaUpdate is never called, no third draft minted.
+	_, _, secondErr := runtime.RetryRejectedPersonaDraft(candidateID, time.Date(2026, 5, 21, 14, 0, 0, 1, time.UTC))
+	if !errors.Is(secondErr, ErrPersonaCandidateLinkedStateRequired) {
+		t.Fatalf("second retry error = %v, want ErrPersonaCandidateLinkedStateRequired (blind retry must not re-propose)", secondErr)
+	}
+
+	// Draft store contains exactly two persona_update drafts: the
+	// original rejected one + the orphan from the first retry. NO
+	// third entry from the blind retry.
+	drafts, err := originalStore.Drafts().ListDrafts()
+	if err != nil {
+		t.Fatalf("ListDrafts() error = %v", err)
+	}
+	personaCount := 0
+	for _, d := range drafts {
+		if d.Kind == model.DraftKindPersonaUpdate {
+			personaCount++
+		}
+	}
+	if personaCount != 2 {
+		t.Fatalf("persona_update drafts = %d, want 2 (original + orphan); third entry would mean retry duplicated", personaCount)
 	}
 }
 

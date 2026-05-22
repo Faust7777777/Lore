@@ -99,3 +99,56 @@ then restoring.
 - No GC for stranded orphan drafts — operator uses `lore draft
   list` + manual `RejectDraft` to clear them. Could grow a `--purge`
   / sweep command if the orphan count becomes a real burden.
+
+## Round 2 fix (reviewer-flagged blocker)
+
+Reviewer found that `RetryRejectedPersonaDraft` as initially shipped
+reopened the duplicate-draft race that P5+P6 explicitly closed: two
+concurrent callers could both pass the terminal-state check at
+persona_candidate.go:492 and both `ProposePersonaUpdate`, with
+`LinkCandidateDraft` silently overwriting the DraftID. A blind retry
+after a `LinkCandidateDraft` failure could also create a second
+draft because the candidate still pointed at the old terminal
+DraftID.
+
+Fix: new store-level CAS `ClaimCandidateForRetry(id,
+expectedDraftID, now)` that atomically clears the candidate's
+DraftID iff it equals expectedDraftID, leaving the candidate in
+(Drafted, "") -- the partial-orphan shape that the
+`ErrPersonaCandidateLinkedStateRequired` top-guard already refuses.
+The CAS shipped in all three backends; `RetryRejectedPersonaDraft`
+calls it after the terminal-state check and before
+`ProposePersonaUpdate`. Propose-failure path restores the prior
+link via `LinkCandidateDraft(priorDraftID)` so a transient propose
+error does not strand the candidate.
+
+Tests added:
+
+- `internal/store/persona_candidate_test.go`:
+  `TestClaimCandidateForRetryClearsDraftIDWhenMatched`,
+  `TestClaimCandidateForRetryRejectsMismatchedDraftID`,
+  `TestClaimCandidateForRetryRejectsOpenCandidate`,
+  `TestClaimCandidateForRetryReturnsNotFoundForMissingID`,
+  `TestClaimCandidateForRetryRejectsEmptyInputs`,
+  `TestClaimCandidateForRetryIsAtomicUnderConcurrency` (16
+  goroutines, exactly one CAS winner). All run table-driven across
+  memory / json / sqlite.
+- `internal/app/persona_candidate_test.go`:
+  `TestRetryRejectedPersonaDraftConcurrentCallsOnlyOneSucceeds` (8
+  goroutines through `barrierClaimStore.ClaimCandidateForRetry`,
+  exactly one winner, drafts list has 2 entries = original rejected
+  + 1 retry),
+  `TestRetryRejectedPersonaDraftLinkFailureDoesNotDuplicate`
+  (`linkFailingPersonaStore` makes LinkCandidateDraft fail; first
+  retry leaves candidate in partial-orphan with orphan draft logged,
+  second blind retry hits `ErrPersonaCandidateLinkedStateRequired`,
+  total persona_update drafts in store = 2).
+- The `linkFailingPersonaStore` and `barrierClaimStore` mocks gained
+  `ClaimCandidateForRetry` methods that delegate / barrier in
+  parallel to the existing `ClaimCandidateForDraft` shape.
+
+Load-bearing verified by temporarily removing the
+`ClaimCandidateForRetry` call in `RetryRejectedPersonaDraft` and
+confirming both new app-layer race tests fail (concurrent test:
+all 8 goroutines win; link-failure test: candidate.DraftID not in
+partial-orphan shape), then restoring.

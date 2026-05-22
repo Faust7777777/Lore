@@ -542,6 +542,30 @@ func (s *Store) ClaimCandidateForDraft(id string, now time.Time) (persona.Person
 	return record, nil
 }
 
+func (s *Store) ClaimCandidateForRetry(id string, expectedDraftID string, now time.Time) (persona.PersonaCandidateRecord, error) {
+	if id == "" || expectedDraftID == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.state.PersonaCandidates[id]
+	if !ok {
+		return persona.PersonaCandidateRecord{}, store.ErrNotFound
+	}
+	if record.State != persona.PersonaCandidateDrafted || record.DraftID != expectedDraftID {
+		return persona.PersonaCandidateRecord{}, store.ErrConflict
+	}
+	previous := record
+	record.DraftID = ""
+	record.UpdatedAt = now
+	s.state.PersonaCandidates[id] = record
+	if err := s.persistLocked(); err != nil {
+		s.state.PersonaCandidates[id] = previous
+		return persona.PersonaCandidateRecord{}, err
+	}
+	return record, nil
+}
+
 func reportKey(agentID string, day time.Time) string {
 	return agentID + "|" + model.NormalizeDay(day).Format("2006-01-02")
 }

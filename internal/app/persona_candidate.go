@@ -493,9 +493,34 @@ func (r *Runtime) RetryRejectedPersonaDraft(id string, now time.Time) (persona.P
 		return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, fmt.Errorf("%w: linked draft %s is in state %q", ErrPersonaDraftNotTerminalForRetry, current.DraftID, priorDraft.State)
 	}
 
+	// Duplicate-prevention CAS. Without this, two callers can both
+	// pass the terminal-state check above, both call ProposePersonaUpdate,
+	// and produce duplicate drafts (LinkCandidateDraft below just
+	// overwrites the DraftID). The CAS also handles the
+	// LinkCandidateDraft-failure-then-blind-retry case: after a
+	// failed LinkCandidateDraft the candidate is (Drafted, ""), and
+	// a subsequent retry call short-circuits on the
+	// ErrPersonaCandidateLinkedStateRequired guard at the top
+	// instead of double-proposing.
+	priorDraftID := current.DraftID
+	if _, err := r.Store.PersonaCandidates().ClaimCandidateForRetry(id, priorDraftID, now); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, fmt.Errorf("persona candidate %s retry conflicted: a peer transitioned the candidate or relinked it after the terminal check; re-read state and decide", id)
+		}
+		return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, err
+	}
+
 	proposal := buildPersonaProposalFromCandidate(current.Candidate)
 	result, err := r.Harness.ProposePersonaUpdate(proposal, now)
 	if err != nil {
+		// Propose failed; no draft created. Best-effort restore the
+		// candidate's link to the prior terminal draft so a later
+		// retry attempt can pick up where this one left off. If the
+		// restore itself fails, the candidate is stuck in the
+		// partial-orphan shape, which the ErrPersonaCandidateLinkedStateRequired
+		// guard refuses to retry -- still duplicate-safe, just with
+		// a worse UX requiring manual recover --link.
+		_, _ = r.Store.PersonaCandidates().LinkCandidateDraft(id, priorDraftID, now)
 		return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, err
 	}
 	if augErr := r.augmentPersonaDraftSummary(result.DraftID, current.Candidate); augErr != nil {
@@ -504,7 +529,7 @@ func (r *Runtime) RetryRejectedPersonaDraft(id string, now time.Time) (persona.P
 	}
 	updated, err := r.Store.PersonaCandidates().LinkCandidateDraft(id, result.DraftID, now)
 	if err != nil {
-		return persona.PersonaCandidateRecord{}, result, fmt.Errorf("retry created new persona draft %s but failed to relink candidate %s: %w; the candidate still points at the old terminal draft %s and the new draft is orphan, reconcile via `lore persona candidates recover --link %s` or by rejecting the orphan draft", result.DraftID, id, err, current.DraftID, result.DraftID)
+		return persona.PersonaCandidateRecord{}, result, fmt.Errorf("retry created new persona draft %s but failed to relink candidate %s: %w; the candidate is now in the partial-orphan shape (Drafted with empty DraftID) and a blind retry will refuse to re-propose, reconcile via `lore persona candidates recover --link %s` or by rejecting the orphan draft", result.DraftID, id, err, result.DraftID)
 	}
 	return updated, result, nil
 }

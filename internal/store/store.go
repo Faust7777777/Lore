@@ -111,6 +111,32 @@ type PersonaCandidateStore interface {
 	//     non-Open branches the pre-check uses;
 	//   - ErrInvalidKey when id is empty.
 	ClaimCandidateForDraft(id string, now time.Time) (persona.PersonaCandidateRecord, error)
+	// ClaimCandidateForRetry is the retry-path counterpart to
+	// ClaimCandidateForDraft. It atomically transitions a candidate
+	// from (State=Drafted, DraftID=expectedDraftID) to
+	// (State=Drafted, DraftID="") so the caller can safely invoke
+	// harness.ProposePersonaUpdate for a fresh draft without a
+	// concurrent retry double-proposing, and so a blind retry after
+	// the new LinkCandidateDraft fails refuses to re-propose (the
+	// candidate is left in the partial-orphan shape, which the
+	// app-layer guard routes through
+	// ErrPersonaCandidateLinkedStateRequired).
+	//
+	// expectedDraftID MUST be the DraftID the caller just observed
+	// before deciding to retry. Implementations MUST perform the
+	// read-and-write as a single compare-and-set under their
+	// backend's locking; an in-process pre-check is insufficient
+	// because two callers can both observe the same rejected
+	// DraftID before either CAS-clears it.
+	//
+	// Returns:
+	//   - the post-CAS record (State=Drafted, DraftID="") on success;
+	//   - ErrNotFound when the ID does not exist;
+	//   - ErrConflict when the candidate exists but is not in the
+	//     (Drafted, expectedDraftID) state (a peer already cleared
+	//     the link, dismissed it, or relinked to a different draft);
+	//   - ErrInvalidKey when id or expectedDraftID is empty.
+	ClaimCandidateForRetry(id string, expectedDraftID string, now time.Time) (persona.PersonaCandidateRecord, error)
 }
 
 type StateStore interface {

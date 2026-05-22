@@ -23,8 +23,8 @@ type Store struct {
 	// DedupKey for collision detection on Upsert. Both maps hold the
 	// same record values; the dedup index lets Upsert short-circuit
 	// without scanning the whole set.
-	personaCandidates       map[string]persona.PersonaCandidateRecord
-	personaCandidatesByKey  map[string]string
+	personaCandidates      map[string]persona.PersonaCandidateRecord
+	personaCandidatesByKey map[string]string
 }
 
 func New() *Store {
@@ -440,6 +440,25 @@ func (s *Store) ClaimCandidateForDraft(id string, now time.Time) (persona.Person
 		return persona.PersonaCandidateRecord{}, store.ErrConflict
 	}
 	record.State = persona.PersonaCandidateDrafted
+	record.DraftID = ""
+	record.UpdatedAt = now
+	s.personaCandidates[id] = record
+	return record, nil
+}
+
+func (s *Store) ClaimCandidateForRetry(id string, expectedDraftID string, now time.Time) (persona.PersonaCandidateRecord, error) {
+	if id == "" || expectedDraftID == "" {
+		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.personaCandidates[id]
+	if !ok {
+		return persona.PersonaCandidateRecord{}, store.ErrNotFound
+	}
+	if record.State != persona.PersonaCandidateDrafted || record.DraftID != expectedDraftID {
+		return persona.PersonaCandidateRecord{}, store.ErrConflict
+	}
 	record.DraftID = ""
 	record.UpdatedAt = now
 	s.personaCandidates[id] = record

@@ -580,6 +580,183 @@ func TestClaimCandidateForDraftReturnsNotFoundForMissingID(t *testing.T) {
 	}
 }
 
+// seedDraftedAndLinkedCandidate prepares a candidate in the
+// (State=Drafted, DraftID=draftID) shape that ClaimCandidateForRetry
+// expects. Mirrors the production lifecycle: UpsertCandidate then
+// ClaimCandidateForDraft then LinkCandidateDraft.
+func seedDraftedAndLinkedCandidate(t *testing.T, s store.PersonaCandidateStore, candidateID, draftID string) {
+	t.Helper()
+	rec := sampleCandidate(candidateID, "major", "economics", "I study economics")
+	if _, _, err := s.UpsertCandidate(rec); err != nil {
+		t.Fatalf("UpsertCandidate: %v", err)
+	}
+	if _, err := s.ClaimCandidateForDraft(candidateID, time.Now()); err != nil {
+		t.Fatalf("ClaimCandidateForDraft seed: %v", err)
+	}
+	if _, err := s.LinkCandidateDraft(candidateID, draftID, time.Now()); err != nil {
+		t.Fatalf("LinkCandidateDraft seed: %v", err)
+	}
+}
+
+func TestClaimCandidateForRetryClearsDraftIDWhenMatched(t *testing.T) {
+	// Happy path: a candidate is Drafted with DraftID matching the
+	// expected value, the CAS transitions it to (Drafted, "") and
+	// returns the post-state record.
+	for _, bf := range backends(t) {
+		t.Run(bf.name, func(t *testing.T) {
+			s := bf.open(t)
+			seedDraftedAndLinkedCandidate(t, s, "retry-1", "draft-prior-001")
+			now := time.Date(2026, 5, 21, 15, 0, 0, 0, time.UTC)
+			got, err := s.ClaimCandidateForRetry("retry-1", "draft-prior-001", now)
+			if err != nil {
+				t.Fatalf("ClaimCandidateForRetry: %v", err)
+			}
+			if got.State != persona.PersonaCandidateDrafted {
+				t.Fatalf("State = %q, want drafted", got.State)
+			}
+			if got.DraftID != "" {
+				t.Fatalf("DraftID = %q, want empty after retry claim", got.DraftID)
+			}
+			if !got.UpdatedAt.Equal(now) {
+				t.Fatalf("UpdatedAt = %v, want %v", got.UpdatedAt, now)
+			}
+		})
+	}
+}
+
+func TestClaimCandidateForRetryRejectsMismatchedDraftID(t *testing.T) {
+	// A peer already relinked the candidate to a different draft.
+	// The CAS must NOT clear the new DraftID -- otherwise it would
+	// silently undo the peer's link.
+	for _, bf := range backends(t) {
+		t.Run(bf.name, func(t *testing.T) {
+			s := bf.open(t)
+			seedDraftedAndLinkedCandidate(t, s, "retry-mismatch", "draft-actual-002")
+			_, err := s.ClaimCandidateForRetry("retry-mismatch", "draft-stale-001", time.Now())
+			if !errors.Is(err, store.ErrConflict) {
+				t.Fatalf("err = %v, want store.ErrConflict on DraftID mismatch", err)
+			}
+			// Verify the stored DraftID is untouched.
+			got, err := s.GetCandidate("retry-mismatch")
+			if err != nil {
+				t.Fatalf("GetCandidate: %v", err)
+			}
+			if got.DraftID != "draft-actual-002" {
+				t.Fatalf("DraftID = %q, want draft-actual-002 (CAS must not mutate on conflict)", got.DraftID)
+			}
+		})
+	}
+}
+
+func TestClaimCandidateForRetryRejectsOpenCandidate(t *testing.T) {
+	// Open candidates have no DraftID to retry from. The CAS must
+	// refuse rather than silently clear an already-empty DraftID
+	// (which would be a no-op semantically but is still a misuse).
+	for _, bf := range backends(t) {
+		t.Run(bf.name, func(t *testing.T) {
+			s := bf.open(t)
+			rec := sampleCandidate("retry-open", "major", "economics", "I study economics")
+			if _, _, err := s.UpsertCandidate(rec); err != nil {
+				t.Fatalf("UpsertCandidate: %v", err)
+			}
+			_, err := s.ClaimCandidateForRetry("retry-open", "draft-anything", time.Now())
+			if !errors.Is(err, store.ErrConflict) {
+				t.Fatalf("err = %v, want store.ErrConflict on Open candidate", err)
+			}
+		})
+	}
+}
+
+func TestClaimCandidateForRetryReturnsNotFoundForMissingID(t *testing.T) {
+	for _, bf := range backends(t) {
+		t.Run(bf.name, func(t *testing.T) {
+			s := bf.open(t)
+			_, err := s.ClaimCandidateForRetry("missing", "draft-x", time.Now())
+			if !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("err = %v, want store.ErrNotFound", err)
+			}
+		})
+	}
+}
+
+func TestClaimCandidateForRetryRejectsEmptyInputs(t *testing.T) {
+	for _, bf := range backends(t) {
+		t.Run(bf.name, func(t *testing.T) {
+			s := bf.open(t)
+			if _, err := s.ClaimCandidateForRetry("", "draft-x", time.Now()); !errors.Is(err, store.ErrInvalidKey) {
+				t.Fatalf("empty id err = %v, want ErrInvalidKey", err)
+			}
+			if _, err := s.ClaimCandidateForRetry("some-id", "", time.Now()); !errors.Is(err, store.ErrInvalidKey) {
+				t.Fatalf("empty expectedDraftID err = %v, want ErrInvalidKey", err)
+			}
+		})
+	}
+}
+
+func TestClaimCandidateForRetryIsAtomicUnderConcurrency(t *testing.T) {
+	// 16 goroutines all observe the same (Drafted, "draft-prior-001")
+	// state and try to ClaimCandidateForRetry with the same expected
+	// DraftID. Exactly one MUST succeed (clear DraftID, the CAS
+	// winner); the other 15 MUST see DraftID="" by the time their
+	// CAS runs and return ErrConflict. This is the store-level
+	// guarantee RetryRejectedPersonaDraft depends on.
+	for _, bf := range backends(t) {
+		t.Run(bf.name, func(t *testing.T) {
+			s := bf.open(t)
+			seedDraftedAndLinkedCandidate(t, s, "retry-race", "draft-prior-001")
+
+			const goroutines = 16
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			errs := make([]error, goroutines)
+			for i := 0; i < goroutines; i++ {
+				wg.Add(1)
+				go func(idx int) {
+					defer wg.Done()
+					<-start
+					_, errs[idx] = s.ClaimCandidateForRetry("retry-race", "draft-prior-001", time.Now())
+				}(i)
+			}
+			close(start)
+			wg.Wait()
+
+			wins := 0
+			conflicts := 0
+			other := 0
+			for _, err := range errs {
+				switch {
+				case err == nil:
+					wins++
+				case errors.Is(err, store.ErrConflict):
+					conflicts++
+				default:
+					other++
+				}
+			}
+			if wins != 1 {
+				t.Fatalf("wins = %d, want exactly 1 (errs = %v)", wins, errs)
+			}
+			if other != 0 {
+				t.Fatalf("unexpected non-conflict errors = %d (%v)", other, errs)
+			}
+			if conflicts != goroutines-1 {
+				t.Fatalf("conflicts = %d, want %d", conflicts, goroutines-1)
+			}
+
+			final, err := s.GetCandidate("retry-race")
+			if err != nil {
+				t.Fatalf("GetCandidate: %v", err)
+			}
+			if final.State != persona.PersonaCandidateDrafted {
+				t.Fatalf("final State = %q, want drafted", final.State)
+			}
+			if final.DraftID != "" {
+				t.Fatalf("final DraftID = %q, want empty after winner CAS", final.DraftID)
+			}
+		})
+	}
+}
+
 func TestPersonaCandidateStoreInvalidInputs(t *testing.T) {
 	for _, bf := range backends(t) {
 		t.Run(bf.name, func(t *testing.T) {
