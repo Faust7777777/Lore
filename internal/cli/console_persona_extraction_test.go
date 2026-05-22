@@ -201,6 +201,54 @@ func TestRunConsoleOnceWritesPersonaErrorLogOnExtractFailure(t *testing.T) {
 	}
 }
 
+func TestRunTUIOnceWritesPersonaErrorLogOnExtractFailure(t *testing.T) {
+	// Mirror of TestRunConsoleOnceWritesPersonaErrorLogOnExtractFailure
+	// for the TUI one-shot shell. Both shells share the
+	// extractor + logger + drain wiring in cli.go; the failure
+	// branch needs the same production-path lock to prevent a
+	// regression in either path.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	utterance := "Hi, I major in economics."
+	server := llmTestServerFailingExtractor(t)
+	defer server.Close()
+	t.Setenv("LORE_LLM_BASE_URL", server.URL)
+	t.Setenv("LORE_LLM_API_KEY", "secret")
+	t.Setenv("LORE_LLM_MODEL", "gpt-4o")
+
+	var stdin, stdout, stderr bytes.Buffer
+	exitCode := RunTUICommand([]string{
+		"--workdir", workDir,
+		"--once", utterance,
+	}, &stdin, &stdout, &stderr, "test")
+	if exitCode != 0 {
+		t.Fatalf("RunTUICommand() exit = %d, stderr=%q", exitCode, stderr.String())
+	}
+
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
+	if err != nil {
+		t.Fatalf("OpenRuntime: %v", err)
+	}
+	logPath := runtime.PersonaExtractLogPath()
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read persona-extract.log at %s: %v", logPath, err)
+	}
+	body := string(data)
+	for _, want := range []string{
+		"stage=extract",
+		"model request failed",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("log missing %q after simulated extractor failure:\n%s", want, body)
+		}
+	}
+}
+
 // TestRunConsoleOnceWiresPersonaExtractionEndToEnd locks the P4
 // production-path wiring blocker reviewer raised: OpenRuntime
 // constructs a PersonaExtractor, but unless RunConsoleCommand
