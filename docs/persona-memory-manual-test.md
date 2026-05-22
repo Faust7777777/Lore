@@ -253,6 +253,19 @@ appended via stderr so the operator can see the numbers
 regardless of the script's branch. Suitable for CI gates or
 periodic health pings.
 
+For programmatic consumers (monitoring exporters, alert pipes)
+the dashboard also has a stable JSON shape:
+
+```powershell
+lore persona summary --workdir $work --json | ConvertFrom-Json
+# stdout: {"workdir": "...", "candidates": {"open": ..., "drafted_linked": ..., ...}, "extract_log": {...}}
+```
+
+The two flags compose: `--json --fail-on-orphan` keeps stdout
+parseable while stderr + exit code carry the check signal, so a
+script can `jq` the snapshot AND branch on the exit code in one
+invocation.
+
 ## 10. Look at the cost split
 
 ```powershell
