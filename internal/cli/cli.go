@@ -1261,6 +1261,7 @@ func runPersonaSummaryCommand(args []string, stdout io.Writer, stderr io.Writer)
 	flags := flag.NewFlagSet("persona summary", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	workDirFlag := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	failOnOrphan := flags.Bool("fail-on-orphan", false, "exit with code 2 if any candidate is in the partial-orphan shape (Drafted with empty DraftID)")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -1304,6 +1305,23 @@ func runPersonaSummaryCommand(args []string, stdout io.Writer, stderr io.Writer)
 
 	renderPersonaSummary(stdout, workDir, runtime.PersonaExtractLogPath(),
 		len(openList), draftedLinked, draftedOrphan, len(dismissedList))
+
+	// Health-check exit code. Distinct from 0 (success) and 1
+	// (command error) so CI / nagios-style consumers can tell a
+	// real failure from an actionable warning. The check runs
+	// AFTER the dashboard prints so the operator always sees the
+	// numbers even when the exit code signals a problem.
+	if *failOnOrphan && draftedOrphan > 0 {
+		fmt.Fprintln(stderr)
+		fmt.Fprintf(stderr, "persona summary: --fail-on-orphan tripped (%d partial-orphan candidate(s) present)\n", draftedOrphan)
+		fmt.Fprintln(stderr, "  hint: enumerate the orphans via:")
+		fmt.Fprintln(stderr, "    lore persona candidates list --workdir <wd> --state drafted")
+		fmt.Fprintln(stderr, "  then reconcile each with either:")
+		fmt.Fprintln(stderr, "    lore persona candidates recover --link <draft-id> <candidate>")
+		fmt.Fprintln(stderr, "    lore persona candidates recover --force-dismiss <candidate>")
+		return 2
+	}
+
 	return 0
 }
 

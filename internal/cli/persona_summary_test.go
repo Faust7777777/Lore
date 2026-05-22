@@ -162,6 +162,78 @@ func TestRunPersonaWithoutSubcommandMentionsSummary(t *testing.T) {
 	}
 }
 
+func TestRunPersonaSummaryFailOnOrphanExitsTwoWhenOrphanPresent(t *testing.T) {
+	// Health-check mode: --fail-on-orphan returns exit 2 when at
+	// least one candidate is in the partial-orphan shape. Exit 2
+	// is distinct from 0 (clean) and 1 (command error) so CI
+	// scripts can branch on the actual signal.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	forcePartialDraftedCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "summary", "--workdir", workDir, "--fail-on-orphan"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 2 {
+		t.Fatalf("exit = %d, want 2 when --fail-on-orphan trips", exit)
+	}
+	// Dashboard still printed BEFORE the check signal, so the
+	// operator sees the numbers regardless of exit code.
+	if !strings.Contains(stdout.String(), "partial-orphan 1") {
+		t.Fatalf("dashboard should still print the orphan row:\n%s", stdout.String())
+	}
+	for _, want := range []string{
+		"--fail-on-orphan tripped",
+		"1 partial-orphan candidate",
+		"recover --link",
+		"recover --force-dismiss",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
+func TestRunPersonaSummaryFailOnOrphanExitsZeroWhenClean(t *testing.T) {
+	// Same flag, but no orphan present: exit 0, no health-check
+	// stderr block. The dashboard still renders normally.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+	if exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, candidateID}, &bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{}, "test"); exit != 0 {
+		t.Fatalf("seed draft exit = %d", exit)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "summary", "--workdir", workDir, "--fail-on-orphan"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 0 {
+		t.Fatalf("exit = %d, want 0 when no orphan; stderr = %q", exit, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "fail-on-orphan tripped") {
+		t.Fatalf("clean state should not emit check message:\n%s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "partial-orphan 0") {
+		t.Fatalf("dashboard should show partial-orphan 0:\n%s", stdout.String())
+	}
+}
+
+func TestRunPersonaSummaryNoFlagAllowsOrphan(t *testing.T) {
+	// Default behavior (no --fail-on-orphan): orphan present, exit
+	// still 0. The flag is opt-in so existing scripts that just
+	// want the dashboard never get a new failure mode.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	forcePartialDraftedCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "summary", "--workdir", workDir}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 0 {
+		t.Fatalf("exit = %d, want 0 without --fail-on-orphan; stderr = %q", exit, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "partial-orphan 1") {
+		t.Fatalf("dashboard should still show orphan count:\n%s", stdout.String())
+	}
+}
+
 func TestRunPersonaSummaryHonorsCustomWorkdirPath(t *testing.T) {
 	// Smoke check: the rendered "Workdir:" line should reflect the
 	// --workdir flag value (post-defaultWorkDir resolution), not a
