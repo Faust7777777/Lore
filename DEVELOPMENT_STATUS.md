@@ -1,6 +1,6 @@
 # Development Status
 
-Updated: 2026-04-23
+Updated: 2026-05-22
 
 ## Implemented
 
@@ -62,6 +62,16 @@ Updated: 2026-04-23
   - `sync-codex-jsonl --workdir <dir> --input <session.jsonl>`.
   - `attach-codex-jsonl --workdir <dir> --input <session.jsonl> --once`.
 
+## Recent Additions Since April Baseline
+
+- External MCP v1 now derives its live tool surface from the registry and remains read + proposal intake only; direct write/apply/shell tools are still excluded.
+- Governed intake supports persona update proposals and markdown note proposals as pending drafts, with local review/apply/supersede and CoreContext injected as user-role vault context for review.
+- Daemon post-scan records out-of-band vault writes and governed-document changes as persisted findings for later local review.
+- Task/Turn visibility is active: operator-agent responses carry visible turn steps, console stores current-turn steps, session logs persist them, and TUI renders bounded task steps without exposing chain-of-thought.
+- Persona memory candidate pipeline exists on the local path: LLM extraction runs asynchronously, candidates are persisted, evidence is validated, usage is recorded under `persona_extract`, and CLI supports list/show/dismiss/draft/recover.
+- Usage summaries normalize records by local calendar day and show per-purpose breakdowns through `lore usage` and status output.
+- Release gates now separate PR-safe fake-provider checks from full model-backed checks, with persona acceptance available as an explicit opt-in gate.
+
 ## Verified
 
 Current verification baseline with the repo-managed Go toolchain:
@@ -88,15 +98,18 @@ The `smoke p0`, `demo-p0b`, and process-sink summarization paths require `LORE_L
 - No long-running app-server attach loop yet; app-server support is currently one-shot import, while continuous attach is JSONL-based.
 - Pending approval queue is still a placeholder in the TUI; draft review/apply exists through CLI and agent actions.
 - Attachment refs are surfaced in read APIs, but binary/media extraction is not implemented yet.
-- Cost tracking exists at the store/model level; user-facing usage panels and soft warnings still need P1 polish.
+- Usage tracking has CLI/status visibility, but product-level soft warnings and richer TUI usage panels are still not implemented.
+- Persona candidates do not update `人物画像.md` directly; they still require explicit draft creation and the existing local review/apply path.
+- External transcript import is not yet connected to persona candidate extraction; the stable path is still the local console/TUI conversation flow.
 
 ## Suggested Next Steps
 
-1. Standardize the P0 smoke command as the user-facing acceptance test for future changes.
+1. Stabilize persona memory candidate governance, especially retry/recover edge cases and manual draft promotion UX.
 2. Add a runtime pending-action queue so shell confirmation and future approvals can surface in the TUI approval pane.
-3. Add user-facing usage summaries and soft warnings.
-4. Extend attachment/media extraction beyond markdown ref surfacing.
-5. Add long-running app-server attach mode if JSONL attach proves insufficient.
+3. Add product-level usage soft warnings and richer usage visibility where it helps decision-making.
+4. Add read-only TUI visibility for persona candidates after the CLI/storage path stays stable.
+5. Extend attachment/media extraction beyond markdown ref surfacing.
+6. Add long-running app-server attach mode if JSONL attach proves insufficient.
 
 ## Recent Git Checkpoints
 
