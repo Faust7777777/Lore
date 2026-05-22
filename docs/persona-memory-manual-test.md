@@ -238,6 +238,21 @@ all zeros and `(no log file yet)`. Use this command at any point
 during the test to get a single-glance health check without
 running `list` three times plus `errors --tail`.
 
+For a scriptable health check that returns a distinct exit code
+when an orphan is present:
+
+```powershell
+lore persona summary --workdir $work --fail-on-orphan
+# exit 0 when clean
+# exit 2 when at least one partial-orphan candidate exists
+# exit 1 on real command error (open runtime, list query, etc.)
+```
+
+The dashboard always prints first; the exit-code signal is
+appended via stderr so the operator can see the numbers
+regardless of the script's branch. Suitable for CI gates or
+periodic health pings.
+
 ## 10. Look at the cost split
 
 ```powershell

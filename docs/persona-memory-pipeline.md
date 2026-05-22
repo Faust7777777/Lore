@@ -94,11 +94,14 @@ lore persona candidates recover <id> [--workdir <p>] --force-dismiss
 
 lore persona errors [--workdir <p>] [--tail N] [--stage extract|store|parse_warning] [--since <duration>]
 
-lore persona summary [--workdir <p>]
+lore persona summary [--workdir <p>] [--fail-on-orphan]
    - one-page dashboard combining candidate counts (open /
      drafted-linked / drafted-orphan / dismissed) with extract-log
      stage counts and last-entry timestamp
    - read-only: never mutates store or log
+   - --fail-on-orphan exits with code 2 (distinct from 1 = command
+     error) when at least one partial-orphan candidate is present;
+     useful for CI / nagios-style health checks
 
 lore usage [--days N] [--workdir <p>]
    - daily DAY / CALLS / PROMPT / COMPLETION / TOTAL table
@@ -353,6 +356,7 @@ the linked review-handoff for the original analysis.
 | `f24acd4` | test | production-path persona extract failure coverage (console) |
 | `bc007ae` | test | production-path persona extract failure coverage (TUI mirror) |
 | `b1808ee` | B-P11e | lore persona summary one-page dashboard |
+| `1b95ff8` | B-P11e+ | summary --fail-on-orphan for CI health checks |
 
 Plus per-slice handoffs under
 `docs/archive/review-handoff/review-handoff-b-line-*` and the
