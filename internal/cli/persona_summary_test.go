@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -231,6 +232,161 @@ func TestRunPersonaSummaryNoFlagAllowsOrphan(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "partial-orphan 1") {
 		t.Fatalf("dashboard should still show orphan count:\n%s", stdout.String())
+	}
+}
+
+func TestRunPersonaSummaryJSONShapeIsStable(t *testing.T) {
+	// JSON output mode produces a single-line object with a
+	// frozen-shape contract: workdir / log_path / candidates /
+	// extract_log. Tests against the documented field names
+	// because monitoring consumers parse them.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	// Promote one candidate so drafted_linked = 1; the unpromoted
+	// remainder stays in open = 0 (only one candidate was seeded).
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+	if exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, candidateID}, &bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{}, "test"); exit != 0 {
+		t.Fatalf("seed draft exit = %d", exit)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "summary", "--workdir", workDir, "--json"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr = %q", exit, stderr.String())
+	}
+
+	// stdout must be a single JSON line that parses into the
+	// documented shape.
+	out := strings.TrimSpace(stdout.String())
+	if strings.Count(out, "\n") != 0 {
+		t.Fatalf("JSON output should be a single line, got:\n%s", out)
+	}
+	var got struct {
+		Workdir    string         `json:"workdir"`
+		LogPath    string         `json:"log_path"`
+		Candidates map[string]int `json:"candidates"`
+		ExtractLog struct {
+			Exists       bool           `json:"exists"`
+			TotalEntries int            `json:"total_entries"`
+			ByStage      map[string]int `json:"by_stage"`
+			LastEntry    string         `json:"last_entry"`
+		} `json:"extract_log"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v\nstdout: %s", err, out)
+	}
+	if got.Workdir != workDir {
+		t.Fatalf("workdir = %q, want %q", got.Workdir, workDir)
+	}
+	if got.Candidates["open"] != 0 {
+		t.Fatalf("candidates.open = %d, want 0", got.Candidates["open"])
+	}
+	if got.Candidates["drafted_linked"] != 1 {
+		t.Fatalf("candidates.drafted_linked = %d, want 1", got.Candidates["drafted_linked"])
+	}
+	if got.Candidates["drafted_orphan"] != 0 {
+		t.Fatalf("candidates.drafted_orphan = %d, want 0", got.Candidates["drafted_orphan"])
+	}
+	if got.Candidates["dismissed"] != 0 {
+		t.Fatalf("candidates.dismissed = %d, want 0", got.Candidates["dismissed"])
+	}
+	// OpenRuntime creates the log file in append mode, so by the
+	// time `summary` runs the file exists but is empty. exists is
+	// thus the freshness signal "the runtime opened a log handle in
+	// this workdir", not "any failure has been recorded"; the
+	// latter is total_entries > 0.
+	if !got.ExtractLog.Exists {
+		t.Fatalf("extract_log.exists should be true (OpenRuntime creates the file in append mode); got %+v", got.ExtractLog)
+	}
+	if got.ExtractLog.TotalEntries != 0 {
+		t.Fatalf("total_entries = %d, want 0 on a workdir that never failed", got.ExtractLog.TotalEntries)
+	}
+	if got.ExtractLog.LastEntry != "" {
+		t.Fatalf("last_entry = %q, want empty string when no entries parsed", got.ExtractLog.LastEntry)
+	}
+}
+
+func TestRunPersonaSummaryJSONWithLogEntries(t *testing.T) {
+	// JSON mode with a seeded log file: total_entries, by_stage
+	// breakdown, and last_entry should reflect the file content.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+
+	// Open + close to materialize the state dir layout, then write
+	// the log file directly.
+	seedRuntime, err := app.OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
+	if err != nil {
+		t.Fatalf("seed OpenRuntime: %v", err)
+	}
+	logPath := seedRuntime.PersonaExtractLogPath()
+	if err := seedRuntime.Close(); err != nil {
+		t.Fatalf("seed Close: %v", err)
+	}
+	lines := []string{
+		"2026-05-23T01:00:00Z\tstage=extract\tsession=s1\terror=\"timeout\"",
+		"2026-05-23T02:00:00Z\tstage=parse_warning\tsession=s2\terror=\"low confidence\"",
+		"2026-05-23T02:30:00Z\tstage=parse_warning\tsession=s3\terror=\"empty evidence\"",
+	}
+	if err := os.WriteFile(logPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write log fixture: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "summary", "--workdir", workDir, "--json"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr = %q", exit, stderr.String())
+	}
+	var got struct {
+		ExtractLog struct {
+			Exists       bool           `json:"exists"`
+			TotalEntries int            `json:"total_entries"`
+			ByStage      map[string]int `json:"by_stage"`
+			LastEntry    string         `json:"last_entry"`
+		} `json:"extract_log"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout.String())), &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if !got.ExtractLog.Exists {
+		t.Fatalf("extract_log.exists should be true with seeded log; got %+v", got.ExtractLog)
+	}
+	if got.ExtractLog.TotalEntries != 3 {
+		t.Fatalf("total_entries = %d, want 3", got.ExtractLog.TotalEntries)
+	}
+	if got.ExtractLog.ByStage["extract"] != 1 {
+		t.Fatalf("by_stage.extract = %d, want 1", got.ExtractLog.ByStage["extract"])
+	}
+	if got.ExtractLog.ByStage["parse_warning"] != 2 {
+		t.Fatalf("by_stage.parse_warning = %d, want 2", got.ExtractLog.ByStage["parse_warning"])
+	}
+	if got.ExtractLog.LastEntry != "2026-05-23T02:30:00Z" {
+		t.Fatalf("last_entry = %q, want 2026-05-23T02:30:00Z", got.ExtractLog.LastEntry)
+	}
+}
+
+func TestRunPersonaSummaryJSONStillExitsTwoWithOrphan(t *testing.T) {
+	// JSON and --fail-on-orphan compose: stdout stays clean JSON
+	// for jq, stderr carries the check-tripped hint, exit 2.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	forcePartialDraftedCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "summary", "--workdir", workDir, "--json", "--fail-on-orphan"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 2 {
+		t.Fatalf("exit = %d, want 2 with orphan + --fail-on-orphan + --json", exit)
+	}
+	var got struct {
+		Candidates map[string]int `json:"candidates"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout.String())), &got); err != nil {
+		t.Fatalf("stdout JSON invalid (the check signal should NOT have polluted stdout): %v", err)
+	}
+	if got.Candidates["drafted_orphan"] != 1 {
+		t.Fatalf("expected drafted_orphan=1, got %d", got.Candidates["drafted_orphan"])
+	}
+	if !strings.Contains(stderr.String(), "fail-on-orphan tripped") {
+		t.Fatalf("stderr should still carry the check signal:\n%s", stderr.String())
 	}
 }
 

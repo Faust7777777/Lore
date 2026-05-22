@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -1262,6 +1263,7 @@ func runPersonaSummaryCommand(args []string, stdout io.Writer, stderr io.Writer)
 	flags.SetOutput(stderr)
 	workDirFlag := flags.String("workdir", "", "workdir that contains vault/ and state/")
 	failOnOrphan := flags.Bool("fail-on-orphan", false, "exit with code 2 if any candidate is in the partial-orphan shape (Drafted with empty DraftID)")
+	asJSON := flags.Bool("json", false, "emit the dashboard as a single-line JSON object instead of the human-formatted block")
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -1303,8 +1305,16 @@ func runPersonaSummaryCommand(args []string, stdout io.Writer, stderr io.Writer)
 		}
 	}
 
-	renderPersonaSummary(stdout, workDir, runtime.PersonaExtractLogPath(),
-		len(openList), draftedLinked, draftedOrphan, len(dismissedList))
+	if *asJSON {
+		if err := emitPersonaSummaryJSON(stdout, workDir, runtime.PersonaExtractLogPath(),
+			len(openList), draftedLinked, draftedOrphan, len(dismissedList)); err != nil {
+			fmt.Fprintf(stderr, "persona summary: emit json: %v\n", err)
+			return 1
+		}
+	} else {
+		renderPersonaSummary(stdout, workDir, runtime.PersonaExtractLogPath(),
+			len(openList), draftedLinked, draftedOrphan, len(dismissedList))
+	}
 
 	// Health-check exit code. Distinct from 0 (success) and 1
 	// (command error) so CI / nagios-style consumers can tell a
@@ -1323,6 +1333,91 @@ func runPersonaSummaryCommand(args []string, stdout io.Writer, stderr io.Writer)
 	}
 
 	return 0
+}
+
+// emitPersonaSummaryJSON writes the dashboard as a single-line
+// JSON object instead of the human-formatted block. Stable shape
+// so monitoring / alerting consumers can rely on it:
+//
+//	{
+//	  "workdir": "...",
+//	  "log_path": "...",
+//	  "candidates": {"open": N, "drafted_linked": M, "drafted_orphan": K, "dismissed": N},
+//	  "extract_log": {
+//	    "exists": true,
+//	    "total_entries": N,
+//	    "by_stage": {"extract": N, "store": N, "parse_warning": N, "malformed": N},
+//	    "last_entry": "2026-..."  // empty string if no parsed entries
+//	  }
+//	}
+//
+// JSON is emitted to stdout regardless of --fail-on-orphan exit
+// signal; the check tripped block still lands on stderr so a
+// script can pipe stdout to jq while branching on the exit code.
+func emitPersonaSummaryJSON(stdout io.Writer, workDir, logPath string, openN, draftedLinked, draftedOrphan, dismissedN int) error {
+	type extractLog struct {
+		Exists       bool           `json:"exists"`
+		TotalEntries int            `json:"total_entries"`
+		ByStage      map[string]int `json:"by_stage"`
+		LastEntry    string         `json:"last_entry"`
+	}
+	type payload struct {
+		Workdir    string         `json:"workdir"`
+		LogPath    string         `json:"log_path"`
+		Candidates map[string]int `json:"candidates"`
+		ExtractLog extractLog     `json:"extract_log"`
+	}
+
+	out := payload{
+		Workdir: workDir,
+		LogPath: logPath,
+		Candidates: map[string]int{
+			"open":           openN,
+			"drafted_linked": draftedLinked,
+			"drafted_orphan": draftedOrphan,
+			"dismissed":      dismissedN,
+		},
+		ExtractLog: extractLog{ByStage: map[string]int{}},
+	}
+
+	data, err := os.ReadFile(logPath)
+	switch {
+	case err == nil:
+		out.ExtractLog.Exists = true
+		var latest time.Time
+		for _, raw := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+			if strings.TrimSpace(raw) == "" {
+				continue
+			}
+			entry := parsePersonaLogLine(raw)
+			out.ExtractLog.TotalEntries++
+			if entry.parsed {
+				out.ExtractLog.ByStage[entry.stage]++
+				if entry.ts.After(latest) {
+					latest = entry.ts
+				}
+			} else {
+				out.ExtractLog.ByStage["malformed"]++
+			}
+		}
+		if !latest.IsZero() {
+			out.ExtractLog.LastEntry = latest.UTC().Format(time.RFC3339)
+		}
+	case os.IsNotExist(err):
+		out.ExtractLog.Exists = false
+	default:
+		return err
+	}
+
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return err
+	}
+	if _, err := stdout.Write(encoded); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout)
+	return err
 }
 
 // renderPersonaSummary writes the dashboard block. Split out so a
