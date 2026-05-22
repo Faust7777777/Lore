@@ -1000,11 +1000,18 @@ func toolTraceError(err error) string {
 }
 
 // CloneTurnSteps returns an independent snapshot of a TurnStep slice.
-// Each step's Arguments map is deep-copied so callers receive a
-// defensible snapshot: mutating any returned step (slice index or
-// nested Arguments key) cannot leak into the source slice or into any
-// other snapshot produced from the same source. This is the same
-// level of isolation Trace and Usage snapshots already provide.
+// Each step value is copied and its Arguments map is rebuilt with a
+// fresh top-level map of the same key/value pairs. Lore tool
+// arguments are flat scalar/string primitives by convention (see the
+// vault_*, persona_*, markdown_note_* schemas), so this top-level
+// re-mapping is sufficient: callers can add, remove, or overwrite
+// keys on a returned snapshot without affecting the source slice or
+// any other snapshot produced from the same source.
+//
+// This helper does NOT recursively clone nested maps or slices held
+// as values inside Arguments. If a future tool schema introduces
+// nested data, lift the cloning here to be truly recursive at the
+// same time the new schema lands so this contract continues to hold.
 //
 // Exported so consumers that need to retain Steps across turn
 // boundaries (for example, console.Session.LastTurnSteps for UI
