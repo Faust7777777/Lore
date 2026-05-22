@@ -65,22 +65,24 @@ Expected fake-model sequence after B-line implementation:
 
 ## Gate Shape
 
-The scaffold test lives in `cmd/obsidian-harness/main_test.go`:
+The acceptance test lives in `cmd/obsidian-harness/main_test.go`:
 
 - test name: `TestRunPersonaMemoryCandidateAcceptanceScaffold`;
-- current state:
-  `t.Skip("activate after B candidate storage/console async/CLI review")`;
+- current state: active deterministic fake-model acceptance test;
 - model dependency: fake model only;
-- PR release gate: not active until B-line implementation lands.
+- PR release gate: not part of the default gate yet.
 
 `scripts/release-gate.ps1` reserves an opt-in persona acceptance switch behind
-`-PersonaAcceptance`. While the scaffold is skipped, this switch fails fast
-instead of running a skipped test as a false pass. The default PR gate does not
-run this switch.
+`-PersonaAcceptance`. Since `d4625f6`, this switch runs the deterministic
+acceptance test instead of fail-fast. The default PR gate does not run this
+switch.
 
-## Activation Checklist
+## Activation Status
 
-Do not remove the skip until all items are true:
+Activated by `d4625f6 test(cmd,scripts): activate persona memory candidate
+acceptance gate`.
+
+Completed prerequisites:
 
 - B extractor slices have landed: extractor contract, prompt, result model, and
   NFKC evidence validation are implemented.
@@ -102,14 +104,20 @@ Do not remove the skip until all items are true:
 - The acceptance test uses only fake-model behavior and temporary workdirs.
 - The test asserts no automatic draft creation and no automatic persona file
   modification.
-- The release gate switch is converted from fail-fast guard to `Invoke-GoGate`
-  only after the skipped scaffold becomes a deterministic passing test.
+
+Current cadence:
+
+- `release-gate.ps1 -PersonaAcceptance` runs this gate.
+- default PR release gate still does not include this gate.
+- A-line still needs to decide whether to keep it opt-in, move it to nightly /
+  pre-release, or include it in PR.
 
 ## Future Gate Integration
 
-After activation:
+After cadence is decided:
 
-1. Add the persona acceptance group to the PR release gate.
+1. Keep `-PersonaAcceptance` opt-in, or add the persona acceptance group to the
+   chosen default gate.
 2. Keep any real-model persona smoke in `release-gate.ps1 -Full` or an explicit
    manual workflow only.
 3. Make failure output identify which stage failed:
