@@ -1040,6 +1040,7 @@ func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			record, err = runtime.ForceDismissPartialPersonaCandidate(candidateID, time.Now())
 			if err != nil {
 				fmt.Fprintf(stderr, "persona candidates recover: %v\n", err)
+				renderPersonaRecoverErrorHint(stderr, candidateID, "", true, err)
 				return 1
 			}
 			renderPersonaCandidateActionResult(stdout, "recover --force-dismiss", record, "")
@@ -1048,6 +1049,7 @@ func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		record, err = runtime.RecoverPersonaCandidateLink(candidateID, draftID, time.Now())
 		if err != nil {
 			fmt.Fprintf(stderr, "persona candidates recover: %v\n", err)
+			renderPersonaRecoverErrorHint(stderr, candidateID, draftID, false, err)
 			return 1
 		}
 		renderPersonaCandidateActionResult(stdout, "recover --link", record, record.DraftID)
@@ -1199,6 +1201,49 @@ func renderPersonaDraftErrorHint(stderr io.Writer, candidateID string, retryReje
 		fmt.Fprintln(stderr, "          lore draft reject <draft-id>         # if you want to retry afterwards")
 		fmt.Fprintln(stderr, "        retry-rejected only fires after the linked draft reaches rejected /")
 		fmt.Fprintln(stderr, "        expired / superseded.")
+	}
+}
+
+// renderPersonaRecoverErrorHint mirrors renderPersonaDraftErrorHint
+// for the recover surface. recover is the "expert" path of the
+// lifecycle (operator already knows about partial orphans), but
+// the typed errors that come back still benefit from a concrete
+// next-step pointer when the candidate is in the wrong shape or
+// the supplied draft ID is wrong.
+func renderPersonaRecoverErrorHint(stderr io.Writer, candidateID, draftID string, forceDismiss bool, err error) {
+	switch {
+	case errors.Is(err, app.ErrPersonaCandidatePartialStateRequired):
+		fmt.Fprintln(stderr, "  hint: recover only operates on candidates in the partial-orphan shape (Drafted with empty DraftID).")
+		fmt.Fprintln(stderr, "        confirm the candidate's current shape:")
+		fmt.Fprintf(stderr, "          lore persona candidates show %s\n", candidateID)
+		if forceDismiss {
+			fmt.Fprintln(stderr, "        if it is in Open state, use the regular dismiss path:")
+			fmt.Fprintf(stderr, "          lore persona candidates dismiss %s\n", candidateID)
+		} else {
+			fmt.Fprintln(stderr, "        if it is Open, promote via:")
+			fmt.Fprintf(stderr, "          lore persona candidates draft %s\n", candidateID)
+		}
+		fmt.Fprintln(stderr, "        if it is Drafted with a non-empty DraftID, reject the linked draft first:")
+		fmt.Fprintln(stderr, "          lore draft reject <draft-id>")
+	case errors.Is(err, app.ErrPersonaDraftKindMismatch):
+		fmt.Fprintf(stderr, "  hint: --link only accepts a persona_update draft. The draft %q exists but is a different kind.\n", draftID)
+		fmt.Fprintln(stderr, "        list drafts and pick a persona_update entry:")
+		fmt.Fprintln(stderr, "          lore draft list")
+	default:
+		// ErrNotFound is the most common remaining path and may
+		// originate from either GetCandidate or Harness.GetDraft,
+		// which the app layer does not currently disambiguate.
+		// Give the operator both lookup commands rather than a
+		// single misleading hint.
+		if strings.Contains(err.Error(), "not found") {
+			fmt.Fprintln(stderr, "  hint: a referenced ID was not found.")
+			fmt.Fprintln(stderr, "        confirm the candidate ID via:")
+			fmt.Fprintf(stderr, "          lore persona candidates show %s\n", candidateID)
+			if !forceDismiss && draftID != "" {
+				fmt.Fprintf(stderr, "        confirm the draft ID %q via:\n", draftID)
+				fmt.Fprintln(stderr, "          lore draft list")
+			}
+		}
 	}
 }
 

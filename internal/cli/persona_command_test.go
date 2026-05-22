@@ -339,6 +339,155 @@ func TestRunPersonaCandidatesDraftRetryRejectedOnPendingDraftSurfacesHint(t *tes
 	}
 }
 
+func TestRunPersonaCandidatesRecoverForceDismissOnOpenSurfacesHint(t *testing.T) {
+	// recover is the partial-orphan-only path. Calling --force-dismiss
+	// on an Open candidate trips PartialStateRequired. The hint
+	// should redirect to the regular `dismiss` command.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "recover", "--workdir", workDir, "--force-dismiss", candidateID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for force-dismiss on Open candidate; stdout=%q", stdout.String())
+	}
+	for _, want := range []string{
+		"recover only operates on candidates in the partial-orphan shape",
+		"use the regular dismiss path",
+		"lore persona candidates dismiss " + candidateID,
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing hint fragment %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
+func TestRunPersonaCandidatesRecoverLinkOnOpenSurfacesHint(t *testing.T) {
+	// --link on an Open candidate also trips PartialStateRequired.
+	// The hint should point at the regular draft path rather than
+	// the dismiss path (this branch is decided by the forceDismiss
+	// flag inside renderPersonaRecoverErrorHint).
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "recover", "--workdir", workDir, "--link", "draft-irrelevant", candidateID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit; stdout=%q", stdout.String())
+	}
+	for _, want := range []string{
+		"recover only operates on candidates in the partial-orphan shape",
+		"if it is Open, promote via:",
+		"lore persona candidates draft " + candidateID,
+		"reject the linked draft first",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing hint fragment %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
+func TestRunPersonaCandidatesRecoverLinkOnLinkedSurfacesHint(t *testing.T) {
+	// --link on a Drafted+linked candidate (non-partial) trips the
+	// same PartialStateRequired path. The hint about rejecting the
+	// linked draft first should still appear because the
+	// renderPersonaRecoverErrorHint branch is unconditional on this.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+	// Promote first so candidate is in Drafted+linked shape.
+	if exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, candidateID}, &bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{}, "test"); exit != 0 {
+		t.Fatalf("seed draft exit = %d", exit)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "recover", "--workdir", workDir, "--link", "draft-something-else", candidateID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit; stdout=%q", stdout.String())
+	}
+	for _, want := range []string{
+		"partial-orphan",
+		"lore draft reject",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing hint fragment %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
+func TestRunPersonaCandidatesRecoverLinkKindMismatchSurfacesHint(t *testing.T) {
+	// --link target is a non-persona_update draft -> kind mismatch.
+	// Hint should name the draft id and suggest listing drafts.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	partialID := forcePartialDraftedCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	// Inject a non-persona_update draft directly via app runtime
+	// so we have something to point recover --link at.
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
+	if err != nil {
+		t.Fatalf("OpenRuntime: %v", err)
+	}
+	otherDraft := model.Draft{
+		ID:        "draft-markdown-injected",
+		Kind:      model.DraftKindMarkdownNoteWrite,
+		State:     model.DraftPendingReview,
+		Title:     "unrelated",
+		CreatedAt: time.Date(2026, 5, 23, 0, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 5, 23, 0, 0, 0, 0, time.UTC),
+	}
+	if err := runtime.Store.Drafts().SaveDraft(otherDraft); err != nil {
+		runtime.Close()
+		t.Fatalf("SaveDraft: %v", err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "recover", "--workdir", workDir, "--link", otherDraft.ID, partialID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit; stdout=%q", stdout.String())
+	}
+	for _, want := range []string{
+		"--link only accepts a persona_update draft",
+		otherDraft.ID,
+		"lore draft list",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing hint fragment %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
+func TestRunPersonaCandidatesRecoverLinkNonexistentDraftSurfacesHint(t *testing.T) {
+	// --link target is a draft id that does not exist in store.
+	// The store layer returns ErrNotFound; CLI should hint at both
+	// candidate-id and draft-id lookup since the app layer does not
+	// disambiguate.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	partialID := forcePartialDraftedCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "recover", "--workdir", workDir, "--link", "draft-does-not-exist", partialID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit; stdout=%q", stdout.String())
+	}
+	for _, want := range []string{
+		"a referenced ID was not found",
+		"lore persona candidates show " + partialID,
+		"draft-does-not-exist",
+		"lore draft list",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing hint fragment %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
 func TestRunPersonaCandidatesDismissOnDraftedSurfacesRecoverHint(t *testing.T) {
 	// UX polish: dismiss deliberately refuses Drafted candidates
 	// (the linked draft owns the review path). The CLI should not
