@@ -109,6 +109,30 @@ ClaimCandidateForRetry.
 surface (State=Drafted, DraftID=""). `--link` mends, `--force-dismiss`
 abandons.
 
+### Typed-error hints
+
+Every lifecycle refusal the CLI surfaces (dismiss / draft /
+retry-rejected / recover) ends with a `hint:` block naming the
+concrete follow-up command, with the actual candidate / draft ID
+interpolated so the operator can copy-paste rather than reconstruct
+it. The hints map 1:1 to the typed sentinels in `internal/app`:
+
+| Sentinel | Surfaced on | Hint points at |
+|---|---|---|
+| `ErrPersonaCandidateAlreadyDrafted` | dismiss, draft | `recover --link` / `recover --force-dismiss` / `lore draft reject` |
+| `ErrPersonaCandidateDismissed` | draft | repeat the utterance (DedupKey tombstone semantics) |
+| `ErrPersonaCandidatePartialStateRequired` | recover --link, recover --force-dismiss | regular `dismiss` / `draft` / `lore draft reject` based on candidate state |
+| `ErrPersonaCandidateLinkedStateRequired` | draft --retry-rejected | drop the flag for first-time promote, or recover for partial orphan |
+| `ErrPersonaDraftNotTerminalForRetry` | draft --retry-rejected | `lore draft review` / `lore draft reject` |
+| `ErrPersonaDraftKindMismatch` | recover --link | `lore draft list` to find a persona_update draft |
+
+Design rules and the testing pattern for adding new hints are in
+`docs/archive/review-handoff/review-handoff-b-line-cli-hint-batch-2026-05-23.md`.
+Helpers are `render<Surface>ErrorHint` in `internal/cli/cli.go`,
+co-located with the subcommand handlers; the helper signature is
+stable so a new typed sentinel slots in by adding an `errors.Is`
+case rather than rewiring the call site.
+
 ## State machine
 
 ```
@@ -316,6 +340,10 @@ the linked review-handoff for the original analysis.
 | `eeafd8d` | B-P9 v2 | parse_warning logging when zero candidates |
 | `e688adf` | B-P8 v2 | sqlite payload-CAS tighten (followup) |
 | `8103f5f` | B-P11c | lore persona errors reader |
+| `55b55d1` | B-P11d batch | reject negative --limit on persona candidates list |
+| `ae8a5ec` | B-P11d batch | dismiss hint pointing at recover / draft reject |
+| `c5e857a` | B-P11d batch | draft surface typed-error hints (4 cases) |
+| `4418201` | B-P11d batch | recover surface typed-error hints (3 cases) |
 
 Plus per-slice handoffs under
 `docs/archive/review-handoff/review-handoff-b-line-*` and the
