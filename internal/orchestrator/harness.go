@@ -512,7 +512,21 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 
 	applied, err := h.transitionDraftState(id, model.DraftApplied, "apply_draft", "draft-applied-state", "operator", at)
 	if err != nil {
-		return model.Draft{}, err
+		// Architect-flagged P0 (full-project-review section 4 +
+		// state-machine-audit on ApplyDraft consistency): the
+		// vault write succeeded above but the store failed to
+		// persist State=applied. The operator's audit trail would
+		// otherwise miss the file mutation; emit a governance
+		// Finding so `lore findings list` shows the inconsistency
+		// and the operator can verify-then-reconcile.
+		//
+		// A blind retry by the operator will trip the baseVersion
+		// guard (the file hash no longer matches) and mark the
+		// draft conflicted; that is the safe fallback, but it
+		// loses the "this draft was actually applied to the
+		// vault" signal. The Finding preserves that signal.
+		h.recordApplyStateFailFinding(draft, targetAbs, at, err)
+		return model.Draft{}, fmt.Errorf("apply: vault write succeeded but draft state update failed: %w; a governance Finding was emitted, run `lore findings list` to inspect", err)
 	}
 	h.recordAudit(model.AuditRecord{
 		ID:            auditID("draft-applied", at),
@@ -527,6 +541,44 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 		},
 	})
 	return applied, nil
+}
+
+// recordApplyStateFailFinding emits a critical-severity
+// governance Finding when ApplyDraft completes the vault write
+// but cannot persist the draft's transition to Applied. The
+// Finding includes the underlying state-update error in Detail
+// and the absolute vault path in Metadata so the operator can
+// run a sha256 check against the proposed content. SaveFinding
+// failures are intentionally swallowed: the caller already saw
+// a failed apply and is about to receive a self-describing
+// error; double-failing on the Finding save would only confuse
+// the operator without unblocking recovery.
+func (h *Harness) recordApplyStateFailFinding(draft model.Draft, targetAbs string, at time.Time, stateErr error) {
+	finding := model.Finding{
+		ID:         findingID("apply-state-fail", at),
+		Kind:       model.FindingGovernanceReviewNeeded,
+		State:      model.FindingOpen,
+		Severity:   model.FindingSeverityCritical,
+		Target:     draft.Target,
+		Title:      "ApplyDraft wrote vault but state update failed",
+		Summary:    fmt.Sprintf("Draft %s vault write completed for %s but the store could not persist State=applied. Operator must verify file content matches the proposal and reconcile manually.", draft.ID, draft.Target.Path),
+		Detail:     fmt.Sprintf("Underlying state-update error: %v", stateErr),
+		Source:     "apply_draft_state_fail",
+		DetectedAt: at,
+		UpdatedAt:  at,
+		Metadata: map[string]string{
+			"draft_id":    draft.ID,
+			"draft_kind":  string(draft.Kind),
+			"vault_path":  targetAbs,
+			"target_path": draft.Target.Path,
+			"state_error": stateErr.Error(),
+		},
+	}
+	_ = h.store.Findings().SaveFinding(finding)
+}
+
+func findingID(prefix string, at time.Time) string {
+	return fmt.Sprintf("finding-%s-%d", prefix, at.UnixNano())
 }
 
 func (h *Harness) readDraftTargetForApply(draft model.Draft, targetAbs string, at time.Time) ([]byte, error) {
