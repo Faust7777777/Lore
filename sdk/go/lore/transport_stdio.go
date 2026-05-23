@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -113,6 +114,9 @@ func (t *stdioTransport) Call(ctx context.Context, method string, params any) (j
 	if err != nil {
 		if ctx.Err() != nil {
 			t.closed = true
+		} else if isFrameSizeError(err) {
+			t.closed = true
+			_ = t.closeAfterCanceledCall()
 		}
 		return nil, err
 	}
@@ -277,4 +281,9 @@ func normalizeMaxFrameBytes(value int) int {
 		return DefaultMaxFrameBytes
 	}
 	return value
+}
+
+func isFrameSizeError(err error) bool {
+	var frameErr *FrameSizeError
+	return errors.As(err, &frameErr)
 }

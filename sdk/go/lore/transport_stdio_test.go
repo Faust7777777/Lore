@@ -70,6 +70,28 @@ func TestCallRejectsOverLimitResponseFrame(t *testing.T) {
 	}
 }
 
+func TestCallClosesTransportAfterOverLimitFrameWithResidualStream(t *testing.T) {
+	residual := "Content-Length: 64\r\n\r\n" + frame(`{"jsonrpc":"2.0","id":3,"result":{"tools":[]}}`)
+	transport := &stdioTransport{
+		stdin:         nopWriteCloser{Writer: io.Discard},
+		stdout:        bufio.NewReader(strings.NewReader(residual)),
+		maxFrameBytes: 48,
+	}
+	transport.nextID.Store(1)
+	client := &Client{transport: transport}
+
+	_, err := client.Tools(context.Background())
+	var frameErr *FrameSizeError
+	if !errors.As(err, &frameErr) {
+		t.Fatalf("first Tools() error = %T %[1]v, want FrameSizeError", err)
+	}
+
+	_, err = client.Tools(context.Background())
+	if !errors.Is(err, ErrClosed) {
+		t.Fatalf("second Tools() error = %v, want ErrClosed after over-limit frame", err)
+	}
+}
+
 func TestCallToolReturnsToolError(t *testing.T) {
 	client := &Client{transport: &stdioTransport{
 		stdin:  nopWriteCloser{Writer: io.Discard},

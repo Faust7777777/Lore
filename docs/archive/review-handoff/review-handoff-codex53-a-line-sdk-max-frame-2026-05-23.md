@@ -37,6 +37,18 @@ New behavior:
 - `FrameSizeError` reports `ContentLength` and `MaxBytes`
 - `TransportError` wraps `FrameSizeError` through normal error chaining
 
+## Round 2 Blocker Fix
+
+Follow-up commit closes the transport after a `FrameSizeError`.
+
+Reviewer blocker: rejecting an oversized frame without closing the stdio stream leaves the payload bytes / following frames in the reader. A later call could continue on a corrupted stream and accidentally read a residual normal frame. The follow-up marks the transport closed and closes pipes/process resources after `FrameSizeError`; subsequent calls return `ErrClosed`.
+
+Regression coverage:
+
+- `TestCallClosesTransportAfterOverLimitFrameWithResidualStream`
+- first call receives wrapped `FrameSizeError`
+- second call returns `ErrClosed` even though a valid frame follows the oversized header in the same stream
+
 ## Boundary
 
 - No SDK E2E default behavior change.
