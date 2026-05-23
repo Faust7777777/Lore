@@ -295,6 +295,8 @@ Useful filters:
 - `--stage parse_warning` — parser refusal
 - `--since 10m` — only the last 10 minutes
 - `--tail 5` — only the most recent 5
+- `--json` — stable-shape object for monitoring consumers
+  (`{log_path, filter, summary, entries[]}`)
 
 ## Acceptance criteria
 

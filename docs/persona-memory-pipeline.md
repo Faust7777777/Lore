@@ -92,7 +92,10 @@ lore persona candidates draft  <id> [--workdir <p>] [--retry-rejected]
 lore persona candidates recover <id> [--workdir <p>] --link <draft-id>
 lore persona candidates recover <id> [--workdir <p>] --force-dismiss
 
-lore persona errors [--workdir <p>] [--tail N] [--stage extract|store|parse_warning] [--since <duration>]
+lore persona errors [--workdir <p>] [--tail N] [--stage extract|store|parse_warning] [--since <duration>] [--json]
+   - default: tab-delimited log lines (grep / awk / cut friendly)
+   - --json: stable-shape object with log_path / filter / summary /
+     entries[] for monitoring consumers; symmetric with `summary --json`
 
 lore persona summary [--workdir <p>] [--fail-on-orphan] [--json]
    - one-page dashboard combining candidate counts (open /
@@ -361,6 +364,7 @@ the linked review-handoff for the original analysis.
 | `b1808ee` | B-P11e | lore persona summary one-page dashboard |
 | `1b95ff8` | B-P11e+ | summary --fail-on-orphan for CI health checks |
 | `4916ef3` | B-P11e+ | summary --json stable-shape output for monitoring |
+| `3db071b` | B-P11c+ | errors --json symmetry with summary --json |
 
 Plus per-slice handoffs under
 `docs/archive/review-handoff/review-handoff-b-line-*` and the
