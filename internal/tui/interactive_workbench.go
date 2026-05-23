@@ -121,6 +121,7 @@ func newInteractiveWorkbenchModel(driver InteractiveWorkbenchDriver, viewModel W
 		height:           32,
 	}
 
+	model.resize()
 	model.input.Focus()
 	model.refreshContent(true)
 	return model
@@ -276,8 +277,6 @@ func (m interactiveWorkbenchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m interactiveWorkbenchModel) View() string {
-	m.resize()
-	m.refreshContent(false)
 	return renderInteractiveWorkbenchLayout(m)
 }
 
