@@ -1,6 +1,8 @@
 package console
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	osruntime "runtime"
@@ -219,6 +221,37 @@ func (f *fakeLoopAgent) Respond(input string, ctx operatoragent.Context, runtime
 		return response, f.err
 	}
 	return f.response, f.err
+}
+
+func (f *fakeLoopAgent) RespondContext(ctx context.Context, input string, agentCtx operatoragent.Context, runtime operatoragent.ToolRuntime) (operatoragent.Response, error) {
+	if err := ctx.Err(); err != nil {
+		return operatoragent.Response{}, err
+	}
+	return f.Respond(input, agentCtx, runtime)
+}
+
+func TestSessionHandleContextCancelledBeforeLoopAgentDoesNotRecordTurn(t *testing.T) {
+	agent := &fakeLoopAgent{response: operatoragent.Response{Final: "ok\n", StopReason: operatoragent.TurnStopFinal, StepCount: 1}}
+	session := NewSessionWithAgent("test", agent)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	output, err := session.HandleContext(ctx, "show me status", &fakeRuntime{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("HandleContext() error = %v, want context.Canceled", err)
+	}
+	if output != "" {
+		t.Fatalf("output = %q, want empty on cancellation", output)
+	}
+	if len(agent.inputs) != 0 {
+		t.Fatalf("agent inputs = %v, want none after pre-cancel", agent.inputs)
+	}
+	if len(session.History) != 0 {
+		t.Fatalf("history length = %d, want 0", len(session.History))
+	}
+	if len(session.LastTurnSteps) != 0 {
+		t.Fatalf("LastTurnSteps length = %d, want 0", len(session.LastTurnSteps))
+	}
 }
 
 func TestSessionHandleUsesInjectedAgentForStatusAndHelp(t *testing.T) {

@@ -62,6 +62,35 @@ func TestFindingsListCursorMovement(t *testing.T) {
 	}
 }
 
+func TestFindingsOffsetUsesFindingsPanelHeight(t *testing.T) {
+	findings := make([]model.Finding, 8)
+	for i := range findings {
+		findings[i] = model.Finding{
+			ID:       fmt.Sprintf("f%d", i),
+			Title:    fmt.Sprintf("Finding %d", i),
+			State:    model.FindingOpen,
+			Severity: model.FindingSeverityWarning,
+		}
+	}
+	driver := &panelDriverStub{findings: findings}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.focus = focusFindings
+	m.approvalViewport.Height = 1
+	m.findingsHeight = 4
+
+	for i := 0; i < 3; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		m = updated.(interactiveWorkbenchModel)
+	}
+	if m.findingsCursor != 3 {
+		t.Fatalf("cursor = %d, want 3", m.findingsCursor)
+	}
+	if m.findingsOffset != 1 {
+		t.Fatalf("findings offset = %d, want 1 based on findingsHeight=4", m.findingsOffset)
+	}
+}
+
 func TestFindingsDetailToggle(t *testing.T) {
 	findings := []model.Finding{
 		{ID: "f1", Title: "Finding A", State: model.FindingOpen, Severity: model.FindingSeverityWarning},
@@ -246,6 +275,65 @@ func TestSinkTimelineCursorMovement(t *testing.T) {
 	m = updated.(interactiveWorkbenchModel)
 	if m.sinkCursor != 0 {
 		t.Fatalf("after k: cursor = %d, want 0", m.sinkCursor)
+	}
+}
+
+func TestSinkOffsetUsesSinkPanelHeight(t *testing.T) {
+	checkpoints := make([]model.CheckpointDoc, 8)
+	for i := range checkpoints {
+		checkpoints[i] = model.CheckpointDoc{
+			Title: fmt.Sprintf("CP%d", i),
+			State: model.CheckpointMaterialized,
+		}
+	}
+	sink := app.ProcessSinkDayView{
+		AgentID:     "codex",
+		Checkpoints: checkpoints,
+	}
+	driver := &panelDriverStub{sink: sink}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.focus = focusProcessSink
+	m.approvalViewport.Height = 1
+	m.sinkHeight = 5
+
+	for i := 0; i < 4; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		m = updated.(interactiveWorkbenchModel)
+	}
+	if m.sinkCursor != 4 {
+		t.Fatalf("cursor = %d, want 4", m.sinkCursor)
+	}
+	if m.sinkOffset != 2 {
+		t.Fatalf("sink offset = %d, want 2 based on sinkHeight=5 and two reserved rows", m.sinkOffset)
+	}
+}
+
+func TestApprovalOffsetUsesApprovalPanelHeight(t *testing.T) {
+	drafts := make([]model.Draft, 8)
+	for i := range drafts {
+		drafts[i] = model.Draft{
+			ID:    fmt.Sprintf("d%d", i),
+			Title: fmt.Sprintf("Draft %d", i),
+			State: model.DraftPendingReview,
+		}
+	}
+	driver := &panelDriverStub{drafts: drafts}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.focus = focusApproval
+	m.approvalViewport.Height = 99
+	m.approvalHeight = 3
+
+	for i := 0; i < 4; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		m = updated.(interactiveWorkbenchModel)
+	}
+	if m.approvalCursor != 4 {
+		t.Fatalf("cursor = %d, want 4", m.approvalCursor)
+	}
+	if m.approvalOffset != 3 {
+		t.Fatalf("approval offset = %d, want 3 based on approvalHeight=3", m.approvalOffset)
 	}
 }
 

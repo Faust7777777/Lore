@@ -491,6 +491,43 @@ func TestListRecentRejectsCorruptIndex(t *testing.T) {
 	}
 }
 
+func TestSaveIndexReplacesAtomicallyAndCleansTempFile(t *testing.T) {
+	root := t.TempDir()
+	staleTemp := indexPath(root) + indexTempSuffix
+	if err := os.WriteFile(staleTemp, []byte("stale temp"), 0o644); err != nil {
+		t.Fatalf("WriteFile(stale temp) error = %v", err)
+	}
+
+	first, err := Start(root, Meta{SessionID: "lore-index-atomic-1", StartedAt: time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("Start(first) error = %v", err)
+	}
+	if err := first.RecordUser("first"); err != nil {
+		t.Fatalf("RecordUser(first) error = %v", err)
+	}
+	second, err := Start(root, Meta{SessionID: "lore-index-atomic-2", StartedAt: time.Date(2026, 4, 25, 11, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("Start(second) error = %v", err)
+	}
+	if err := second.RecordUser("second"); err != nil {
+		t.Fatalf("RecordUser(second) error = %v", err)
+	}
+
+	if _, err := os.Stat(staleTemp); !os.IsNotExist(err) {
+		t.Fatalf("temp index file stat error = %v, want not exist after atomic save", err)
+	}
+	recent, err := ListRecent(root, 10)
+	if err != nil {
+		t.Fatalf("ListRecent() error = %v", err)
+	}
+	if len(recent) != 2 {
+		t.Fatalf("recent = %+v, want two indexed sessions", recent)
+	}
+	if recent[0].ID != "lore-index-atomic-2" || recent[1].ID != "lore-index-atomic-1" {
+		t.Fatalf("recent order = %+v, want newest first", recent)
+	}
+}
+
 func TestListRecentLimitAndOrder(t *testing.T) {
 	root := t.TempDir()
 	for i := 0; i < 25; i++ {

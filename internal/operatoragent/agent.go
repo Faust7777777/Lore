@@ -1,6 +1,7 @@
 package operatoragent
 
 import (
+	"context"
 	"time"
 
 	"obsidian-harness/internal/model"
@@ -76,6 +77,11 @@ type ToolRuntime interface {
 	CallTool(name string, arguments map[string]any) (ToolResult, error)
 }
 
+type ContextToolRuntime interface {
+	ToolRuntime
+	CallToolContext(ctx context.Context, name string, arguments map[string]any) (ToolResult, error)
+}
+
 type ModelCallUsage struct {
 	Provider         string    `json:"provider,omitempty"`
 	Model            string    `json:"model,omitempty"`
@@ -90,14 +96,15 @@ type ModelCallUsage struct {
 //
 // Today's coverage:
 //   - TurnStopFinal      - terminal success (final envelope, legacy
-//                          decision, or shell-confirm short circuit).
+//     decision, or shell-confirm short circuit).
 //   - TurnStopMaxSteps   - loop hit maxLoopSteps without terminating.
 //   - TurnStopModelError - model response could not be parsed,
-//                          validated, or completed (includes
-//                          ChatCompletion API failures).
-//   - TurnStopToolError  - reserved for B5; not emitted by Respond
-//                          yet. Defined now so the enum stays stable
-//                          when bounded tool-failure recovery lands.
+//     validated, or completed (includes
+//     ChatCompletion API failures).
+//   - TurnStopToolError  - tool execution failed before Lore could
+//     safely reinject the result into the model
+//     context, including turn cancellation during
+//     a tool call.
 type TurnStopReason string
 
 const (
@@ -187,4 +194,9 @@ func (e *UsageError) Unwrap() error {
 
 type LoopAgent interface {
 	Respond(input string, ctx Context, runtime ToolRuntime) (Response, error)
+}
+
+type ContextLoopAgent interface {
+	LoopAgent
+	RespondContext(ctx context.Context, input string, agentCtx Context, runtime ToolRuntime) (Response, error)
 }

@@ -73,6 +73,16 @@ func (r toolRuntime) DescribeTools(_ operatoragent.Context) []operatoragent.Tool
 }
 
 func (r toolRuntime) CallTool(name string, arguments map[string]any) (operatoragent.ToolResult, error) {
+	return r.CallToolContext(context.Background(), name, arguments)
+}
+
+func (r toolRuntime) CallToolContext(ctx context.Context, name string, arguments map[string]any) (operatoragent.ToolResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return operatoragent.ToolResult{}, err
+	}
 	switch strings.TrimSpace(name) {
 	case "managed_status":
 		view, err := r.runtime.ManagedStatus()
@@ -138,19 +148,15 @@ func (r toolRuntime) CallTool(name string, arguments map[string]any) (operatorag
 		if err != nil {
 			return operatoragent.ToolResult{}, err
 		}
-		content, ok := rawStringArg(arguments, "content")
-		if !ok || strings.TrimSpace(content) == "" {
-			return operatoragent.ToolResult{}, fmt.Errorf("missing required argument content")
-		}
-		reason, err := requiredStringArg(arguments, "reason")
+		parsed, err := parseDraftSupersedeToolArgs(arguments)
 		if err != nil {
 			return operatoragent.ToolResult{}, err
 		}
 		draft, err := r.runtime.SupersedeDraft(draftID, model.DraftSupersedeUpdate{
-			TargetPath:      stringArg(arguments, "target_path", ""),
-			ProposedContent: content,
-			Summary:         stringArg(arguments, "summary", ""),
-			Reason:          reason,
+			TargetPath:      parsed.TargetPath,
+			ProposedContent: parsed.Content,
+			Summary:         parsed.Summary,
+			Reason:          parsed.Reason,
 		})
 		if err != nil {
 			return operatoragent.ToolResult{}, err
@@ -263,15 +269,11 @@ func (r toolRuntime) CallTool(name string, arguments map[string]any) (operatorag
 		}
 		return jsonToolResult(pack)
 	case "vault_write_low":
-		path, err := requiredStringArg(arguments, "path")
+		parsed, err := parseVaultWriteLowToolArgs(arguments)
 		if err != nil {
 			return operatoragent.ToolResult{}, err
 		}
-		content, ok := rawStringArg(arguments, "content")
-		if !ok {
-			return operatoragent.ToolResult{}, fmt.Errorf("missing required argument content")
-		}
-		doc, err := r.runtime.WriteLowRiskNote(path, content, boolArg(arguments, "overwrite"))
+		doc, err := r.runtime.WriteLowRiskNote(parsed.Path, parsed.Content, parsed.Overwrite)
 		if err != nil {
 			return operatoragent.ToolResult{}, err
 		}
@@ -282,9 +284,9 @@ func (r toolRuntime) CallTool(name string, arguments map[string]any) (operatorag
 			"base_version": doc.BaseVersion,
 		})
 	case "git_status":
-		return r.gitStatus(arguments)
+		return r.gitStatus(ctx, arguments)
 	case "git_diff_summary":
-		return r.gitDiffSummary(arguments)
+		return r.gitDiffSummary(ctx, arguments)
 	case "workspace_list":
 		return r.workspaceList(arguments)
 	case "workspace_read":
@@ -327,7 +329,8 @@ func (r toolRuntime) workspaceList(arguments map[string]any) (operatoragent.Tool
 	if err := r.requireLocalWorkTools("workspace_list"); err != nil {
 		return operatoragent.ToolResult{}, err
 	}
-	absPath, relPath, err := r.resolveWorkspacePath(stringArg(arguments, "path", "."))
+	parsed := parseWorkspaceListToolArgs(arguments)
+	absPath, relPath, err := r.resolveWorkspacePath(parsed.Path)
 	if err != nil {
 		return operatoragent.ToolResult{}, err
 	}
@@ -354,7 +357,7 @@ func (r toolRuntime) workspaceList(arguments map[string]any) (operatoragent.Tool
 	return jsonToolResult(out)
 }
 
-func (r toolRuntime) gitStatus(arguments map[string]any) (operatoragent.ToolResult, error) {
+func (r toolRuntime) gitStatus(ctx context.Context, arguments map[string]any) (operatoragent.ToolResult, error) {
 	if err := r.requireLocalWorkTools("git_status"); err != nil {
 		return operatoragent.ToolResult{}, err
 	}
@@ -368,10 +371,10 @@ func (r toolRuntime) gitStatus(arguments map[string]any) (operatoragent.ToolResu
 	if scope != "." {
 		args = append(args, "--", scope)
 	}
-	return r.runGitCommand("git_status", scope, args...)
+	return r.runGitCommand(ctx, "git_status", scope, args...)
 }
 
-func (r toolRuntime) gitDiffSummary(arguments map[string]any) (operatoragent.ToolResult, error) {
+func (r toolRuntime) gitDiffSummary(ctx context.Context, arguments map[string]any) (operatoragent.ToolResult, error) {
 	if err := r.requireLocalWorkTools("git_diff_summary"); err != nil {
 		return operatoragent.ToolResult{}, err
 	}
@@ -391,7 +394,7 @@ func (r toolRuntime) gitDiffSummary(arguments map[string]any) (operatoragent.Too
 		args = append(args, "--", scope)
 	}
 
-	result, err := r.runGitCommand("git_diff_summary", scope, args...)
+	result, err := r.runGitCommand(ctx, "git_diff_summary", scope, args...)
 	if err != nil {
 		return result, err
 	}
@@ -407,11 +410,11 @@ func (r toolRuntime) workspaceRead(arguments map[string]any) (operatoragent.Tool
 	if err := r.requireLocalWorkTools("workspace_read"); err != nil {
 		return operatoragent.ToolResult{}, err
 	}
-	path, err := requiredStringArg(arguments, "path")
+	parsed, err := parseWorkspaceReadToolArgs(arguments)
 	if err != nil {
 		return operatoragent.ToolResult{}, err
 	}
-	absPath, relPath, err := r.resolveWorkspacePath(path)
+	absPath, relPath, err := r.resolveWorkspacePath(parsed.Path)
 	if err != nil {
 		return operatoragent.ToolResult{}, err
 	}
@@ -428,19 +431,15 @@ func (r toolRuntime) workspaceWrite(arguments map[string]any) (operatoragent.Too
 	if err := r.requireLocalWorkTools("workspace_write"); err != nil {
 		return operatoragent.ToolResult{}, err
 	}
-	path, err := requiredStringArg(arguments, "path")
+	parsed, err := parseWorkspaceWriteToolArgs(arguments)
 	if err != nil {
 		return operatoragent.ToolResult{}, err
 	}
-	content, ok := rawStringArg(arguments, "content")
-	if !ok {
-		return operatoragent.ToolResult{}, fmt.Errorf("missing required argument content")
-	}
-	absPath, relPath, err := r.resolveWorkspacePath(path)
+	absPath, relPath, err := r.resolveWorkspacePath(parsed.Path)
 	if err != nil {
 		return operatoragent.ToolResult{}, err
 	}
-	hash, err := vault.WriteFileAtomic(absPath, []byte(content), workspaceWriteTempSuffix)
+	hash, err := vault.WriteFileAtomic(absPath, []byte(parsed.Content), workspaceWriteTempSuffix)
 	if err != nil {
 		return operatoragent.ToolResult{}, err
 	}
@@ -453,15 +452,11 @@ func (r toolRuntime) workspaceEdit(arguments map[string]any) (operatoragent.Tool
 	if err := r.requireLocalWorkTools("workspace_edit"); err != nil {
 		return operatoragent.ToolResult{}, err
 	}
-	path, err := requiredStringArg(arguments, "path")
+	parsed, err := parseWorkspaceEditToolArgs(arguments)
 	if err != nil {
 		return operatoragent.ToolResult{}, err
 	}
-	oldValue, ok := rawStringArg(arguments, "old")
-	if !ok || oldValue == "" {
-		return operatoragent.ToolResult{}, fmt.Errorf("missing required argument old")
-	}
-	absPath, relPath, err := r.resolveWorkspacePath(path)
+	absPath, relPath, err := r.resolveWorkspacePath(parsed.Path)
 	if err != nil {
 		return operatoragent.ToolResult{}, err
 	}
@@ -469,22 +464,19 @@ func (r toolRuntime) workspaceEdit(arguments map[string]any) (operatoragent.Tool
 	if err != nil {
 		return operatoragent.ToolResult{}, err
 	}
-	newValue, _ := rawStringArg(arguments, "new")
-	replaceAll := boolArg(arguments, "replace_all")
-
 	content := string(before)
-	count := strings.Count(content, oldValue)
+	count := strings.Count(content, parsed.Old)
 	if count == 0 {
 		return operatoragent.ToolResult{}, fmt.Errorf("workspace_edit: old text not found")
 	}
-	if !replaceAll && count > 1 {
+	if !parsed.ReplaceAll && count > 1 {
 		return operatoragent.ToolResult{}, fmt.Errorf("workspace_edit: old text matched %d times; set replace_all=true or narrow the snippet", count)
 	}
 
-	after := strings.Replace(content, oldValue, newValue, 1)
+	after := strings.Replace(content, parsed.Old, parsed.New, 1)
 	replaced := 1
-	if replaceAll {
-		after = strings.ReplaceAll(content, oldValue, newValue)
+	if parsed.ReplaceAll {
+		after = strings.ReplaceAll(content, parsed.Old, parsed.New)
 		replaced = count
 	}
 	hash, err := vault.WriteFileAtomic(absPath, []byte(after), workspaceWriteTempSuffix)
@@ -503,29 +495,28 @@ func (r toolRuntime) shellExec(arguments map[string]any) (operatoragent.ToolResu
 	if !shellToolsEnabled() {
 		return operatoragent.ToolResult{}, fmt.Errorf("shell_exec is disabled; set LORE_AGENT_ENABLE_SHELL=1 to enable the unsafe local shell profile")
 	}
-	command, err := requiredStringArg(arguments, "command")
+	parsed, err := parseShellExecToolArgs(arguments)
 	if err != nil {
 		return operatoragent.ToolResult{}, err
-	}
-	timeoutSeconds := intArg(arguments, "timeout_seconds", 30)
-	if timeoutSeconds <= 0 {
-		timeoutSeconds = 30
 	}
 	if r.session == nil {
 		return operatoragent.ToolResult{}, fmt.Errorf("shell_exec requires session state")
 	}
 
 	r.session.PendingShellCommand = &pendingShellCommand{
-		Command:        command,
-		TimeoutSeconds: timeoutSeconds,
+		Command:        parsed.Command,
+		TimeoutSeconds: parsed.TimeoutSeconds,
 	}
 	return operatoragent.ToolResult{
-		Content: renderShellConfirmationPrompt(command, timeoutSeconds),
+		Content: renderShellConfirmationPrompt(parsed.Command, parsed.TimeoutSeconds),
 	}, nil
 }
 
-func (r toolRuntime) runGitCommand(toolName string, scope string, gitArgs ...string) (operatoragent.ToolResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+func (r toolRuntime) runGitCommand(parentCtx context.Context, toolName string, scope string, gitArgs ...string) (operatoragent.ToolResult, error) {
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, 15*time.Second)
 	defer cancel()
 
 	args := append([]string{"-C", r.runtime.WorkDirPath()}, gitArgs...)
@@ -560,6 +551,134 @@ func (r toolRuntime) gitScopeArg(arguments map[string]any) (string, error) {
 		return "", err
 	}
 	return relPath, nil
+}
+
+type draftSupersedeToolArgs struct {
+	TargetPath string
+	Content    string
+	Summary    string
+	Reason     string
+}
+
+func parseDraftSupersedeToolArgs(arguments map[string]any) (draftSupersedeToolArgs, error) {
+	content, ok := rawStringArg(arguments, "content")
+	if !ok || strings.TrimSpace(content) == "" {
+		return draftSupersedeToolArgs{}, fmt.Errorf("missing required argument content")
+	}
+	reason, err := requiredStringArg(arguments, "reason")
+	if err != nil {
+		return draftSupersedeToolArgs{}, err
+	}
+	return draftSupersedeToolArgs{
+		TargetPath: stringArg(arguments, "target_path", ""),
+		Content:    content,
+		Summary:    stringArg(arguments, "summary", ""),
+		Reason:     reason,
+	}, nil
+}
+
+type vaultWriteLowToolArgs struct {
+	Path      string
+	Content   string
+	Overwrite bool
+}
+
+func parseVaultWriteLowToolArgs(arguments map[string]any) (vaultWriteLowToolArgs, error) {
+	path, err := requiredStringArg(arguments, "path")
+	if err != nil {
+		return vaultWriteLowToolArgs{}, err
+	}
+	content, ok := rawStringArg(arguments, "content")
+	if !ok {
+		return vaultWriteLowToolArgs{}, fmt.Errorf("missing required argument content")
+	}
+	return vaultWriteLowToolArgs{
+		Path:      path,
+		Content:   content,
+		Overwrite: boolArg(arguments, "overwrite"),
+	}, nil
+}
+
+type workspaceListToolArgs struct {
+	Path string
+}
+
+func parseWorkspaceListToolArgs(arguments map[string]any) workspaceListToolArgs {
+	return workspaceListToolArgs{Path: stringArg(arguments, "path", ".")}
+}
+
+type workspaceReadToolArgs struct {
+	Path string
+}
+
+func parseWorkspaceReadToolArgs(arguments map[string]any) (workspaceReadToolArgs, error) {
+	path, err := requiredStringArg(arguments, "path")
+	if err != nil {
+		return workspaceReadToolArgs{}, err
+	}
+	return workspaceReadToolArgs{Path: path}, nil
+}
+
+type workspaceWriteToolArgs struct {
+	Path    string
+	Content string
+}
+
+func parseWorkspaceWriteToolArgs(arguments map[string]any) (workspaceWriteToolArgs, error) {
+	path, err := requiredStringArg(arguments, "path")
+	if err != nil {
+		return workspaceWriteToolArgs{}, err
+	}
+	content, ok := rawStringArg(arguments, "content")
+	if !ok {
+		return workspaceWriteToolArgs{}, fmt.Errorf("missing required argument content")
+	}
+	return workspaceWriteToolArgs{Path: path, Content: content}, nil
+}
+
+type workspaceEditToolArgs struct {
+	Path       string
+	Old        string
+	New        string
+	ReplaceAll bool
+}
+
+func parseWorkspaceEditToolArgs(arguments map[string]any) (workspaceEditToolArgs, error) {
+	path, err := requiredStringArg(arguments, "path")
+	if err != nil {
+		return workspaceEditToolArgs{}, err
+	}
+	oldValue, ok := rawStringArg(arguments, "old")
+	if !ok || oldValue == "" {
+		return workspaceEditToolArgs{}, fmt.Errorf("missing required argument old")
+	}
+	newValue, _ := rawStringArg(arguments, "new")
+	return workspaceEditToolArgs{
+		Path:       path,
+		Old:        oldValue,
+		New:        newValue,
+		ReplaceAll: boolArg(arguments, "replace_all"),
+	}, nil
+}
+
+type shellExecToolArgs struct {
+	Command        string
+	TimeoutSeconds int
+}
+
+func parseShellExecToolArgs(arguments map[string]any) (shellExecToolArgs, error) {
+	command, err := requiredStringArg(arguments, "command")
+	if err != nil {
+		return shellExecToolArgs{}, err
+	}
+	timeoutSeconds := intArg(arguments, "timeout_seconds", 30)
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 30
+	}
+	return shellExecToolArgs{
+		Command:        command,
+		TimeoutSeconds: timeoutSeconds,
+	}, nil
 }
 
 func (r toolRuntime) resolveWorkspacePath(rawPath string) (string, string, error) {

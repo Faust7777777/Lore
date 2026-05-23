@@ -66,6 +66,8 @@ type ModelCatalog struct {
 var ErrUnavailable = errors.New("operator agent: model-backed operator agent is required")
 
 const (
+	operatorDecisionPromptVersion  = "operator-decision-v1"
+	operatorLoopPromptVersion      = "operator-loop-v1"
 	maxLoopSteps                   = 8
 	repeatedToolCallAbortThreshold = 3
 	maxLoopRecentHistoryMessages   = 6
@@ -84,6 +86,13 @@ const (
 	// original tool call path, not through repeated model messages.
 	maxToolResultPromptBytes = 4096
 )
+
+func PromptVersions() map[string]string {
+	return map[string]string{
+		"decision": operatorDecisionPromptVersion,
+		"loop":     operatorLoopPromptVersion,
+	}
+}
 
 func NewDefault() Agent {
 	agent, err := NewFromEnv()
@@ -244,6 +253,13 @@ func (a ModelAgent) Decide(input string, ctx Context) (Decision, error) {
 }
 
 func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Response, error) {
+	return a.RespondContext(context.Background(), input, ctx, runtime)
+}
+
+func (a ModelAgent) RespondContext(turnCtx context.Context, input string, ctx Context, runtime ToolRuntime) (Response, error) {
+	if turnCtx == nil {
+		turnCtx = context.Background()
+	}
 	raw := strings.TrimSpace(input)
 	if raw == "" {
 		return Response{}, fmt.Errorf("empty input")
@@ -254,9 +270,12 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 	if runtime == nil {
 		return Response{}, fmt.Errorf("operator agent: tool runtime is required")
 	}
+	if err := turnCtx.Err(); err != nil {
+		return Response{StopReason: TurnStopModelError}, err
+	}
 
 	tools := runtime.DescribeTools(ctx)
-	runtimeDocs := loadRuntimePromptDocs(runtime, tools)
+	runtimeDocs := loadRuntimePromptDocs(turnCtx, runtime, tools)
 	messages := buildLoopMessages(loopSystemPrompt(tools, runtimeDocs, ctx), raw, ctx)
 
 	toolHistory := make([]string, 0, maxLoopSteps)
@@ -286,8 +305,11 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 		}, &UsageError{Err: err, Usage: usageSnapshot}
 	}
 	for step := 0; step < maxLoopSteps; step++ {
+		if err := turnCtx.Err(); err != nil {
+			return Response{StopReason: TurnStopModelError}, err
+		}
 		startedAt := time.Now().UTC()
-		resp, err := a.client.ChatCompletion(context.Background(), openai.ChatCompletionRequest{
+		resp, err := a.client.ChatCompletion(turnCtx, openai.ChatCompletionRequest{
 			Messages:    messages,
 			Tools:       openAIToolDefinitions(tools),
 			Temperature: 0,
@@ -321,7 +343,10 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 				return failWithUsage(TurnStopModelError, fmt.Errorf("operator agent: alternating tool loop detected"))
 			}
 
-			toolResult, toolErr := runtime.CallTool(toolName, toolCall.Arguments)
+			toolResult, toolErr := callToolWithContext(turnCtx, runtime, toolName, toolCall.Arguments)
+			if contextError(toolErr) != nil {
+				return failWithUsage(TurnStopToolError, toolErr)
+			}
 			toolContent := strings.TrimSpace(toolResult.Content)
 			stepStatus := toolTraceStatus(toolName, toolContent, toolErr)
 			stepError := toolTraceError(toolErr)
@@ -403,7 +428,10 @@ func (a ModelAgent) Respond(input string, ctx Context, runtime ToolRuntime) (Res
 				return failWithUsage(TurnStopModelError, fmt.Errorf("operator agent: alternating tool loop detected"))
 			}
 
-			toolResult, toolErr := runtime.CallTool(toolName, envelope.Arguments)
+			toolResult, toolErr := callToolWithContext(turnCtx, runtime, toolName, envelope.Arguments)
+			if contextError(toolErr) != nil {
+				return failWithUsage(TurnStopToolError, toolErr)
+			}
 			toolContent := strings.TrimSpace(toolResult.Content)
 			stepStatus := toolTraceStatus(toolName, toolContent, toolErr)
 			stepError := toolTraceError(toolErr)
@@ -452,6 +480,15 @@ func (a ErrorAgent) Decide(_ string, _ Context) (Decision, error) {
 }
 
 func (a ErrorAgent) Respond(_ string, _ Context, _ ToolRuntime) (Response, error) {
+	return Response{}, a.err
+}
+
+func (a ErrorAgent) RespondContext(ctx context.Context, _ string, _ Context, _ ToolRuntime) (Response, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return Response{}, err
+		}
+	}
 	return Response{}, a.err
 }
 
@@ -611,8 +648,9 @@ func extractFirstJSONObject(content string) (string, bool) {
 }
 
 func systemPrompt() string {
-	return strings.TrimSpace(`
+	return strings.TrimSpace(fmt.Sprintf(`
 You are the operator agent for Lore.
+Prompt version: %s.
 Return exactly one JSON object and nothing else.
 
 Allowed actions:
@@ -644,7 +682,7 @@ Return schema:
   "agent_id": "codex",
   "day": "YYYY-MM-DD"
 }
-`)
+`, operatorDecisionPromptVersion))
 }
 
 func loopSystemPrompt(tools []ToolDefinition, runtimeDocs []promptDoc, ctx Context) string {
@@ -661,8 +699,9 @@ func loopSystemPrompt(tools []ToolDefinition, runtimeDocs []promptDoc, ctx Conte
 	if toolListContains(tools, "shell_exec") {
 		shellMode = "enabled"
 	}
-	builder.WriteString(strings.TrimSpace(`
+	builder.WriteString(strings.TrimSpace(fmt.Sprintf(`
 You are the main Lore chat agent.
+Prompt version: %s.
 Return exactly one JSON object and nothing else.
 
 You may respond in exactly one of two forms:
@@ -689,7 +728,7 @@ When the user asks to inspect, read, summarize, or explain a vault file by name 
 3. answer in a final message using the file content;
 4. if status is ambiguous (multiple matches), return final asking the user to choose; do not call vault_read on an arbitrary match;
 5. if status is not_found, return final explaining the file was not located; do not invent a path or guess.
-`))
+`, operatorLoopPromptVersion)))
 	builder.WriteString("\n\nLore governance summary:\n")
 	builder.WriteString("- managed core docs and plan/execution docs must stay in draft -> review -> apply\n")
 	builder.WriteString("- low-governance vault notes may use vault_write_low; runtime still blocks managed core, plans, process-sink docs, hidden dirs, and non-markdown files\n")
@@ -739,14 +778,14 @@ When the user asks to inspect, read, summarize, or explain a vault file by name 
 	return strings.TrimSpace(builder.String())
 }
 
-func loadRuntimePromptDocs(runtime ToolRuntime, tools []ToolDefinition) []promptDoc {
+func loadRuntimePromptDocs(ctx context.Context, runtime ToolRuntime, tools []ToolDefinition) []promptDoc {
 	if runtime == nil || !toolListContains(tools, "system_doc_get") {
 		return nil
 	}
 
 	docs := make([]promptDoc, 0, 2)
 	for _, name := range []string{"agent", "identity"} {
-		result, err := runtime.CallTool("system_doc_get", map[string]any{"name": name})
+		result, err := callToolWithContext(ctx, runtime, "system_doc_get", map[string]any{"name": name})
 		if err != nil {
 			continue
 		}
@@ -757,6 +796,31 @@ func loadRuntimePromptDocs(runtime ToolRuntime, tools []ToolDefinition) []prompt
 		docs = append(docs, doc)
 	}
 	return docs
+}
+
+func callToolWithContext(ctx context.Context, runtime ToolRuntime, name string, arguments map[string]any) (ToolResult, error) {
+	if runtime == nil {
+		return ToolResult{}, fmt.Errorf("operator agent: tool runtime is required")
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return ToolResult{}, err
+		}
+	}
+	if contextRuntime, ok := runtime.(ContextToolRuntime); ok {
+		return contextRuntime.CallToolContext(ctx, name, arguments)
+	}
+	return runtime.CallTool(name, arguments)
+}
+
+func contextError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 func decodePromptDoc(name string, raw string) (promptDoc, bool) {

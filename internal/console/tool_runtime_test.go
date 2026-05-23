@@ -1,6 +1,8 @@
 package console
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +12,25 @@ import (
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/operatoragent"
 )
+
+func TestToolRuntimeCallToolContextCancelledBeforeDispatch(t *testing.T) {
+	runtime := &fakeRuntime{}
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	tools, ok := newToolRuntime(session, runtime).(operatoragent.ContextToolRuntime)
+	if !ok {
+		t.Fatal("newToolRuntime() does not implement ContextToolRuntime")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result, err := tools.CallToolContext(ctx, "managed_status", map[string]any{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CallToolContext() error = %v, want context.Canceled", err)
+	}
+	if result.Content != "" {
+		t.Fatalf("result.Content = %q, want empty", result.Content)
+	}
+}
 
 func TestToolRuntimeWorkspaceWritePreservesWhitespace(t *testing.T) {
 	workDir := t.TempDir()
@@ -467,6 +488,94 @@ func TestToolRuntimeWorkspaceWriteRequiresLocalExecMode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--local-exec") {
 		t.Fatalf("workspace_write error = %q, want local-exec guidance", err)
+	}
+}
+
+func TestToolRuntimeHighRiskArgsPreserveWriteSemantics(t *testing.T) {
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+		drafts: []model.Draft{{
+			ID:     "draft-1",
+			Kind:   model.DraftKindMarkdownNoteWrite,
+			State:  model.DraftPendingReview,
+			Target: model.DocumentRef{Path: "03-notes/inbox/ecommerce.md", Class: model.DocClassNote},
+		}},
+	}
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.EnableLocalWorkTools = true
+	tools := newToolRuntime(session, runtime)
+
+	if _, err := tools.CallTool("workspace_write", map[string]any{"path": "empty.txt"}); err == nil || !strings.Contains(err.Error(), "content") {
+		t.Fatalf("workspace_write missing content error = %v, want content error", err)
+	}
+	if _, err := tools.CallTool("workspace_write", map[string]any{"path": "empty.txt", "content": ""}); err != nil {
+		t.Fatalf("workspace_write empty content error = %v, want allowed", err)
+	}
+	data, err := os.ReadFile(filepath.Join(workDir, "empty.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile(empty.txt) error = %v", err)
+	}
+	if string(data) != "" {
+		t.Fatalf("empty.txt = %q, want empty", string(data))
+	}
+
+	if _, err := tools.CallTool("vault_write_low", map[string]any{"path": "03-notes/empty.md"}); err == nil || !strings.Contains(err.Error(), "content") {
+		t.Fatalf("vault_write_low missing content error = %v, want content error", err)
+	}
+	if _, err := tools.CallTool("vault_write_low", map[string]any{"path": "03-notes/empty.md", "content": "", "overwrite": true}); err != nil {
+		t.Fatalf("vault_write_low empty content error = %v, want allowed", err)
+	}
+	if runtime.writtenNote == nil || runtime.writtenNote.Path != "03-notes/empty.md" || runtime.writtenNote.Content != "" {
+		t.Fatalf("writtenNote = %+v, want empty note at 03-notes/empty.md", runtime.writtenNote)
+	}
+
+	if _, err := tools.CallTool("draft_supersede", map[string]any{"draft_id": "draft-1", "content": "   ", "reason": "revision"}); err == nil || !strings.Contains(err.Error(), "content") {
+		t.Fatalf("draft_supersede blank content error = %v, want content error", err)
+	}
+	if _, err := tools.CallTool("draft_supersede", map[string]any{"draft_id": "draft-1", "content": "revised"}); err == nil || !strings.Contains(err.Error(), "reason") {
+		t.Fatalf("draft_supersede missing reason error = %v, want reason error", err)
+	}
+}
+
+func TestToolRuntimeHighRiskArgsPreserveEditAndShellSemantics(t *testing.T) {
+	t.Setenv("LORE_AGENT_ENABLE_SHELL", "1")
+	workDir := t.TempDir()
+	runtime := &fakeRuntime{
+		managed: model.ManagedStatusView{
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+		},
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "notes.txt"), []byte("delete me"), 0o644); err != nil {
+		t.Fatalf("WriteFile(notes.txt) error = %v", err)
+	}
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	session.EnableLocalWorkTools = true
+	tools := newToolRuntime(session, runtime)
+
+	if _, err := tools.CallTool("workspace_edit", map[string]any{"path": "notes.txt", "new": ""}); err == nil || !strings.Contains(err.Error(), "old") {
+		t.Fatalf("workspace_edit missing old error = %v, want old error", err)
+	}
+	if _, err := tools.CallTool("workspace_edit", map[string]any{"path": "notes.txt", "old": "delete me", "new": ""}); err != nil {
+		t.Fatalf("workspace_edit empty new error = %v, want allowed", err)
+	}
+	data, err := os.ReadFile(filepath.Join(workDir, "notes.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile(notes.txt) error = %v", err)
+	}
+	if string(data) != "" {
+		t.Fatalf("notes.txt = %q, want empty after edit", string(data))
+	}
+
+	if _, err := tools.CallTool("shell_exec", map[string]any{"command": "echo lore", "timeout_seconds": 0}); err != nil {
+		t.Fatalf("shell_exec error = %v", err)
+	}
+	if session.PendingShellCommand == nil || session.PendingShellCommand.TimeoutSeconds != 30 {
+		t.Fatalf("pending shell command = %+v, want timeout normalized to 30", session.PendingShellCommand)
 	}
 }
 

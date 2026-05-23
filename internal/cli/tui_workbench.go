@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -72,6 +73,13 @@ func (d interactiveWorkbenchDriver) Load(lastOutput string) (tui.WorkbenchViewMo
 }
 
 func (d interactiveWorkbenchDriver) Execute(line string, lastOutput string) (tui.InteractiveWorkbenchUpdate, error) {
+	return d.ExecuteContext(context.Background(), line, lastOutput)
+}
+
+func (d interactiveWorkbenchDriver) ExecuteContext(ctx context.Context, line string, lastOutput string) (tui.InteractiveWorkbenchUpdate, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	line = strings.TrimSpace(line)
 	switch strings.ToLower(line) {
 	case "", "/refresh":
@@ -97,7 +105,7 @@ func (d interactiveWorkbenchDriver) Execute(line string, lastOutput string) (tui
 		viewModel, err := d.Load(lastOutput)
 		return tui.InteractiveWorkbenchUpdate{ViewModel: viewModel, LastOutput: lastOutput}, err
 	default:
-		output, err := d.session.Handle(line, d.runtime)
+		output, err := d.session.HandleContext(ctx, line, d.runtime)
 		if err != nil {
 			lastOutput = "Error: " + err.Error()
 			viewModel, loadErr := d.Load(lastOutput)

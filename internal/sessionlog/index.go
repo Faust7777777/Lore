@@ -7,7 +7,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"obsidian-harness/internal/vault"
 )
+
+const indexTempSuffix = ".tmp"
 
 func indexPath(rootDir string) string {
 	return filepath.Join(rootDir, "index.json")
@@ -74,7 +78,8 @@ func saveIndex(rootDir string, index Index) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(indexPath(rootDir), append(data, '\n'), 0o644)
+	_, err = vault.WriteFileAtomic(indexPath(rootDir), append(data, '\n'), indexTempSuffix)
+	return err
 }
 
 func upsertIndex(rootDir string, summary Summary) error {

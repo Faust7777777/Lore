@@ -47,18 +47,18 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 	switch model.focus {
 	case focusFindings:
 		rightBottomTitle = "Findings"
-		rightBottomContent = renderFindingsPane(model.viewModel.Findings, model.findingsCursor, model.findingsOffset, model.findingsDetail, rightWidth-4, rightBottomHeight-4)
+		rightBottomContent = renderFindingsPane(model.viewModel.Findings, model.findingsCursor, model.findingsOffset, model.findingsDetail, rightWidth-4, visiblePanelHeight(model.findingsHeight, rightBottomHeight-4))
 	case focusProcessSink:
 		if narrow {
 			rightBottomTitle = "Sink Timeline"
 		} else {
 			rightBottomTitle = "Process-sink Timeline"
 		}
-		rightBottomContent = renderSinkTimelinePane(model.viewModel.ProcessSink, model.sinkCursor, model.sinkOffset, model.sinkDetail, rightWidth-4, rightBottomHeight-4)
+		rightBottomContent = renderSinkTimelinePane(model.viewModel.ProcessSink, model.sinkCursor, model.sinkOffset, model.sinkDetail, rightWidth-4, visiblePanelHeight(model.sinkHeight, rightBottomHeight-4))
 	default:
 		// focusApproval (and any other) shows drafts
 		rightBottomTitle = approvalTitle
-		rightBottomContent = renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalOffset, model.approvalDetail, model.viewModel.FocusedReview, rightWidth-4, rightBottomHeight-4)
+		rightBottomContent = renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalOffset, model.approvalDetail, model.viewModel.FocusedReview, rightWidth-4, visiblePanelHeight(model.approvalHeight, rightBottomHeight-4))
 	}
 
 	rightBottomPane := paneStyle(model.focus == focusApproval || model.focus == focusFindings || model.focus == focusProcessSink).Width(rightWidth).Height(rightBottomHeight).Render(
@@ -74,6 +74,13 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 		lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightColumn),
 		inputPane,
 	)
+}
+
+func visiblePanelHeight(configured int, fallback int) int {
+	if configured > 0 {
+		return configured
+	}
+	return maxInt(3, fallback)
 }
 
 func renderInteractiveConversation(viewModel WorkbenchViewModel, lastOutput string, running bool, pendingLine string, wrapWidth int) string {

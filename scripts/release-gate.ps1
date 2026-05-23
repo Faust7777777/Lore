@@ -168,24 +168,24 @@ try {
     Invoke-SDKGate
 
     Invoke-GoGate `
-        -Label "operator-agent turn-step observation guardrails" `
+        -Label "operator-agent turn-step, context, and tool-result guardrails" `
         -Package "./internal/operatoragent" `
-        -Run "Test(ModelAgentRespondAppendsTurnStepPerToolCall|ModelAgentRespondTurnStepTruncatesLongObservation|ModelAgentRespondTurnStepRedactsBinaryObservation|ModelAgentRespondTurnStepCapturesToolError|ModelAgentRespondTurnStepsCarriedThroughUsageError|CloneTurnStepsDeepCopiesArguments|ModelAgentRespondStepsAreIsolatedFromTraceAndOtherSnapshots|BuildObservationExcerptRuneBoundaryTruncation)$"
+        -Run "Test(ModelAgentRespondAppendsTurnStepPerToolCall|ModelAgentRespondTurnStepTruncatesLongObservation|ModelAgentRespondTurnStepRedactsBinaryObservation|ModelAgentRespondTurnStepCapturesToolError|ModelAgentRespondTurnStepsCarriedThroughUsageError|ModelAgentRespondStepsAreIsolatedFromTraceAndOtherSnapshots|ModelAgentRespondBoundsToolResultReinjectionIntoModelContext|ModelAgentRespondContextBeforeModelCallCancelled|ModelAgentRespondContextDuringModelCallCancelled|ModelAgentRespondContextDuringToolCallCancelled|OperatorPromptVersionsAndCriticalRules|CloneTurnStepsDeepCopiesArguments|BuildObservationExcerptRuneBoundaryTruncation)$"
 
     Invoke-GoGate `
-        -Label "console resolve-read-final and task-turn guardrails" `
+        -Label "console resolve-read-final, task-turn, and context guardrails" `
         -Package "./internal/console" `
-        -Run "Test(EndToEndResolveReadFinalFileInspectionTurn|SessionHandleEmitsTaskTurnEndOnSuccess|SessionHandleEmitsTaskTurnEndOnFailure|SessionHandleSkipsTaskTurnEndForLegacyDecidePath|SessionHandlePopulatesLastTurnStepsFromLoopAgentResponse|SessionHandleLastTurnStepsEmptyForFinalOnlyTurn|SessionHandleLastTurnStepsPreservedOnUsageErrorPath|SessionHandleClearsLastTurnStepsBetweenTurns|SessionHandleLastTurnStepsEmptyForLegacyDecidePath|SessionHandleLastTurnStepsIsolatedFromAgentResponse)$"
+        -Run "Test(EndToEndResolveReadFinalFileInspectionTurn|SessionHandleEmitsTaskTurnEndOnSuccess|SessionHandleEmitsTaskTurnEndOnFailure|SessionHandleSkipsTaskTurnEndForLegacyDecidePath|SessionHandlePopulatesLastTurnStepsFromLoopAgentResponse|SessionHandleLastTurnStepsEmptyForFinalOnlyTurn|SessionHandleLastTurnStepsPreservedOnUsageErrorPath|SessionHandleClearsLastTurnStepsBetweenTurns|SessionHandleLastTurnStepsEmptyForLegacyDecidePath|SessionHandleLastTurnStepsIsolatedFromAgentResponse|SessionHandleContextCancelledBeforeLoopAgentDoesNotRecordTurn|ToolRuntimeCallToolContextCancelledBeforeDispatch|ToolRuntimeHighRiskArgsPreserveWriteSemantics|ToolRuntimeHighRiskArgsPreserveEditAndShellSemantics)$"
 
     Invoke-GoGate `
         -Label "sessionlog task-turn persistence guardrails" `
         -Package "./internal/sessionlog" `
-        -Run "TestRecordTaskTurnEnd(WritesEvent|EmptyReasonIsNoOp)$"
+        -Run "Test(RecordTaskTurnEnd(WritesEvent|EmptyReasonIsNoOp)|SaveIndexReplacesAtomicallyAndCleansTempFile)$"
 
     Invoke-GoGate `
-        -Label "TUI approval state and task-step render guardrails" `
+        -Label "TUI approval state, task-step render, and viewport guardrails" `
         -Package "./internal/tui" `
-        -Run "Test(ApprovalFlow_|RenderInteractiveConversationShowsTaskSteps|RenderTaskStepsArgSummary|RenderTaskStepsTruncatesObservation|RenderTaskStepsErrorStep|RenderTaskStepsNonErrorLastOutputNotShown)"
+        -Run "Test(ApprovalFlow_|InteractiveWorkbenchViewDoesNotRefreshContent|RenderInteractiveConversationShowsTaskSteps|RenderTaskStepsArgSummary|RenderTaskStepsTruncatesObservation|RenderTaskStepsErrorStep|RenderTaskStepsNonErrorLastOutputNotShown|FindingsOffsetUsesFindingsPanelHeight|SinkOffsetUsesSinkPanelHeight|ApprovalOffsetUsesApprovalPanelHeight)"
 
     if ($Full) {
         $verifyArgs = @(

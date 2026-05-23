@@ -31,13 +31,26 @@ func (f *fakeCompletionClient) ChatCompletion(_ context.Context, req openai.Chat
 	return f.response, f.err
 }
 
+type blockingCompletionClient struct {
+	started  chan struct{}
+	requests []openai.ChatCompletionRequest
+}
+
+func (f *blockingCompletionClient) ChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
+	f.requests = append(f.requests, req)
+	close(f.started)
+	<-ctx.Done()
+	return openai.ChatCompletionResponse{}, ctx.Err()
+}
+
 type fakeToolRuntime struct {
-	tools     []ToolDefinition
-	results   map[string]ToolResult
-	calls     []string
-	arguments []map[string]any
-	callErr   error
-	callFunc  func(name string, arguments map[string]any) (ToolResult, error)
+	tools           []ToolDefinition
+	results         map[string]ToolResult
+	calls           []string
+	arguments       []map[string]any
+	callErr         error
+	callFunc        func(name string, arguments map[string]any) (ToolResult, error)
+	callContextFunc func(ctx context.Context, name string, arguments map[string]any) (ToolResult, error)
 }
 
 func (f *fakeToolRuntime) DescribeTools(_ Context) []ToolDefinition {
@@ -57,6 +70,15 @@ func (f *fakeToolRuntime) CallTool(name string, arguments map[string]any) (ToolR
 		return result, nil
 	}
 	return ToolResult{}, nil
+}
+
+func (f *fakeToolRuntime) CallToolContext(ctx context.Context, name string, arguments map[string]any) (ToolResult, error) {
+	if f.callContextFunc != nil {
+		f.calls = append(f.calls, name)
+		f.arguments = append(f.arguments, arguments)
+		return f.callContextFunc(ctx, name, arguments)
+	}
+	return f.CallTool(name, arguments)
 }
 
 func clearOperatorEnv(t *testing.T) {
@@ -250,6 +272,59 @@ func TestLoopSystemPromptIncludesFileInspectionDiscipline(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("loopSystemPrompt missing %q; got:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestOperatorPromptVersionsAndCriticalRules(t *testing.T) {
+	versions := PromptVersions()
+	if versions["decision"] != operatorDecisionPromptVersion || versions["loop"] != operatorLoopPromptVersion {
+		t.Fatalf("PromptVersions() = %#v, want stable decision/loop versions", versions)
+	}
+
+	decisionPrompt := systemPrompt()
+	loopPrompt := loopSystemPrompt([]ToolDefinition{
+		{Name: "vault_resolve", Description: "resolve"},
+		{Name: "vault_read", Description: "read"},
+		{Name: "workspace_read", Description: "workspace"},
+	}, []promptDoc{{Name: "agent", Path: "agent.md", Content: "Workspace Agent Operating Manual"}}, Context{})
+
+	for _, tt := range []struct {
+		name   string
+		prompt string
+		wants  []string
+	}{
+		{
+			name:   "decision",
+			prompt: decisionPrompt,
+			wants: []string{
+				"Prompt version: " + operatorDecisionPromptVersion,
+				"Return exactly one JSON object",
+				"never schedule, poll, sync, import, attach, or run background jobs",
+				`"action": "help|show_status|list_drafts|review_draft|approve_draft|reject_draft|request_draft_revision|apply_draft|show_process_sink_day"`,
+			},
+		},
+		{
+			name:   "loop",
+			prompt: loopPrompt,
+			wants: []string{
+				"Prompt version: " + operatorLoopPromptVersion,
+				`{"type":"tool_call","tool":"tool_name","arguments":{...}}`,
+				`{"type":"final","message":"user-facing response"}`,
+				"previous assistant messages are user-facing history",
+				"CoreContext usage rules are trusted runtime instructions",
+				"local_exec_mode: enabled",
+				"Workspace agent docs",
+				"File inspection workflow",
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, want := range tt.wants {
+				if !strings.Contains(tt.prompt, want) {
+					t.Fatalf("%s prompt missing %q:\n%s", tt.name, want, tt.prompt)
+				}
+			}
+		})
 	}
 }
 
@@ -560,6 +635,119 @@ func TestModelAgentRespondDoesNotWrapWhenChatCompletionFails(t *testing.T) {
 	var usageErr *UsageError
 	if errors.As(err, &usageErr) {
 		t.Fatalf("ChatCompletion failure should not produce UsageError; got %+v", usageErr)
+	}
+}
+
+func TestModelAgentRespondContextBeforeModelCallCancelled(t *testing.T) {
+	client := &fakeCompletionClient{
+		response: openai.ChatCompletionResponse{Content: `{"type":"final","message":"ok"}`},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	response, err := agent.RespondContext(ctx, "ok", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RespondContext() error = %v, want context.Canceled", err)
+	}
+	if len(client.requests) != 0 {
+		t.Fatalf("ChatCompletion requests = %d, want 0 after pre-cancel", len(client.requests))
+	}
+	if response.StopReason != TurnStopModelError {
+		t.Fatalf("StopReason = %q, want %q", response.StopReason, TurnStopModelError)
+	}
+}
+
+func TestModelAgentRespondContextDuringModelCallCancelled(t *testing.T) {
+	client := &blockingCompletionClient{started: make(chan struct{})}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := agent.RespondContext(ctx, "ok", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+		errCh <- err
+	}()
+
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("ChatCompletion was not started")
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("RespondContext() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RespondContext did not return after cancellation")
+	}
+}
+
+func TestModelAgentRespondContextDuringToolCallCancelled(t *testing.T) {
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{
+				ToolCalls:        []openai.ToolCall{{Name: "managed_status", Arguments: map[string]any{}}},
+				PromptTokens:     9,
+				CompletionTokens: 3,
+			},
+			{Content: `{"type":"final","message":"should not run"}`},
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	toolStarted := make(chan struct{})
+	runtime := &fakeToolRuntime{
+		tools: []ToolDefinition{{Name: "managed_status", Description: "show status"}},
+		callContextFunc: func(ctx context.Context, name string, arguments map[string]any) (ToolResult, error) {
+			close(toolStarted)
+			<-ctx.Done()
+			return ToolResult{}, ctx.Err()
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type result struct {
+		response Response
+		err      error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		response, err := agent.RespondContext(ctx, "show current status", Context{
+			DefaultAgentID: "codex",
+			Now:            time.Now(),
+		}, runtime)
+		resultCh <- result{response: response, err: err}
+	}()
+
+	select {
+	case <-toolStarted:
+	case <-time.After(time.Second):
+		t.Fatal("tool call was not started")
+	}
+	cancel()
+	select {
+	case got := <-resultCh:
+		if !errors.Is(got.err, context.Canceled) {
+			t.Fatalf("RespondContext() error = %v, want context.Canceled", got.err)
+		}
+		if got.response.StopReason != TurnStopToolError {
+			t.Fatalf("StopReason = %q, want %q", got.response.StopReason, TurnStopToolError)
+		}
+		var usageErr *UsageError
+		if !errors.As(got.err, &usageErr) || len(usageErr.Usage) != 1 {
+			t.Fatalf("error = %v, want UsageError with one usage record", got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RespondContext did not return after tool cancellation")
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("ChatCompletion requests = %d, want 1", len(client.requests))
 	}
 }
 

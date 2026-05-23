@@ -141,6 +141,13 @@ func NewSessionWithAgent(version string, agent operatoragent.Agent) *Session {
 }
 
 func (s *Session) Handle(input string, runtime Runtime) (string, error) {
+	return s.HandleContext(context.Background(), input, runtime)
+}
+
+func (s *Session) HandleContext(ctx context.Context, input string, runtime Runtime) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.LastInput = strings.TrimSpace(input)
 	s.LastToolTrace = nil
 	// Clear LastTurnSteps at the top so that a turn which never
@@ -149,11 +156,22 @@ func (s *Session) Handle(input string, runtime Runtime) (string, error) {
 	// field empty rather than displaying stale steps from a prior
 	// successful turn.
 	s.LastTurnSteps = nil
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if output, handled, err := s.handlePendingShellConfirmation(runtime); handled {
 		return output, err
 	}
 	if loopAgent, ok := s.Agent.(operatoragent.LoopAgent); ok {
-		response, err := loopAgent.Respond(input, s.agentContext(runtime), newToolRuntime(s, runtime))
+		agentCtx := s.agentContext(runtime)
+		tools := newToolRuntime(s, runtime)
+		var response operatoragent.Response
+		var err error
+		if contextAgent, ok := loopAgent.(operatoragent.ContextLoopAgent); ok {
+			response, err = contextAgent.RespondContext(ctx, input, agentCtx, tools)
+		} else {
+			response, err = loopAgent.Respond(input, agentCtx, tools)
+		}
 		// Snapshot the turn's structured steps before any further
 		// branching so error and success paths both leave consumers
 		// with an accurate view. operatoragent guarantees Steps is
@@ -216,6 +234,9 @@ func (s *Session) Handle(input string, runtime Runtime) (string, error) {
 		return output + "\n", nil
 	}
 
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	decision, err := s.Agent.Decide(input, s.agentContext(runtime))
 	if err != nil {
 		return "", err

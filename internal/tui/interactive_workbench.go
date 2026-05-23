@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"io"
 	"os"
 	"strings"
@@ -20,6 +21,11 @@ type InteractiveWorkbenchDriver interface {
 	Execute(line string, lastOutput string) (InteractiveWorkbenchUpdate, error)
 	ExecuteApprovalAction(action string, draftID string) (InteractiveWorkbenchUpdate, error)
 	ExecuteFindingAction(action string, findingID string) (InteractiveWorkbenchUpdate, error)
+}
+
+type InteractiveWorkbenchContextDriver interface {
+	InteractiveWorkbenchDriver
+	ExecuteContext(ctx context.Context, line string, lastOutput string) (InteractiveWorkbenchUpdate, error)
 }
 
 type InteractiveWorkbenchUpdate struct {
@@ -70,12 +76,15 @@ type interactiveWorkbenchModel struct {
 	approvalCursor   int
 	approvalDetail   bool
 	approvalOffset   int
+	approvalHeight   int
 	findingsCursor   int
 	findingsOffset   int
 	findingsDetail   bool
+	findingsHeight   int
 	sinkCursor       int
 	sinkOffset       int
 	sinkDetail       bool
+	sinkHeight       int
 }
 
 func RunInteractiveWorkbench(input io.Reader, output io.Writer, driver InteractiveWorkbenchDriver) error {
@@ -282,6 +291,10 @@ func (m interactiveWorkbenchModel) View() string {
 
 func (m *interactiveWorkbenchModel) executeLine(line string) tea.Cmd {
 	return func() tea.Msg {
+		if contextDriver, ok := m.driver.(InteractiveWorkbenchContextDriver); ok {
+			update, err := contextDriver.ExecuteContext(context.Background(), line, m.lastOutput)
+			return interactiveResultMsg{update: update, err: err}
+		}
 		update, err := m.driver.Execute(line, m.lastOutput)
 		return interactiveResultMsg{update: update, err: err}
 	}
@@ -327,7 +340,11 @@ func (m *interactiveWorkbenchModel) resize() {
 	m.statusViewport.Width = maxInt(16, rightWidth-4)
 	m.statusViewport.Height = maxInt(6, rightTopHeight-4)
 	m.approvalViewport.Width = maxInt(16, rightWidth-4)
-	m.approvalViewport.Height = maxInt(3, rightBottomHeight-4)
+	rightBottomContentHeight := maxInt(3, rightBottomHeight-4)
+	m.approvalViewport.Height = rightBottomContentHeight
+	m.approvalHeight = rightBottomContentHeight
+	m.findingsHeight = rightBottomContentHeight
+	m.sinkHeight = rightBottomContentHeight
 	m.input.SetWidth(inputWidth)
 	m.input.SetHeight(3)
 }
@@ -532,21 +549,7 @@ func (m interactiveWorkbenchModel) handleApprovalKeys(msg tea.KeyMsg) (tea.Model
 
 // clampApprovalOffset keeps the cursor inside the visible window.
 func (m *interactiveWorkbenchModel) clampApprovalOffset() {
-	visibleHeight := m.approvalViewport.Height
-	if visibleHeight < 1 {
-		visibleHeight = 5
-	}
-	// Reserve 1 line for the position hint
-	listHeight := visibleHeight - 1
-	if listHeight < 1 {
-		listHeight = 1
-	}
-	if m.approvalCursor < m.approvalOffset {
-		m.approvalOffset = m.approvalCursor
-	}
-	if m.approvalCursor >= m.approvalOffset+listHeight {
-		m.approvalOffset = m.approvalCursor - listHeight + 1
-	}
+	m.approvalOffset = clampPanelOffset(m.approvalCursor, m.approvalOffset, m.approvalHeight, 1)
 }
 
 func (m interactiveWorkbenchModel) handleApprovalDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -617,20 +620,7 @@ func (m interactiveWorkbenchModel) handleFindingsKeys(msg tea.KeyMsg) (tea.Model
 }
 
 func (m *interactiveWorkbenchModel) clampFindingsOffset() {
-	visibleHeight := m.approvalViewport.Height
-	if visibleHeight < 1 {
-		visibleHeight = 5
-	}
-	listHeight := visibleHeight - 1
-	if listHeight < 1 {
-		listHeight = 1
-	}
-	if m.findingsCursor < m.findingsOffset {
-		m.findingsOffset = m.findingsCursor
-	}
-	if m.findingsCursor >= m.findingsOffset+listHeight {
-		m.findingsOffset = m.findingsCursor - listHeight + 1
-	}
+	m.findingsOffset = clampPanelOffset(m.findingsCursor, m.findingsOffset, m.findingsHeight, 1)
 }
 
 func (m interactiveWorkbenchModel) handleFindingsDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -738,20 +728,27 @@ func (m interactiveWorkbenchModel) handleSinkKeys(msg tea.KeyMsg) (tea.Model, te
 }
 
 func (m *interactiveWorkbenchModel) clampSinkOffset() {
-	visibleHeight := m.approvalViewport.Height
+	m.sinkOffset = clampPanelOffset(m.sinkCursor, m.sinkOffset, m.sinkHeight, 2)
+}
+
+func clampPanelOffset(cursor int, offset int, visibleHeight int, reservedRows int) int {
 	if visibleHeight < 1 {
 		visibleHeight = 5
 	}
-	listHeight := visibleHeight - 1
+	listHeight := visibleHeight - reservedRows
 	if listHeight < 1 {
 		listHeight = 1
 	}
-	if m.sinkCursor < m.sinkOffset {
-		m.sinkOffset = m.sinkCursor
+	if cursor < offset {
+		offset = cursor
 	}
-	if m.sinkCursor >= m.sinkOffset+listHeight {
-		m.sinkOffset = m.sinkCursor - listHeight + 1
+	if cursor >= offset+listHeight {
+		offset = cursor - listHeight + 1
 	}
+	if offset < 0 {
+		return 0
+	}
+	return offset
 }
 
 func (m interactiveWorkbenchModel) handleSinkDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
