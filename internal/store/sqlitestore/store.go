@@ -145,15 +145,70 @@ func (s *Store) ListDrafts() ([]model.Draft, error) {
 }
 
 func (s *Store) UpdateDraftState(id string, state model.DraftState, updatedAt time.Time) (model.Draft, error) {
-	draft, err := s.GetDraft(id)
+	if strings.TrimSpace(id) == "" {
+		return model.Draft{}, store.ErrInvalidKey
+	}
+	// Architect-flagged (store-module-handover 2.2): the previous
+	// Get + SaveDraft pattern was two independent SQL statements.
+	// Under the current MaxOpenConns=1 setting the writes are
+	// effectively serialized, but once a future change widens the
+	// pool the two-step pattern becomes a race: a peer can mutate
+	// the row between the SELECT and the INSERT-ON-CONFLICT and
+	// the second writer's payload silently overwrites the peer's
+	// transition.
+	//
+	// Mirror the ClaimCandidateForDraft / UpdateFindingState
+	// shape: single transaction with read + write, with a
+	// belt-and-suspenders CAS on the just-observed state value so
+	// a peer transition between SELECT and UPDATE returns
+	// store.ErrConflict instead of silently winning.
+	tx, err := s.db.Begin()
 	if err != nil {
 		return model.Draft{}, err
 	}
-	draft.State = state
-	draft.UpdatedAt = updatedAt
-	if err := s.SaveDraft(draft); err != nil {
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var existingPayload string
+	if err := tx.QueryRow(`SELECT payload FROM drafts WHERE id = ?`, id).Scan(&existingPayload); err != nil {
+		return model.Draft{}, mapSQLError(err)
+	}
+	draft, err := unmarshalPayload[model.Draft](existingPayload)
+	if err != nil {
 		return model.Draft{}, err
 	}
+	expectedState := draft.State
+	draft.State = state
+	draft.UpdatedAt = updatedAt
+	payload, err := marshalPayload(draft)
+	if err != nil {
+		return model.Draft{}, err
+	}
+	result, err := tx.Exec(
+		`UPDATE drafts SET state = ?, updated_at = ?, payload = ? WHERE id = ? AND state = ?`,
+		string(state),
+		timeString(updatedAt),
+		payload,
+		id,
+		string(expectedState),
+	)
+	if err != nil {
+		return model.Draft{}, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return model.Draft{}, err
+	}
+	if affected != 1 {
+		return model.Draft{}, store.ErrConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Draft{}, err
+	}
+	tx = nil
 	return draft, nil
 }
 
@@ -645,25 +700,62 @@ func (s *Store) UpdateCandidateState(id string, state persona.PersonaCandidateSt
 	if strings.TrimSpace(id) == "" {
 		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
 	}
-	record, err := s.GetCandidate(id)
+	// Architect-flagged (store-module-handover 2.2): same pattern
+	// as UpdateDraftState / UpdateFindingState / ClaimCandidateForDraft.
+	// Single transaction, CAS on the just-observed state so a
+	// peer transition between SELECT and UPDATE surfaces
+	// store.ErrConflict instead of silently overwriting.
+	tx, err := s.db.Begin()
 	if err != nil {
 		return persona.PersonaCandidateRecord{}, err
 	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var existingPayload string
+	if err := tx.QueryRow(`SELECT payload FROM persona_candidates WHERE id = ?`, id).Scan(&existingPayload); err != nil {
+		return persona.PersonaCandidateRecord{}, mapSQLError(err)
+	}
+	record, err := unmarshalPayload[persona.PersonaCandidateRecord](existingPayload)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	expectedState := record.State
 	record.State = persona.NormalizeCandidateState(state)
 	record.UpdatedAt = updatedAt
 	payload, err := marshalPayload(record)
 	if err != nil {
 		return persona.PersonaCandidateRecord{}, err
 	}
-	if _, err := s.db.Exec(
-		`UPDATE persona_candidates SET state = ?, updated_at = ?, payload = ? WHERE id = ?`,
+	// Match the legacy-empty-state OR branch the ClaimCandidateForDraft
+	// UPDATE uses so callers that drive a row from state='' (which
+	// NormalizeCandidateState treats as Open) can still transition.
+	whereState := string(expectedState)
+	result, err := tx.Exec(
+		`UPDATE persona_candidates SET state = ?, updated_at = ?, payload = ? WHERE id = ? AND state = ?`,
 		string(record.State),
 		timeString(updatedAt),
 		payload,
 		id,
-	); err != nil {
+		whereState,
+	)
+	if err != nil {
 		return persona.PersonaCandidateRecord{}, err
 	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	if affected != 1 {
+		return persona.PersonaCandidateRecord{}, store.ErrConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	tx = nil
 	return record, nil
 }
 
@@ -671,10 +763,33 @@ func (s *Store) LinkCandidateDraft(id string, draftID string, updatedAt time.Tim
 	if strings.TrimSpace(id) == "" || strings.TrimSpace(draftID) == "" {
 		return persona.PersonaCandidateRecord{}, store.ErrInvalidKey
 	}
-	record, err := s.GetCandidate(id)
+	// Architect-flagged (store-module-handover 2.2): wrap the
+	// read + write in one transaction. Includes a CAS on the
+	// observed state because LinkCandidateDraft's callers
+	// (CreatePersonaDraftFromCandidate / RetryRejectedPersonaDraft /
+	// RecoverPersonaCandidateLink) all drive the candidate through
+	// a known prior state, so a peer transition mid-flight is a
+	// genuine race that should fail loud (ErrConflict) rather
+	// than silently overwriting the peer's DraftID.
+	tx, err := s.db.Begin()
 	if err != nil {
 		return persona.PersonaCandidateRecord{}, err
 	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var existingPayload string
+	if err := tx.QueryRow(`SELECT payload FROM persona_candidates WHERE id = ?`, id).Scan(&existingPayload); err != nil {
+		return persona.PersonaCandidateRecord{}, mapSQLError(err)
+	}
+	record, err := unmarshalPayload[persona.PersonaCandidateRecord](existingPayload)
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	expectedState := record.State
 	record.State = persona.PersonaCandidateDrafted
 	record.DraftID = draftID
 	record.UpdatedAt = updatedAt
@@ -682,15 +797,28 @@ func (s *Store) LinkCandidateDraft(id string, draftID string, updatedAt time.Tim
 	if err != nil {
 		return persona.PersonaCandidateRecord{}, err
 	}
-	if _, err := s.db.Exec(
-		`UPDATE persona_candidates SET state = ?, updated_at = ?, payload = ? WHERE id = ?`,
+	result, err := tx.Exec(
+		`UPDATE persona_candidates SET state = ?, updated_at = ?, payload = ? WHERE id = ? AND state = ?`,
 		string(record.State),
 		timeString(updatedAt),
 		payload,
 		id,
-	); err != nil {
+		string(expectedState),
+	)
+	if err != nil {
 		return persona.PersonaCandidateRecord{}, err
 	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	if affected != 1 {
+		return persona.PersonaCandidateRecord{}, store.ErrConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	tx = nil
 	return record, nil
 }
 
