@@ -105,6 +105,17 @@ func LoadWithOptions(workDir string, opts LoadOptions) (Config, []LoadDiagnostic
 		}
 	}
 
+	// Architect-flagged P2 (full-project-review section 4 +
+	// infra handover): run an explicit Validate pass on the merged
+	// config so a malformed user-global or workspace override is
+	// rejected at runtime open instead of leaking through to a
+	// daemon callback / vault write / scheduler tick. Diagnostics
+	// already record every layer; the validate error itself names
+	// the offending field for the operator.
+	if err := cfg.Validate(); err != nil {
+		return cfg, diagnostics, err
+	}
+
 	return cfg, diagnostics, nil
 }
 
