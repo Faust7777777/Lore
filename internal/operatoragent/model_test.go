@@ -836,6 +836,55 @@ func TestModelAgentRespondTurnStepTruncatesLongObservation(t *testing.T) {
 	}
 }
 
+func TestModelAgentRespondBoundsToolResultReinjectionIntoModelContext(t *testing.T) {
+	bigBody := "BEGIN\n" + strings.Repeat("0123456789", maxToolResultPromptBytes) + "\nSENTINEL_AFTER_LIMIT"
+	client := &fakeCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{Content: `{"type":"tool_call","tool":"vault_read","arguments":{"path":"big.md"}}`},
+			{Content: `{"type":"final","message":"ok"}`},
+		},
+	}
+	agent := NewModelAgent(client, "test", "test-model").(ModelAgent)
+	runtime := &fakeToolRuntime{
+		tools:   []ToolDefinition{{Name: "vault_read", Description: "y"}},
+		results: map[string]ToolResult{"vault_read": {Content: bigBody}},
+	}
+
+	response, err := agent.Respond("read big", Context{DefaultAgentID: "codex", Now: time.Now()}, runtime)
+	if err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	if response.Final != "ok" {
+		t.Fatalf("Final = %q, want ok", response.Final)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("len(requests) = %d, want 2", len(client.requests))
+	}
+	second := client.requests[1]
+	if len(second.Messages) == 0 {
+		t.Fatal("second request has no messages")
+	}
+	toolPrompt := second.Messages[len(second.Messages)-1].Content
+	if !strings.Contains(toolPrompt, "Tool result for vault_read:") {
+		t.Fatalf("tool prompt missing header: %q", oneLine(toolPrompt, 120))
+	}
+	if !strings.Contains(toolPrompt, "truncated") || !strings.Contains(toolPrompt, "before model re-injection") {
+		t.Fatalf("tool prompt missing model-context truncation marker: %q", oneLine(toolPrompt, 160))
+	}
+	if strings.Contains(toolPrompt, "SENTINEL_AFTER_LIMIT") {
+		t.Fatalf("tool prompt leaked tail sentinel beyond limit")
+	}
+	if len(toolPrompt) >= len(bigBody) {
+		t.Fatalf("tool prompt length = %d, want shorter than raw result %d", len(toolPrompt), len(bigBody))
+	}
+	// TurnStep preview remains separately bounded for UI/session
+	// consumers; this test locks that model-context truncation does
+	// not replace the existing user-visible excerpt contract.
+	if len(response.Steps) != 1 || response.Steps[0].ObservationExcerpt == "" {
+		t.Fatalf("Steps = %+v, want one step with excerpt", response.Steps)
+	}
+}
+
 func TestModelAgentRespondTurnStepRedactsBinaryObservation(t *testing.T) {
 	binary := string([]byte{0xff, 0xfe, 0xfd, 0xfc, 0xff})
 	client := &fakeCompletionClient{

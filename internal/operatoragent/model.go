@@ -76,6 +76,13 @@ const (
 	// keeping transcript / UI payloads bounded for very large reads
 	// or pathological tool output.
 	maxObservationExcerptBytes = 1024
+	// maxToolResultPromptBytes caps the tool result body that is
+	// re-injected into the next model request. UI/session excerpts are
+	// already bounded separately; this cap protects the model context
+	// itself when a tool returns a large vault document or search
+	// result. The complete tool result remains available through the
+	// original tool call path, not through repeated model messages.
+	maxToolResultPromptBytes = 4096
 )
 
 func NewDefault() Agent {
@@ -974,12 +981,30 @@ func renderHistory(history []ConversationTurn, limit int) string {
 
 func buildToolResultPrompt(toolName string, content string, toolErr error) string {
 	if toolErr != nil {
-		return fmt.Sprintf("Tool result for %s:\nERROR: %s", toolName, toolErr.Error())
+		return fmt.Sprintf("Tool result for %s:\nERROR: %s", toolName, truncateToolResultForModel(toolErr.Error()))
 	}
 	if strings.TrimSpace(content) == "" {
 		content = "(empty result)"
 	}
-	return fmt.Sprintf("Tool result for %s:\n%s", toolName, content)
+	return fmt.Sprintf("Tool result for %s:\n%s", toolName, truncateToolResultForModel(content))
+}
+
+func truncateToolResultForModel(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return content
+	}
+	if !utf8.ValidString(content) {
+		return "(binary content omitted before model re-injection)"
+	}
+	if len(content) <= maxToolResultPromptBytes {
+		return content
+	}
+	cut := maxToolResultPromptBytes
+	for cut > 0 && !utf8.RuneStart(content[cut]) {
+		cut--
+	}
+	dropped := len(content) - cut
+	return content[:cut] + fmt.Sprintf("\n...[truncated %d more bytes before model re-injection]", dropped)
 }
 
 func toolTraceStatus(toolName string, content string, err error) string {
