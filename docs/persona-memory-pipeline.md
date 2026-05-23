@@ -85,7 +85,7 @@ console / TUI user turn
 ## CLI surface
 
 ```
-lore persona candidates list   [--workdir <p>] [--state open|drafted|dismissed] [--limit N]
+lore persona candidates list   [--workdir <p>] [--state open|drafted|dismissed] [--limit N] [--json]
 lore persona candidates show   <id> [--workdir <p>]
 lore persona candidates dismiss <id> [--workdir <p>]
 lore persona candidates draft  <id> [--workdir <p>] [--retry-rejected]
@@ -365,6 +365,7 @@ the linked review-handoff for the original analysis.
 | `1b95ff8` | B-P11e+ | summary --fail-on-orphan for CI health checks |
 | `4916ef3` | B-P11e+ | summary --json stable-shape output for monitoring |
 | `3db071b` | B-P11c+ | errors --json symmetry with summary --json |
+| `a242fcb` | B-P5+P6+ | list --json completes the JSON-uniform read surface |
 
 Plus per-slice handoffs under
 `docs/archive/review-handoff/review-handoff-b-line-*` and the
