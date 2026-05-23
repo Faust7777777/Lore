@@ -370,17 +370,78 @@ func (s *Store) ListFindings(limit int) ([]model.Finding, error) {
 }
 
 func (s *Store) UpdateFindingState(id string, state model.FindingState, updatedAt time.Time) (model.Finding, error) {
-	finding, err := s.GetFinding(id)
+	if strings.TrimSpace(id) == "" {
+		return model.Finding{}, store.ErrInvalidKey
+	}
+	// Architect-flagged P0 (lore-state-machine-audit.md F-1): the
+	// previous Get-then-Save pattern silently overwrote terminal
+	// state. Wrap the read + validate + write inside a single
+	// transaction with a CAS-style UPDATE so two concurrent
+	// callers cannot both observe state=open before either
+	// transitions, and so the SQL guard catches a peer who
+	// transitions in between the SELECT and the UPDATE.
+	tx, err := s.db.Begin()
 	if err != nil {
+		return model.Finding{}, err
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var existingPayload string
+	if err := tx.QueryRow(`SELECT payload FROM findings WHERE id = ?`, id).Scan(&existingPayload); err != nil {
+		return model.Finding{}, mapSQLError(err)
+	}
+	finding, err := unmarshalPayload[model.Finding](existingPayload)
+	if err != nil {
+		return model.Finding{}, err
+	}
+	if err := model.ValidateFindingTransition(finding.State, state); err != nil {
 		return model.Finding{}, err
 	}
 	finding.State = state
 	finding.UpdatedAt = updatedAt
-	if err := s.SaveFinding(finding); err != nil {
+	payload, err := marshalPayload(finding)
+	if err != nil {
 		return model.Finding{}, err
 	}
+	// CAS guard: only succeed if the state column still matches the
+	// state we just validated against. A peer who flipped the row
+	// in between the SELECT and the UPDATE makes RowsAffected==0
+	// and we return ErrConflict, which the app layer surfaces as a
+	// retry-required error rather than a silent overwrite.
+	result, err := tx.Exec(
+		`UPDATE findings SET state = ?, updated_at = ?, payload = ? WHERE id = ? AND state = ?`,
+		string(state),
+		timeString(updatedAt),
+		payload,
+		id,
+		string(FindingOpenForCAS),
+	)
+	if err != nil {
+		return model.Finding{}, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return model.Finding{}, err
+	}
+	if affected != 1 {
+		return model.Finding{}, store.ErrConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Finding{}, err
+	}
+	tx = nil
 	return finding, nil
 }
+
+// FindingOpenForCAS pins the only legal source state for the CAS
+// guard above. ValidateFindingTransition already rejected anything
+// else; this constant is a documentation anchor so a future
+// reviewer sees why the WHERE clause hardcodes "open".
+const FindingOpenForCAS = model.FindingOpen
 
 func (s *Store) AppendUsage(record model.UsageRecord) error {
 	payload, err := marshalPayload(record)

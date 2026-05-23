@@ -286,10 +286,18 @@ func (s *Store) UpdateFindingState(id string, state model.FindingState, updatedA
 	if !ok {
 		return model.Finding{}, store.ErrNotFound
 	}
+	// Architect-flagged P0: validate Finding state transitions
+	// rather than overwriting silently. Mirrors the memory and
+	// sqlite backends so all three behave identically.
+	if err := model.ValidateFindingTransition(finding.State, state); err != nil {
+		return model.Finding{}, err
+	}
+	previous := finding
 	finding.State = state
 	finding.UpdatedAt = updatedAt
 	s.state.Findings[id] = finding
 	if err := s.persistLocked(); err != nil {
+		s.state.Findings[id] = previous
 		return model.Finding{}, err
 	}
 	return finding, nil
