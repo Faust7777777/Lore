@@ -937,7 +937,7 @@ func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	switch sub[0] {
 	case "list":
-		workDir, stateFilter, limit, err := parsePersonaListFlags(sub[1:], stderr)
+		workDir, stateFilter, limit, asJSON, err := parsePersonaListFlags(sub[1:], stderr)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -952,6 +952,13 @@ func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		if err != nil {
 			fmt.Fprintf(stderr, "persona candidates list: %v\n", err)
 			return 1
+		}
+		if asJSON {
+			if err := emitPersonaCandidateListJSON(stdout, workDir, stateFilter, limit, records); err != nil {
+				fmt.Fprintf(stderr, "persona candidates list: emit json: %v\n", err)
+				return 1
+			}
+			return 0
 		}
 		renderPersonaCandidateList(stdout, stateFilter, records)
 		return 0
@@ -1065,14 +1072,15 @@ func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 }
 
-func parsePersonaListFlags(args []string, stderr io.Writer) (string, persona.PersonaCandidateState, int, error) {
+func parsePersonaListFlags(args []string, stderr io.Writer) (string, persona.PersonaCandidateState, int, bool, error) {
 	flags := flag.NewFlagSet("persona candidates list", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
 	limit := flags.Int("limit", 20, "maximum candidates to show (0 = no limit)")
 	state := flags.String("state", "open", "candidate state to list: open, drafted, dismissed")
+	asJSON := flags.Bool("json", false, "emit candidates as a JSON object instead of the tab-delimited table")
 	if err := flags.Parse(args); err != nil {
-		return "", "", 0, err
+		return "", "", 0, false, err
 	}
 	// Reject negative limit explicitly: the store contract treats
 	// limit <= 0 as "no cap", so a user typing --limit -1 would
@@ -1081,19 +1089,19 @@ func parsePersonaListFlags(args []string, stderr io.Writer) (string, persona.Per
 	// --days so the CLI surface behaves consistently across
 	// numeric flags.
 	if *limit < 0 {
-		return "", "", 0, fmt.Errorf("persona candidates list: --limit must be >= 0")
+		return "", "", 0, false, fmt.Errorf("persona candidates list: --limit must be >= 0")
 	}
 	resolved, err := defaultWorkDir(*workDir)
 	if err != nil {
-		return "", "", 0, err
+		return "", "", 0, false, err
 	}
 	wantState := persona.NormalizeCandidateState(persona.PersonaCandidateState(strings.TrimSpace(*state)))
 	switch wantState {
 	case persona.PersonaCandidateOpen, persona.PersonaCandidateDrafted, persona.PersonaCandidateDismissed:
 	default:
-		return "", "", 0, fmt.Errorf("persona candidates list: --state must be one of open, drafted, dismissed")
+		return "", "", 0, false, fmt.Errorf("persona candidates list: --state must be one of open, drafted, dismissed")
 	}
-	return resolved, wantState, *limit, nil
+	return resolved, wantState, *limit, *asJSON, nil
 }
 
 func parsePersonaActionFlags(name string, args []string, stderr io.Writer) (string, string, error) {
@@ -1820,6 +1828,75 @@ func renderPersonaExtractErrors(stdout, stderr io.Writer, logPath string, tail i
 		fmt.Fprintf(stdout, "%d of %d entries shown.\n", len(shown), len(all))
 	}
 	return 0
+}
+
+// emitPersonaCandidateListJSON is the --json counterpart of
+// renderPersonaCandidateList. Stable-shape object mirroring
+// `summary --json` and `errors --json` so the persona CLI is
+// JSON-uniform on the read side. Empty result -> candidates: []
+// (not null) so jq consumers can safely .candidates | length.
+func emitPersonaCandidateListJSON(stdout io.Writer, workDir string, state persona.PersonaCandidateState, limit int, records []persona.PersonaCandidateRecord) error {
+	type candidateOut struct {
+		ID              string `json:"id"`
+		State           string `json:"state"`
+		DraftID         string `json:"draft_id"`
+		DedupKey        string `json:"dedup_key"`
+		CreatedAt       string `json:"created_at"`
+		UpdatedAt       string `json:"updated_at"`
+		Field           string `json:"field"`
+		ProposedValue   string `json:"proposed_value"`
+		CurrentValue    string `json:"current_value"`
+		EvidenceQuote   string `json:"evidence_quote"`
+		Reason          string `json:"reason"`
+		Confidence      string `json:"confidence"`
+		Conflict        bool   `json:"conflict"`
+		SourceKind      string `json:"source_kind"`
+		SourceSessionID string `json:"source_session_id"`
+		ObservedAt      string `json:"observed_at"`
+	}
+	type payload struct {
+		Workdir    string         `json:"workdir"`
+		State      string         `json:"state"`
+		Limit      int            `json:"limit"`
+		Count      int            `json:"count"`
+		Candidates []candidateOut `json:"candidates"`
+	}
+	out := payload{
+		Workdir:    workDir,
+		State:      string(state),
+		Limit:      limit,
+		Count:      len(records),
+		Candidates: []candidateOut{},
+	}
+	for _, r := range records {
+		out.Candidates = append(out.Candidates, candidateOut{
+			ID:              r.ID,
+			State:           string(r.State),
+			DraftID:         r.DraftID,
+			DedupKey:        r.DedupKey,
+			CreatedAt:       r.CreatedAt.UTC().Format(time.RFC3339Nano),
+			UpdatedAt:       r.UpdatedAt.UTC().Format(time.RFC3339Nano),
+			Field:           r.Candidate.Field,
+			ProposedValue:   r.Candidate.ProposedValue,
+			CurrentValue:    r.Candidate.CurrentValue,
+			EvidenceQuote:   r.Candidate.EvidenceQuote,
+			Reason:          r.Candidate.Reason,
+			Confidence:      string(r.Candidate.Confidence),
+			Conflict:        r.Candidate.Conflict,
+			SourceKind:      string(r.Candidate.SourceKind),
+			SourceSessionID: r.Candidate.SourceSessionID,
+			ObservedAt:      r.Candidate.ObservedAt.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return err
+	}
+	if _, err := stdout.Write(encoded); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout)
+	return err
 }
 
 func renderPersonaCandidateList(stdout io.Writer, state persona.PersonaCandidateState, records []persona.PersonaCandidateRecord) {

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -131,6 +132,139 @@ func TestRunPersonaCandidatesListStateFilter(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "No candidates.") {
 		t.Fatalf("open list missing empty marker; got:\n%s", stdout.String())
+	}
+}
+
+func TestRunPersonaCandidatesListJSONShapeIsStable(t *testing.T) {
+	// list --json emits stable-shape object matching summary --json
+	// and errors --json contracts so the persona CLI is uniform on
+	// the read side. Field names are part of the contract.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "list", "--workdir", workDir, "--json"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr = %q", exit, stderr.String())
+	}
+	out := strings.TrimSpace(stdout.String())
+	if strings.Count(out, "\n") != 0 {
+		t.Fatalf("JSON output should be a single line:\n%s", out)
+	}
+
+	var got struct {
+		Workdir    string `json:"workdir"`
+		State      string `json:"state"`
+		Limit      int    `json:"limit"`
+		Count      int    `json:"count"`
+		Candidates []struct {
+			ID              string `json:"id"`
+			State           string `json:"state"`
+			DraftID         string `json:"draft_id"`
+			DedupKey        string `json:"dedup_key"`
+			Field           string `json:"field"`
+			ProposedValue   string `json:"proposed_value"`
+			EvidenceQuote   string `json:"evidence_quote"`
+			Confidence      string `json:"confidence"`
+			Conflict        bool   `json:"conflict"`
+			SourceKind      string `json:"source_kind"`
+			SourceSessionID string `json:"source_session_id"`
+			ObservedAt      string `json:"observed_at"`
+			CreatedAt       string `json:"created_at"`
+			UpdatedAt       string `json:"updated_at"`
+			Reason          string `json:"reason"`
+			CurrentValue    string `json:"current_value"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\nstdout: %s", err, out)
+	}
+	if got.Workdir != workDir {
+		t.Fatalf("workdir = %q, want %q", got.Workdir, workDir)
+	}
+	if got.State != "open" {
+		t.Fatalf("state = %q, want open", got.State)
+	}
+	if got.Count != 1 || len(got.Candidates) != 1 {
+		t.Fatalf("count = %d, candidates = %d, want both 1", got.Count, len(got.Candidates))
+	}
+	c := got.Candidates[0]
+	if c.ID != candidateID {
+		t.Fatalf("id = %q, want %q", c.ID, candidateID)
+	}
+	if c.State != "open" {
+		t.Fatalf("state = %q, want open", c.State)
+	}
+	if c.DraftID != "" {
+		t.Fatalf("draft_id = %q, want empty for open candidate", c.DraftID)
+	}
+	if c.Field != "major" || c.ProposedValue != "economics" {
+		t.Fatalf("field/value mismatch: %+v", c)
+	}
+	if c.Confidence != "high" || c.Conflict {
+		t.Fatalf("confidence/conflict mismatch: %+v", c)
+	}
+	if c.SourceKind != "console" {
+		t.Fatalf("source_kind = %q, want console", c.SourceKind)
+	}
+	if c.DedupKey == "" {
+		t.Fatalf("dedup_key empty")
+	}
+}
+
+func TestRunPersonaCandidatesListJSONEmptyReturnsArrayNotNull(t *testing.T) {
+	// Empty result must serialize candidates as [] not null so jq
+	// consumers can safely .candidates | length without a nil
+	// dereference.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	openRuntimeForPersonaCLITest(t, workDir) // bootstrap workdir
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "list", "--workdir", workDir, "--json"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr = %q", exit, stderr.String())
+	}
+	out := strings.TrimSpace(stdout.String())
+	// Must contain literal `"candidates":[]` rather than null/missing.
+	if !strings.Contains(out, `"candidates":[]`) {
+		t.Fatalf("empty list should serialize as `\"candidates\":[]`, got:\n%s", out)
+	}
+}
+
+func TestRunPersonaCandidatesListJSONHonorsStateFilter(t *testing.T) {
+	// --state drafted + --json filters server-side; the JSON
+	// object's state field echoes the filter so consumers don't
+	// have to track which query produced which file.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+	if exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, candidateID}, &bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{}, "test"); exit != 0 {
+		t.Fatalf("seed draft exit = %d", exit)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "list", "--workdir", workDir, "--state", "drafted", "--json"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr = %q", exit, stderr.String())
+	}
+	var got struct {
+		State      string `json:"state"`
+		Count      int    `json:"count"`
+		Candidates []struct {
+			State   string `json:"state"`
+			DraftID string `json:"draft_id"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout.String())), &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got.State != "drafted" {
+		t.Fatalf("state = %q, want drafted (filter echo)", got.State)
+	}
+	if got.Count != 1 || got.Candidates[0].State != "drafted" || got.Candidates[0].DraftID == "" {
+		t.Fatalf("expected one drafted candidate with non-empty DraftID, got %+v", got)
 	}
 }
 
