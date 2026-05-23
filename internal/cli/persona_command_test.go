@@ -135,6 +135,121 @@ func TestRunPersonaCandidatesListStateFilter(t *testing.T) {
 	}
 }
 
+func TestRunPersonaCandidatesShowJSONWorksWithIDFirst(t *testing.T) {
+	// P1 fix from handoff-full-project-review-2026-05-23.md: docs
+	// advertise `show <id> --json` but the Go flag.FlagSet.Parse
+	// stops parsing flags at the first positional, so before the
+	// reorder helper this command silently returned the human
+	// detail block instead of JSON. After the fix both orderings
+	// must work; this test pins the previously-broken form.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "show", "--workdir", workDir, candidateID, "--json"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr=%q", exit, stderr.String())
+	}
+	out := strings.TrimSpace(stdout.String())
+	if !strings.HasPrefix(out, "{") {
+		t.Fatalf("expected JSON output (starts with '{'), got:\n%s", out)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\nstdout: %s", err, out)
+	}
+	if got["id"] != candidateID {
+		t.Fatalf("id = %v, want %q", got["id"], candidateID)
+	}
+}
+
+func TestRunPersonaCandidatesDraftRetryRejectedWorksWithIDFirst(t *testing.T) {
+	// Same P1 fix: `draft <id> --retry-rejected` must actually take
+	// the retry path. Without the reorder helper --retry-rejected
+	// was treated as a positional and ignored, silently routing to
+	// the first-time-promote path.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID, originalDraftID := seedLinkedAndRejectedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "draft", "--workdir", workDir, candidateID, "--retry-rejected"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr=%q", exit, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Action: draft (retry-rejected)") {
+		t.Fatalf("ID-first --retry-rejected should take the retry path; output:\n%s", out)
+	}
+	newDraftID := extractDraftIDFromOutput(t, out)
+	if newDraftID == originalDraftID {
+		t.Fatalf("retry returned same DraftID %q as the rejected one (flag-order regression)", newDraftID)
+	}
+}
+
+func TestRunPersonaCandidatesRecoverLinkWorksWithIDFirst(t *testing.T) {
+	// `recover <id> --link <draft-id>` form. Before the reorder
+	// helper recover would error on "exactly one of --link or
+	// --force-dismiss is required" because --link was being
+	// treated as a positional.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	partialID := forcePartialDraftedCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, configtest.IsolatedOptions(t))
+	if err != nil {
+		t.Fatalf("orphan OpenRuntime: %v", err)
+	}
+	orphanResult, err := runtime.Harness.ProposePersonaUpdate(model.PersonaUpdateProposal{
+		Field:         "major",
+		ProposedValue: "economics",
+		Evidence:      "I major in economics",
+		Reason:        "orphan for id-first recover test",
+		Confidence:    "high",
+		Source:        "console",
+		ObservedAt:    time.Date(2026, 5, 23, 10, 0, 0, 0, time.UTC),
+	}, time.Date(2026, 5, 23, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		runtime.Close()
+		t.Fatalf("orphan ProposePersonaUpdate: %v", err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("orphan close runtime: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "recover", "--workdir", workDir, partialID, "--link", orphanResult.DraftID}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr=%q", exit, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Action: recover --link") {
+		t.Fatalf("ID-first --link should take the recover path; output:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), orphanResult.DraftID) {
+		t.Fatalf("output missing linked DraftID %q:\n%s", orphanResult.DraftID, stdout.String())
+	}
+}
+
+func TestRunPersonaCandidatesRecoverForceDismissWorksWithIDFirst(t *testing.T) {
+	// `recover <id> --force-dismiss` form.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	partialID := forcePartialDraftedCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "recover", "--workdir", workDir, partialID, "--force-dismiss"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr=%q", exit, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Action: recover --force-dismiss") {
+		t.Fatalf("ID-first --force-dismiss should take the force-dismiss path; output:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "State:  dismissed") {
+		t.Fatalf("output missing dismissed transition:\n%s", stdout.String())
+	}
+}
+
 func TestRunPersonaCandidatesShowJSONMatchesListEntryShape(t *testing.T) {
 	// show --json returns a single object with the same field set
 	// as one entry of list --json candidates[]. This is the

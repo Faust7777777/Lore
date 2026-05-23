@@ -1086,6 +1086,7 @@ func parsePersonaListFlags(args []string, stderr io.Writer) (string, persona.Per
 	limit := flags.Int("limit", 20, "maximum candidates to show (0 = no limit)")
 	state := flags.String("state", "open", "candidate state to list: open, drafted, dismissed")
 	asJSON := flags.Bool("json", false, "emit candidates as a JSON object instead of the tab-delimited table")
+	args = reorderFlagsBeforePositionals(args, flags)
 	if err := flags.Parse(args); err != nil {
 		return "", "", 0, false, err
 	}
@@ -1121,6 +1122,7 @@ func parsePersonaShowDismissFlags(name string, args []string, stderr io.Writer) 
 	flags.SetOutput(stderr)
 	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
 	asJSON := flags.Bool("json", false, "emit the candidate as a JSON object (show only; dismiss ignores this flag)")
+	args = reorderFlagsBeforePositionals(args, flags)
 	if err := flags.Parse(args); err != nil {
 		return "", "", false, err
 	}
@@ -1146,6 +1148,7 @@ func parsePersonaDraftFlags(args []string, stderr io.Writer) (string, string, bo
 	flags.SetOutput(stderr)
 	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
 	retryRejected := flags.Bool("retry-rejected", false, "retry a candidate whose previous draft is rejected, expired, or superseded")
+	args = reorderFlagsBeforePositionals(args, flags)
 	if err := flags.Parse(args); err != nil {
 		return "", "", false, err
 	}
@@ -1170,6 +1173,7 @@ func parsePersonaRecoverFlags(args []string, stderr io.Writer) (string, string, 
 	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
 	linkDraftID := flags.String("link", "", "link the candidate to an existing orphan persona_update draft")
 	forceDismiss := flags.Bool("force-dismiss", false, "abandon a partial drafted candidate by transitioning it to dismissed")
+	args = reorderFlagsBeforePositionals(args, flags)
 	if err := flags.Parse(args); err != nil {
 		return "", "", "", false, err
 	}
@@ -1286,6 +1290,7 @@ func runPersonaSummaryCommand(args []string, stdout io.Writer, stderr io.Writer)
 	workDirFlag := flags.String("workdir", "", "workdir that contains vault/ and state/")
 	failOnOrphan := flags.Bool("fail-on-orphan", false, "exit with code 2 if any candidate is in the partial-orphan shape (Drafted with empty DraftID)")
 	asJSON := flags.Bool("json", false, "emit the dashboard as a single-line JSON object instead of the human-formatted block")
+	args = reorderFlagsBeforePositionals(args, flags)
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -1550,6 +1555,7 @@ func parsePersonaErrorsFlags(args []string, stderr io.Writer) (workDir string, t
 	stageFlag := flags.String("stage", "", "filter by stage: extract, store, parse_warning (empty = all)")
 	sinceFlag := flags.Duration("since", 0, "only show lines newer than this duration (e.g. 1h, 30m; 0 = no time filter)")
 	jsonFlag := flags.Bool("json", false, "emit filtered entries as a JSON object instead of the tab-delimited log lines")
+	args = reorderFlagsBeforePositionals(args, flags)
 	if parseErr := flags.Parse(args); parseErr != nil {
 		err = parseErr
 		return
@@ -2562,6 +2568,75 @@ func defaultWorkDir(value string) (string, error) {
 		return "", err
 	}
 	return filepath.Clean(cwd), nil
+}
+
+// reorderFlagsBeforePositionals shuffles args so every recognized
+// flag (and its value, for non-boolean flags) appears before any
+// positional argument.
+//
+// Go's stdlib `flag.FlagSet.Parse` stops processing flags at the
+// first positional argument, so `lore persona candidates show pc-1
+// --json` would treat `--json` as an unknown positional rather than
+// setting the boolean. Reordering before Parse lets the operator
+// write flags after the ID the way `git`, `kubectl`, and most
+// modern CLIs do, without pulling in a POSIX-style flag library.
+//
+// flagSet MUST have all flags defined before this is called; the
+// reorder logic uses `flags.Lookup(name)` + the optional
+// IsBoolFlag interface to decide whether the next arg is the
+// flag's value or a positional. Unknown flag-shaped args are
+// passed through to the front so flag.Parse can produce its
+// normal "unknown flag" error.
+func reorderFlagsBeforePositionals(args []string, flagSet *flag.FlagSet) []string {
+	var flagArgs, positionals []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		// Standard "--" terminator: everything after it is positional.
+		if arg == "--" {
+			positionals = append(positionals, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positionals = append(positionals, arg)
+			continue
+		}
+		// Strip leading dashes to get the flag name (with optional
+		// =value suffix attached).
+		name := strings.TrimLeft(arg, "-")
+		eq := strings.IndexByte(name, '=')
+		explicitValue := eq >= 0
+		if explicitValue {
+			name = name[:eq]
+		}
+		f := flagSet.Lookup(name)
+		if f == nil {
+			// Unknown flag; let flag.Parse report the error in its
+			// usual format. Push the arg as-is to the flag side so
+			// Parse sees it before any positional.
+			flagArgs = append(flagArgs, arg)
+			continue
+		}
+		flagArgs = append(flagArgs, arg)
+		if explicitValue {
+			continue
+		}
+		// Bool flags do not consume the next arg; value flags do.
+		if isBoolFlag(f) {
+			continue
+		}
+		if i+1 < len(args) {
+			i++
+			flagArgs = append(flagArgs, args[i])
+		}
+	}
+	return append(flagArgs, positionals...)
+}
+
+func isBoolFlag(f *flag.Flag) bool {
+	if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok {
+		return bf.IsBoolFlag()
+	}
+	return false
 }
 func parseConsoleFlags(args []string, stderr io.Writer) (string, string, bool, bool, string, error) {
 	flags := flag.NewFlagSet("console", flag.ContinueOnError)
