@@ -33,6 +33,20 @@ func (e *TransportError) Unwrap() error {
 	return e.Err
 }
 
+// FrameSizeError reports that a stdio response frame advertised a
+// Content-Length larger than the configured maximum.
+type FrameSizeError struct {
+	ContentLength int
+	MaxBytes      int
+}
+
+func (e *FrameSizeError) Error() string {
+	if e == nil {
+		return "lore frame too large"
+	}
+	return fmt.Sprintf("lore frame too large: content-length %d exceeds max %d", e.ContentLength, e.MaxBytes)
+}
+
 type JSONRPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`

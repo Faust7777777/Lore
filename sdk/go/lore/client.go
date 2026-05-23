@@ -6,6 +6,9 @@ type Options struct {
 	Command   string
 	WorkDir   string
 	ClientKey string
+	// MaxFrameBytes caps a single stdio response frame accepted from
+	// the child process. Values <= 0 use DefaultMaxFrameBytes.
+	MaxFrameBytes int
 }
 
 type Client struct {

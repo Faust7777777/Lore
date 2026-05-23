@@ -54,6 +54,8 @@ fmt.Println(resolved.Status)
 
 `ClientKey` is sent to the child process as `LORE_CLIENT_KEY`. It is distinct from the server-side `LORE_MCP_API_KEY` expected by `lore mcp` when process auth is enabled.
 
+`Options.MaxFrameBytes` optionally overrides the maximum stdio response frame accepted from the child process. The default is `lore.DefaultMaxFrameBytes` (10 MiB). Oversized `Content-Length` values fail before payload allocation.
+
 ## Typed Methods
 
 - `ManagedStatus(ctx)`
@@ -89,6 +91,7 @@ Typed methods only send standard argument names. The lower-level `CallTool` acce
 The SDK exposes separate error types:
 
 - `TransportError`: process, pipe, or frame transport failures.
+- `FrameSizeError`: stdio frame `Content-Length` exceeds the configured maximum; it is wrapped by `TransportError`.
 - `JSONRPCError`: JSON-RPC response contains an `error` object.
 - `ToolError`: MCP `tools/call` returns `isError=true`.
 - `DecodeError`: response JSON cannot be decoded into the requested DTO.

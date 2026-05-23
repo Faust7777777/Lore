@@ -16,6 +16,13 @@ func TestErrorTypesSupportStandardMatching(t *testing.T) {
 		t.Fatalf("errors.As(TransportError) = %+v", matchedTransport)
 	}
 
+	frameCause := &FrameSizeError{ContentLength: 64, MaxBytes: 16}
+	framedTransportErr := &TransportError{Op: "read", Err: frameCause}
+	var matchedFrame *FrameSizeError
+	if !errors.As(framedTransportErr, &matchedFrame) || matchedFrame.MaxBytes != 16 {
+		t.Fatalf("errors.As(FrameSizeError) = %+v", matchedFrame)
+	}
+
 	decodeCause := &json.SyntaxError{Offset: 3}
 	decodeErr := &DecodeError{Op: "response", Err: decodeCause}
 	var matchedDecode *DecodeError

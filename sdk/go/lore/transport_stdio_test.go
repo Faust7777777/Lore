@@ -23,6 +23,18 @@ func TestReadFrame(t *testing.T) {
 	}
 }
 
+func TestReadFrameRejectsOverLimitContentLength(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("Content-Length: 32\r\n\r\n"))
+	_, err := readFrameWithLimit(reader, 8)
+	var frameErr *FrameSizeError
+	if !errors.As(err, &frameErr) {
+		t.Fatalf("readFrameWithLimit() error = %T %[1]v, want FrameSizeError", err)
+	}
+	if frameErr.ContentLength != 32 || frameErr.MaxBytes != 8 {
+		t.Fatalf("FrameSizeError = %+v, want content_length=32 max=8", frameErr)
+	}
+}
+
 func TestReadResponseFrameReturnsJSONRPCError(t *testing.T) {
 	payload := `{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}`
 	reader := bufio.NewReader(strings.NewReader(frame(payload)))
@@ -32,6 +44,29 @@ func TestReadResponseFrameReturnsJSONRPCError(t *testing.T) {
 	}
 	if response.Error == nil || response.Error.Code != -32601 {
 		t.Fatalf("response error = %+v", response.Error)
+	}
+}
+
+func TestCallRejectsOverLimitResponseFrame(t *testing.T) {
+	transport := &stdioTransport{
+		stdin:         nopWriteCloser{Writer: io.Discard},
+		stdout:        bufio.NewReader(strings.NewReader("Content-Length: 64\r\n\r\n")),
+		maxFrameBytes: 16,
+	}
+	transport.nextID.Store(1)
+	client := &Client{transport: transport}
+
+	_, err := client.Tools(context.Background())
+	var transportErr *TransportError
+	if !errors.As(err, &transportErr) {
+		t.Fatalf("Tools() error = %T %[1]v, want TransportError", err)
+	}
+	var frameErr *FrameSizeError
+	if !errors.As(err, &frameErr) {
+		t.Fatalf("Tools() error = %T %[1]v, want wrapped FrameSizeError", err)
+	}
+	if frameErr.ContentLength != 64 || frameErr.MaxBytes != 16 {
+		t.Fatalf("FrameSizeError = %+v, want content_length=64 max=16", frameErr)
 	}
 }
 

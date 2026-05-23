@@ -14,14 +14,19 @@ import (
 	"sync/atomic"
 )
 
+// DefaultMaxFrameBytes is the default maximum stdio response frame
+// accepted by the SDK transport.
+const DefaultMaxFrameBytes = 10 * 1024 * 1024
+
 type stdioTransport struct {
-	cmd          *exec.Cmd
-	stdin        io.WriteCloser
-	stdout       *bufio.Reader
-	stdoutCloser io.Closer
-	mu           sync.Mutex
-	nextID       atomic.Int64
-	closed       bool
+	cmd           *exec.Cmd
+	stdin         io.WriteCloser
+	stdout        *bufio.Reader
+	stdoutCloser  io.Closer
+	mu            sync.Mutex
+	nextID        atomic.Int64
+	closed        bool
+	maxFrameBytes int
 }
 
 type requestEnvelope struct {
@@ -68,10 +73,11 @@ func startStdioTransport(ctx context.Context, opts Options) (*stdioTransport, er
 		return nil, &TransportError{Op: "start", Err: err}
 	}
 	transport := &stdioTransport{
-		cmd:          cmd,
-		stdin:        stdin,
-		stdout:       bufio.NewReader(stdout),
-		stdoutCloser: stdout,
+		cmd:           cmd,
+		stdin:         stdin,
+		stdout:        bufio.NewReader(stdout),
+		stdoutCloser:  stdout,
+		maxFrameBytes: normalizeMaxFrameBytes(opts.MaxFrameBytes),
 	}
 	transport.nextID.Store(1)
 	return transport, nil
@@ -169,7 +175,7 @@ func (t *stdioTransport) readResponse(ctx context.Context) (responseEnvelope, er
 	}
 	ch := make(chan result, 1)
 	go func() {
-		response, err := readResponseFrame(t.stdout)
+		response, err := readResponseFrameWithLimit(t.stdout, t.maxFrameLimit())
 		ch <- result{response: response, err: err}
 	}()
 	select {
@@ -207,7 +213,11 @@ func (t *stdioTransport) closeAfterCanceledCall() error {
 }
 
 func readResponseFrame(reader *bufio.Reader) (responseEnvelope, error) {
-	payload, err := readFrame(reader)
+	return readResponseFrameWithLimit(reader, DefaultMaxFrameBytes)
+}
+
+func readResponseFrameWithLimit(reader *bufio.Reader, maxFrameBytes int) (responseEnvelope, error) {
+	payload, err := readFrameWithLimit(reader, maxFrameBytes)
 	if err != nil {
 		return responseEnvelope{}, &TransportError{Op: "read", Err: err}
 	}
@@ -219,6 +229,11 @@ func readResponseFrame(reader *bufio.Reader) (responseEnvelope, error) {
 }
 
 func readFrame(reader *bufio.Reader) ([]byte, error) {
+	return readFrameWithLimit(reader, DefaultMaxFrameBytes)
+}
+
+func readFrameWithLimit(reader *bufio.Reader, maxFrameBytes int) ([]byte, error) {
+	maxFrameBytes = normalizeMaxFrameBytes(maxFrameBytes)
 	contentLength := -1
 	for {
 		line, err := reader.ReadString('\n')
@@ -242,7 +257,24 @@ func readFrame(reader *bufio.Reader) ([]byte, error) {
 	if contentLength < 0 {
 		return nil, io.ErrUnexpectedEOF
 	}
+	if contentLength > maxFrameBytes {
+		return nil, &FrameSizeError{ContentLength: contentLength, MaxBytes: maxFrameBytes}
+	}
 	payload := make([]byte, contentLength)
 	_, err := io.ReadFull(reader, payload)
 	return payload, err
+}
+
+func (t *stdioTransport) maxFrameLimit() int {
+	if t == nil {
+		return DefaultMaxFrameBytes
+	}
+	return normalizeMaxFrameBytes(t.maxFrameBytes)
+}
+
+func normalizeMaxFrameBytes(value int) int {
+	if value <= 0 {
+		return DefaultMaxFrameBytes
+	}
+	return value
 }

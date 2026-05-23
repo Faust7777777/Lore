@@ -25,12 +25,14 @@ Initial in-repository SDK preview.
 - Public DTOs matching the MCP `structuredContent` JSON shapes.
 - Error types:
   - `TransportError`
+  - `FrameSizeError`
   - `JSONRPCError`
   - `ToolError`
   - `DecodeError`
 - Opt-in E2E smoke test gated by `LORE_SDK_E2E=1`.
 - README quickstart, argument contract, error handling notes, and E2E command.
 - SDK-facing MCP tool contract artifact at `docs/contracts/mcp-sdk-tools-v0.json`.
+- Configurable stdio response frame cap through `Options.MaxFrameBytes`, defaulting to 10 MiB.
 
 ### Contract
 
