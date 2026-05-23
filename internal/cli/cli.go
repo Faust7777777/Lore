@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1503,7 +1504,7 @@ func renderPersonaSummary(stdout io.Writer, workDir, logPath string, openN, draf
 // Runtime.PersonaExtractLogPath), so a future move of the log to
 // a different subpath needs no CLI change.
 func runPersonaErrorsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	workDir, tail, stageFilter, since, err := parsePersonaErrorsFlags(args, stderr)
+	workDir, tail, stageFilter, since, asJSON, err := parsePersonaErrorsFlags(args, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -1514,16 +1515,20 @@ func runPersonaErrorsCommand(args []string, stdout io.Writer, stderr io.Writer) 
 		return 1
 	}
 	defer closeRuntime(stderr, runtime, "persona errors")
+	if asJSON {
+		return emitPersonaExtractErrorsJSON(stdout, stderr, runtime.PersonaExtractLogPath(), tail, stageFilter, since, time.Now().UTC())
+	}
 	return renderPersonaExtractErrors(stdout, stderr, runtime.PersonaExtractLogPath(), tail, stageFilter, since, time.Now().UTC())
 }
 
-func parsePersonaErrorsFlags(args []string, stderr io.Writer) (workDir string, tail int, stage string, since time.Duration, err error) {
+func parsePersonaErrorsFlags(args []string, stderr io.Writer) (workDir string, tail int, stage string, since time.Duration, asJSON bool, err error) {
 	flags := flag.NewFlagSet("persona errors", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	workDirFlag := flags.String("workdir", "", "workdir that contains vault/ and state/")
 	tailFlag := flags.Int("tail", 20, "show only the last N matching lines (0 = no limit)")
 	stageFlag := flags.String("stage", "", "filter by stage: extract, store, parse_warning (empty = all)")
 	sinceFlag := flags.Duration("since", 0, "only show lines newer than this duration (e.g. 1h, 30m; 0 = no time filter)")
+	jsonFlag := flags.Bool("json", false, "emit filtered entries as a JSON object instead of the tab-delimited log lines")
 	if parseErr := flags.Parse(args); parseErr != nil {
 		err = parseErr
 		return
@@ -1553,6 +1558,7 @@ func parsePersonaErrorsFlags(args []string, stderr io.Writer) (workDir string, t
 	tail = *tailFlag
 	stage = strings.TrimSpace(*stageFlag)
 	since = *sinceFlag
+	asJSON = *jsonFlag
 	return
 }
 
@@ -1585,6 +1591,148 @@ func parsePersonaLogLine(raw string) personaLogEntry {
 		stage:  strings.TrimPrefix(fields[1], "stage="),
 		parsed: true,
 	}
+}
+
+// emitPersonaExtractErrorsJSON is the --json counterpart of
+// renderPersonaExtractErrors. Filter semantics (stage, since, tail)
+// are identical; the difference is the output shape:
+//
+//	{
+//	  "log_path": "...",
+//	  "filter": {"tail": N, "stage": "...", "since_seconds": N},
+//	  "summary": {"total_entries": N, "shown": N},
+//	  "entries": [
+//	    {"timestamp": "RFC3339", "stage": "...", "session": "...", "error": "...", "raw": "..."},
+//	    ...
+//	  ]
+//	}
+//
+// Lines that fail to parse appear with the canonical fields blank
+// and the verbatim raw line preserved so a downstream consumer
+// can still see them. Missing log file degrades to a single-shot
+// summary block with entries=[] and total_entries=0; exit code
+// stays 0.
+func emitPersonaExtractErrorsJSON(stdout, stderr io.Writer, logPath string, tail int, stageFilter string, since time.Duration, now time.Time) int {
+	type entryOut struct {
+		Timestamp string `json:"timestamp"`
+		Stage     string `json:"stage"`
+		Session   string `json:"session"`
+		Error     string `json:"error"`
+		Raw       string `json:"raw"`
+	}
+	type filterOut struct {
+		Tail         int    `json:"tail"`
+		Stage        string `json:"stage"`
+		SinceSeconds int64  `json:"since_seconds"`
+	}
+	type summaryOut struct {
+		TotalEntries int `json:"total_entries"`
+		Shown        int `json:"shown"`
+	}
+	type payload struct {
+		LogPath string     `json:"log_path"`
+		Filter  filterOut  `json:"filter"`
+		Summary summaryOut `json:"summary"`
+		Entries []entryOut `json:"entries"`
+	}
+
+	out := payload{
+		LogPath: logPath,
+		Filter: filterOut{
+			Tail:         tail,
+			Stage:        stageFilter,
+			SinceSeconds: int64(since.Seconds()),
+		},
+		Entries: []entryOut{},
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			encoded, mErr := json.Marshal(out)
+			if mErr != nil {
+				fmt.Fprintf(stderr, "persona errors: emit json: %v\n", mErr)
+				return 1
+			}
+			_, _ = stdout.Write(encoded)
+			_, _ = fmt.Fprintln(stdout)
+			return 0
+		}
+		fmt.Fprintf(stderr, "persona errors: read log: %v\n", err)
+		return 1
+	}
+
+	var cutoff time.Time
+	if since > 0 {
+		cutoff = now.Add(-since)
+	}
+	var all []personaLogEntry
+	for _, raw := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		all = append(all, parsePersonaLogLine(raw))
+	}
+
+	filtered := make([]personaLogEntry, 0, len(all))
+	for _, e := range all {
+		if stageFilter != "" && (!e.parsed || e.stage != stageFilter) {
+			continue
+		}
+		if since > 0 {
+			if e.ts.IsZero() || e.ts.Before(cutoff) {
+				continue
+			}
+		}
+		filtered = append(filtered, e)
+	}
+	shown := filtered
+	if tail > 0 && len(filtered) > tail {
+		shown = filtered[len(filtered)-tail:]
+	}
+
+	out.Summary.TotalEntries = len(all)
+	out.Summary.Shown = len(shown)
+	for _, e := range shown {
+		entry := entryOut{Raw: e.raw}
+		if e.parsed {
+			entry.Timestamp = e.ts.UTC().Format(time.RFC3339Nano)
+			entry.Stage = e.stage
+			// Session and error are inside the tab-delimited line;
+			// re-extract them here so JSON consumers do not have
+			// to re-parse the raw field. Format guaranteed by
+			// session.go's logPersonaExtractError helper:
+			//   <ts>\tstage=<x>\tsession=<y>\terror=<quoted>\n
+			fields := strings.Split(e.raw, "\t")
+			if len(fields) >= 4 {
+				entry.Session = strings.TrimPrefix(fields[2], "session=")
+				entry.Error = unquoteSafe(strings.TrimPrefix(fields[3], "error="))
+			}
+		}
+		out.Entries = append(out.Entries, entry)
+	}
+
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		fmt.Fprintf(stderr, "persona errors: emit json: %v\n", err)
+		return 1
+	}
+	_, _ = stdout.Write(encoded)
+	_, _ = fmt.Fprintln(stdout)
+	return 0
+}
+
+// unquoteSafe applies strconv.Unquote when the input is a quoted
+// string, otherwise returns the input verbatim. Used because the
+// log writer formats errors as %q which produces a quoted string,
+// and JSON consumers want the unquoted value.
+func unquoteSafe(s string) string {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		if unquoted, err := strconv.Unquote(s); err == nil {
+			return unquoted
+		}
+	}
+	return s
 }
 
 // renderPersonaExtractErrors reads the persona-extract.log file at
