@@ -86,7 +86,7 @@ console / TUI user turn
 
 ```
 lore persona candidates list   [--workdir <p>] [--state open|drafted|dismissed] [--limit N] [--json]
-lore persona candidates show   <id> [--workdir <p>]
+lore persona candidates show   <id> [--workdir <p>] [--json]
 lore persona candidates dismiss <id> [--workdir <p>]
 lore persona candidates draft  <id> [--workdir <p>] [--retry-rejected]
 lore persona candidates recover <id> [--workdir <p>] --link <draft-id>
@@ -366,6 +366,7 @@ the linked review-handoff for the original analysis.
 | `4916ef3` | B-P11e+ | summary --json stable-shape output for monitoring |
 | `3db071b` | B-P11c+ | errors --json symmetry with summary --json |
 | `a242fcb` | B-P5+P6+ | list --json completes the JSON-uniform read surface |
+| `fba6161` | B-P5+P6+ | show --json matches list[i] shape byte-for-byte |
 
 Plus per-slice handoffs under
 `docs/archive/review-handoff/review-handoff-b-line-*` and the
