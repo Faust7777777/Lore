@@ -963,7 +963,7 @@ func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		renderPersonaCandidateList(stdout, stateFilter, records)
 		return 0
 	case "show", "dismiss":
-		workDir, candidateID, err := parsePersonaActionFlags("persona candidates "+sub[0], sub[1:], stderr)
+		workDir, candidateID, asJSON, err := parsePersonaShowDismissFlags("persona candidates "+sub[0], sub[1:], stderr)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -981,6 +981,13 @@ func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			if err != nil {
 				fmt.Fprintf(stderr, "persona candidates show: %v\n", err)
 				return 1
+			}
+			if asJSON {
+				if err := emitPersonaCandidateDetailJSON(stdout, record); err != nil {
+					fmt.Fprintf(stderr, "persona candidates show: emit json: %v\n", err)
+					return 1
+				}
+				return 0
 			}
 			renderPersonaCandidateDetail(stdout, record)
 		case "dismiss":
@@ -1104,22 +1111,28 @@ func parsePersonaListFlags(args []string, stderr io.Writer) (string, persona.Per
 	return resolved, wantState, *limit, *asJSON, nil
 }
 
-func parsePersonaActionFlags(name string, args []string, stderr io.Writer) (string, string, error) {
+// parsePersonaShowDismissFlags handles both `show` and `dismiss`
+// subcommands. --json is accepted by both but only `show` honors
+// it today; `dismiss` ignores it (no JSON output for a mutating
+// command, by design -- the mutation result is already a small
+// fixed shape and JSON would just rename the labels).
+func parsePersonaShowDismissFlags(name string, args []string, stderr io.Writer) (string, string, bool, error) {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	workDir := flags.String("workdir", "", "workdir that contains vault/ and state/")
+	asJSON := flags.Bool("json", false, "emit the candidate as a JSON object (show only; dismiss ignores this flag)")
 	if err := flags.Parse(args); err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 	remaining := flags.Args()
 	if len(remaining) == 0 || strings.TrimSpace(remaining[0]) == "" {
-		return "", "", fmt.Errorf("%s: persona candidate id is required", name)
+		return "", "", false, fmt.Errorf("%s: persona candidate id is required", name)
 	}
 	resolved, err := defaultWorkDir(*workDir)
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
-	return resolved, strings.TrimSpace(remaining[0]), nil
+	return resolved, strings.TrimSpace(remaining[0]), *asJSON, nil
 }
 
 // parsePersonaDraftFlags accepts --workdir and the new --retry-rejected
@@ -1828,6 +1841,58 @@ func renderPersonaExtractErrors(stdout, stderr io.Writer, logPath string, tail i
 		fmt.Fprintf(stdout, "%d of %d entries shown.\n", len(shown), len(all))
 	}
 	return 0
+}
+
+// emitPersonaCandidateDetailJSON is the --json counterpart of
+// renderPersonaCandidateDetail. Single-candidate shape that
+// matches an element of `list --json` candidates[] so a consumer
+// can interchange `show --json` and `list --json | jq` without
+// schema drift.
+func emitPersonaCandidateDetailJSON(stdout io.Writer, r persona.PersonaCandidateRecord) error {
+	out := struct {
+		ID              string `json:"id"`
+		State           string `json:"state"`
+		DraftID         string `json:"draft_id"`
+		DedupKey        string `json:"dedup_key"`
+		CreatedAt       string `json:"created_at"`
+		UpdatedAt       string `json:"updated_at"`
+		Field           string `json:"field"`
+		ProposedValue   string `json:"proposed_value"`
+		CurrentValue    string `json:"current_value"`
+		EvidenceQuote   string `json:"evidence_quote"`
+		Reason          string `json:"reason"`
+		Confidence      string `json:"confidence"`
+		Conflict        bool   `json:"conflict"`
+		SourceKind      string `json:"source_kind"`
+		SourceSessionID string `json:"source_session_id"`
+		ObservedAt      string `json:"observed_at"`
+	}{
+		ID:              r.ID,
+		State:           string(r.State),
+		DraftID:         r.DraftID,
+		DedupKey:        r.DedupKey,
+		CreatedAt:       r.CreatedAt.UTC().Format(time.RFC3339Nano),
+		UpdatedAt:       r.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		Field:           r.Candidate.Field,
+		ProposedValue:   r.Candidate.ProposedValue,
+		CurrentValue:    r.Candidate.CurrentValue,
+		EvidenceQuote:   r.Candidate.EvidenceQuote,
+		Reason:          r.Candidate.Reason,
+		Confidence:      string(r.Candidate.Confidence),
+		Conflict:        r.Candidate.Conflict,
+		SourceKind:      string(r.Candidate.SourceKind),
+		SourceSessionID: r.Candidate.SourceSessionID,
+		ObservedAt:      r.Candidate.ObservedAt.UTC().Format(time.RFC3339Nano),
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return err
+	}
+	if _, err := stdout.Write(encoded); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout)
+	return err
 }
 
 // emitPersonaCandidateListJSON is the --json counterpart of

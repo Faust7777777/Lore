@@ -135,6 +135,92 @@ func TestRunPersonaCandidatesListStateFilter(t *testing.T) {
 	}
 }
 
+func TestRunPersonaCandidatesShowJSONMatchesListEntryShape(t *testing.T) {
+	// show --json returns a single object with the same field set
+	// as one entry of list --json candidates[]. This is the
+	// contract that lets a consumer swap between `show --json` and
+	// `list --json | jq '.candidates[0]'` without a schema diff.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	candidateID := seedPersonaCandidateCLI(t, workDir, "major", "economics", "I major in economics")
+
+	var showOut, listOut bytes.Buffer
+	if exit := Run([]string{"persona", "candidates", "show", "--workdir", workDir, "--json", candidateID}, &bytes.Buffer{}, &showOut, &bytes.Buffer{}, "test"); exit != 0 {
+		t.Fatalf("show --json exit = %d", exit)
+	}
+	if exit := Run([]string{"persona", "candidates", "list", "--workdir", workDir, "--json"}, &bytes.Buffer{}, &listOut, &bytes.Buffer{}, "test"); exit != 0 {
+		t.Fatalf("list --json exit = %d", exit)
+	}
+
+	var showObj map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(showOut.Bytes()), &showObj); err != nil {
+		t.Fatalf("show --json invalid: %v", err)
+	}
+	var listObj struct {
+		Candidates []map[string]any `json:"candidates"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(listOut.Bytes()), &listObj); err != nil {
+		t.Fatalf("list --json invalid: %v", err)
+	}
+	if len(listObj.Candidates) != 1 {
+		t.Fatalf("list candidates = %d, want 1", len(listObj.Candidates))
+	}
+	// Both objects must share the same set of keys -- shape
+	// contract. A future field added to one but not the other is
+	// the regression this assertion catches.
+	listKeys := keySet(listObj.Candidates[0])
+	showKeys := keySet(showObj)
+	for k := range listKeys {
+		if _, ok := showKeys[k]; !ok {
+			t.Fatalf("show --json missing field %q present in list --json entry", k)
+		}
+	}
+	for k := range showKeys {
+		if _, ok := listKeys[k]; !ok {
+			t.Fatalf("show --json has extra field %q not present in list --json entry", k)
+		}
+	}
+	if showObj["id"] != candidateID {
+		t.Fatalf("id = %v, want %q", showObj["id"], candidateID)
+	}
+	if showObj["draft_id"] != "" {
+		t.Fatalf("draft_id = %v, want empty for open candidate", showObj["draft_id"])
+	}
+}
+
+func TestRunPersonaCandidatesShowJSONNotFoundIsExit1(t *testing.T) {
+	// show --json on a nonexistent id still returns exit 1 (same
+	// as the human-format show); the error lands on stderr as
+	// plain text rather than being inlined into the JSON shape so
+	// consumers that pipe stdout to jq do not see a malformed
+	// document on the error path.
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	openRuntimeForPersonaCLITest(t, workDir)
+
+	var stdout, stderr bytes.Buffer
+	exit := Run([]string{"persona", "candidates", "show", "--workdir", workDir, "--json", "pc-does-not-exist"}, &bytes.Buffer{}, &stdout, &stderr, "test")
+	if exit != 1 {
+		t.Fatalf("exit = %d, want 1 for not-found", exit)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout should be empty on error, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "not found") {
+		t.Fatalf("stderr should mention not-found: %q", stderr.String())
+	}
+}
+
+// keySet collects the top-level keys of a JSON object so two
+// shapes can be compared for field-set equality.
+func keySet(m map[string]any) map[string]struct{} {
+	out := map[string]struct{}{}
+	for k := range m {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
 func TestRunPersonaCandidatesListJSONShapeIsStable(t *testing.T) {
 	// list --json emits stable-shape object matching summary --json
 	// and errors --json contracts so the persona CLI is uniform on
