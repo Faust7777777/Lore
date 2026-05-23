@@ -84,6 +84,14 @@ console / TUI user turn
 
 ## CLI surface
 
+Every `lore persona candidates` subcommand accepts its flags either
+before OR after the positional ID. `show --json <id>` and
+`show <id> --json` are equivalent; same for `draft --retry-rejected
+<id>` and `draft <id> --retry-rejected`. Behavior is handled by the
+`reorderFlagsBeforePositionals` helper in `internal/cli/cli.go`
+(B-line task 1, commit `9c828eb`).
+
+
 ```
 lore persona candidates list   [--workdir <p>] [--state open|drafted|dismissed] [--limit N] [--json]
 lore persona candidates show   <id> [--workdir <p>] [--json]
@@ -367,6 +375,7 @@ the linked review-handoff for the original analysis.
 | `3db071b` | B-P11c+ | errors --json symmetry with summary --json |
 | `a242fcb` | B-P5+P6+ | list --json completes the JSON-uniform read surface |
 | `fba6161` | B-P5+P6+ | show --json matches list[i] shape byte-for-byte |
+| `9c828eb` | B-line task 1 | reorder helper: flags accepted before OR after positional ID |
 
 Plus per-slice handoffs under
 `docs/archive/review-handoff/review-handoff-b-line-*` and the

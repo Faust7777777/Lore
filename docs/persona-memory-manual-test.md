@@ -10,6 +10,21 @@ When this cookbook and the pipeline overview at
 `docs/persona-memory-pipeline.md` disagree, trust the pipeline
 overview (it is the contract anchor) and update this cookbook.
 
+## Flag ordering
+
+All `lore persona candidates` subcommands accept flags either before
+OR after the positional candidate / draft ID. Both of these work
+identically:
+
+```powershell
+lore persona candidates show --workdir $work --json $id
+lore persona candidates show --workdir $work $id --json   # same thing
+```
+
+The cookbook examples below use flag-first for readability; the
+ID-first form is fine when you are pasting an ID from a previous
+output.
+
 ## 0. Prerequisites
 
 - A working `lore` build on PATH (`go build -o lore ./cmd/lore` if
