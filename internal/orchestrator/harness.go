@@ -525,7 +525,14 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 		// draft conflicted; that is the safe fallback, but it
 		// loses the "this draft was actually applied to the
 		// vault" signal. The Finding preserves that signal.
-		h.recordApplyStateFailFinding(draft, targetAbs, at, err)
+		if saveErr := h.recordApplyStateFailFinding(draft, targetAbs, at, err); saveErr != nil {
+			// Worst case: vault changed AND no dashboard record.
+			// Surface both errors in the wrapped message so the
+			// operator knows they must reconcile manually without
+			// help from `lore findings list`. errors.Is still
+			// matches the original state-update error.
+			return model.Draft{}, fmt.Errorf("apply: vault write succeeded but draft state update failed: %w; ALSO failed to emit governance Finding (%v); verify vault file content matches the proposal manually and reconcile -- no automatic recovery record exists", err, saveErr)
+		}
 		return model.Draft{}, fmt.Errorf("apply: vault write succeeded but draft state update failed: %w; a governance Finding was emitted, run `lore findings list` to inspect", err)
 	}
 	h.recordAudit(model.AuditRecord{
@@ -545,15 +552,19 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 
 // recordApplyStateFailFinding emits a critical-severity
 // governance Finding when ApplyDraft completes the vault write
-// but cannot persist the draft's transition to Applied. The
-// Finding includes the underlying state-update error in Detail
-// and the absolute vault path in Metadata so the operator can
-// run a sha256 check against the proposed content. SaveFinding
-// failures are intentionally swallowed: the caller already saw
-// a failed apply and is about to receive a self-describing
-// error; double-failing on the Finding save would only confuse
-// the operator without unblocking recovery.
-func (h *Harness) recordApplyStateFailFinding(draft model.Draft, targetAbs string, at time.Time, stateErr error) {
+// but cannot persist the draft's transition to Applied. Returns
+// the SaveFinding error so the caller can tailor the
+// operator-facing message: a successful emit gives the operator
+// `lore findings list` to inspect; a failed emit must not lie
+// about the dashboard record's existence -- the operator instead
+// learns they have to reconcile by hand without the audit anchor.
+//
+// Reviewer-flagged Medium (B-line task 4 round-2): the original
+// version swallowed SaveFinding errors and the caller always
+// claimed a Finding had been emitted, which would be a false
+// recovery signal if both stores were failing (e.g. disk full
+// affects both drafts and findings tables).
+func (h *Harness) recordApplyStateFailFinding(draft model.Draft, targetAbs string, at time.Time, stateErr error) error {
 	finding := model.Finding{
 		ID:         findingID("apply-state-fail", at),
 		Kind:       model.FindingGovernanceReviewNeeded,
@@ -574,7 +585,7 @@ func (h *Harness) recordApplyStateFailFinding(draft model.Draft, targetAbs strin
 			"state_error": stateErr.Error(),
 		},
 	}
-	_ = h.store.Findings().SaveFinding(finding)
+	return h.store.Findings().SaveFinding(finding)
 }
 
 func findingID(prefix string, at time.Time) string {

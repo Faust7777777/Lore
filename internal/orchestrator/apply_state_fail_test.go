@@ -16,15 +16,20 @@ import (
 )
 
 // stateUpdateFailingStore wraps an underlying StateStore but
-// substitutes its Drafts() with a wrapper whose UpdateDraftState
-// always returns the injected error. Used by
-// TestApplyDraftEmitsGovernanceFindingWhenStateUpdateFails to
-// drive the architect-flagged "vault write succeeded but state
-// persistence failed" recovery path without simulating an actual
-// disk failure on the store.
+// substitutes its Drafts() and Findings() accessors with
+// wrappers whose mutation methods return injected errors. Used
+// to drive both the architect-flagged
+// "write-succeeded/state-fail" recovery path and the
+// reviewer-flagged "Finding emit ALSO fails" path without
+// simulating actual disk failures on the underlying store.
+//
+// Either error may be nil to leave that branch healthy; setting
+// only updateErr exercises the standard recovery path, setting
+// both exercises the double-failure path.
 type stateUpdateFailingStore struct {
-	inner     store.StateStore
-	updateErr error
+	inner      store.StateStore
+	updateErr  error
+	findingErr error
 }
 
 func (s *stateUpdateFailingStore) Drafts() store.DraftStore {
@@ -32,11 +37,35 @@ func (s *stateUpdateFailingStore) Drafts() store.DraftStore {
 }
 func (s *stateUpdateFailingStore) ProcessSink() store.ProcessSinkStore { return s.inner.ProcessSink() }
 func (s *stateUpdateFailingStore) Audit() store.AuditStore             { return s.inner.Audit() }
-func (s *stateUpdateFailingStore) Findings() store.FindingStore        { return s.inner.Findings() }
-func (s *stateUpdateFailingStore) Usage() store.UsageStore             { return s.inner.Usage() }
-func (s *stateUpdateFailingStore) Cursors() store.CursorStore          { return s.inner.Cursors() }
+func (s *stateUpdateFailingStore) Findings() store.FindingStore {
+	if s.findingErr == nil {
+		return s.inner.Findings()
+	}
+	return &failingFindingStore{inner: s.inner.Findings(), saveErr: s.findingErr}
+}
+func (s *stateUpdateFailingStore) Usage() store.UsageStore   { return s.inner.Usage() }
+func (s *stateUpdateFailingStore) Cursors() store.CursorStore { return s.inner.Cursors() }
 func (s *stateUpdateFailingStore) PersonaCandidates() store.PersonaCandidateStore {
 	return s.inner.PersonaCandidates()
+}
+
+// failingFindingStore lets every read/list call through but
+// rejects SaveFinding with the injected error. Used by the
+// double-failure test below.
+type failingFindingStore struct {
+	inner   store.FindingStore
+	saveErr error
+}
+
+func (f *failingFindingStore) SaveFinding(model.Finding) error { return f.saveErr }
+func (f *failingFindingStore) GetFinding(id string) (model.Finding, error) {
+	return f.inner.GetFinding(id)
+}
+func (f *failingFindingStore) ListFindings(limit int) ([]model.Finding, error) {
+	return f.inner.ListFindings(limit)
+}
+func (f *failingFindingStore) UpdateFindingState(id string, state model.FindingState, updatedAt time.Time) (model.Finding, error) {
+	return f.inner.UpdateFindingState(id, state, updatedAt)
 }
 
 type failingDraftStore struct {
@@ -226,11 +255,91 @@ func TestApplyDraftHappyPathDoesNotEmitFinding(t *testing.T) {
 	}
 }
 
+func TestApplyDraftSurfacesFindingSaveFailureInError(t *testing.T) {
+	// Reviewer-flagged Medium (round 2): if SaveFinding ALSO fails
+	// while emitting the recovery Finding, the previous code path
+	// silently swallowed the SaveFinding error and the returned
+	// apply error still told the operator a Finding had been
+	// emitted -- a false recovery signal. This test pins the
+	// corrected behavior: the apply error now includes BOTH
+	// failures and explicitly says no automatic recovery record
+	// exists.
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	inner := memory.New()
+
+	bootstrap, err := New(cfg, inner)
+	if err != nil {
+		t.Fatalf("bootstrap New: %v", err)
+	}
+	if _, err := bootstrap.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault: %v", err)
+	}
+	relPath := filepath.Join("0-排期", "04-执行", "week.md")
+	draft, err := bootstrap.ObserveDocumentChange(relPath, []byte("first pass"), time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ObserveDocumentChange: %v", err)
+	}
+	if _, err := bootstrap.ApproveDraft(draft.ID, time.Date(2026, 4, 22, 10, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("ApproveDraft: %v", err)
+	}
+
+	injectedState := errors.New("simulated state-update failure")
+	injectedSave := errors.New("simulated SaveFinding failure")
+	doubleFailHarness, err := New(cfg, &stateUpdateFailingStore{
+		inner:      inner,
+		updateErr:  injectedState,
+		findingErr: injectedSave,
+	})
+	if err != nil {
+		t.Fatalf("double-fail New: %v", err)
+	}
+
+	_, applyErr := doubleFailHarness.ApplyDraft(draft.ID, time.Date(2026, 4, 22, 10, 6, 0, 0, time.UTC))
+	if applyErr == nil {
+		t.Fatal("ApplyDraft should error in the double-failure scenario")
+	}
+
+	// Apply error must surface BOTH the original state-update
+	// failure AND the SaveFinding failure, and must NOT claim a
+	// Finding was emitted.
+	if !errors.Is(applyErr, injectedState) {
+		t.Fatalf("err = %v, must still wrap the original state-update error", applyErr)
+	}
+	for _, want := range []string{
+		"vault write succeeded but draft state update failed",
+		"ALSO failed to emit governance Finding",
+		injectedSave.Error(),
+		"no automatic recovery record exists",
+	} {
+		if !strings.Contains(applyErr.Error(), want) {
+			t.Fatalf("err = %v, missing %q", applyErr, want)
+		}
+	}
+	if strings.Contains(applyErr.Error(), "Finding was emitted, run `lore findings list`") {
+		t.Fatalf("err = %v, must not claim a Finding was emitted when SaveFinding failed", applyErr)
+	}
+
+	// The findings table on the inner store must be empty -- the
+	// failingFindingStore rejected the SaveFinding call so no
+	// dashboard record landed.
+	findings, err := inner.Findings().ListFindings(0)
+	if err != nil {
+		t.Fatalf("ListFindings: %v", err)
+	}
+	for _, f := range findings {
+		if f.Source == "apply_draft_state_fail" {
+			t.Fatalf("a finding leaked into store despite the injected SaveFinding failure: %+v", f)
+		}
+	}
+}
+
 // Compile-time guard that stateUpdateFailingStore satisfies
 // store.StateStore. Without this, a future interface addition
 // would only fail at the New() call site inside the test.
 var _ store.StateStore = (*stateUpdateFailingStore)(nil)
 var _ store.DraftStore = (*failingDraftStore)(nil)
+var _ store.FindingStore = (*failingFindingStore)(nil)
 
 // Reference fmt so the file-level imports include it even if no
 // other reference remains. Kept as a tiny placeholder so a
