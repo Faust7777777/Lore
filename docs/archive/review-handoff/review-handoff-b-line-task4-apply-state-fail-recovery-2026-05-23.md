@@ -180,3 +180,41 @@ failed"`, then restoring.
   generic `stateUpdateFailingStore` pattern could be promoted
   to a shared test-support package if other store-failure tests
   start materializing.
+
+## Round 2 fix (reviewer-flagged Medium)
+
+Reviewer found a Medium issue on the first version of this
+slice: `recordApplyStateFailFinding` swallowed `SaveFinding`
+errors and the caller always claimed a Finding had been emitted,
+which would be a false recovery signal in the worst case where
+both stores were failing (e.g. shared sqlite handle, disk full).
+Commit `68e265e` addresses this.
+
+Changes:
+
+- `recordApplyStateFailFinding` now returns the SaveFinding
+  error. Its responsibility is just to build and save; reporting
+  the outcome is the caller's.
+- `ApplyDraft` branches on the SaveFinding result:
+  - success: the existing message points the operator at
+    `lore findings list`.
+  - failure: a wrapped message includes BOTH errors and tells
+    the operator "no automatic recovery record exists" so they
+    know they must reconcile by hand without the audit anchor.
+  - `errors.Is` against the original state-update error still
+    works in both branches via the `%w` wrap.
+- New test `TestApplyDraftSurfacesFindingSaveFailureInError`
+  drives the double-failure scenario with a `failingFindingStore`
+  whose SaveFinding returns the injected error. Asserts both
+  errors appear in the apply error, the "no automatic recovery
+  record exists" line is present, and the store-side findings
+  table is genuinely empty.
+- `failingFindingStore` proxies read / list / update calls through
+  to the inner store; only `SaveFinding` is rejected. Compile-time
+  guard `var _ store.FindingStore = (*failingFindingStore)(nil)`
+  catches future interface additions at build time.
+
+Load-bearing verified by temporarily reverting the branch on
+SaveFinding's result (always claim a Finding was emitted) and
+confirming the new test fails on the "ALSO failed to emit
+governance Finding" substring check, then restoring.
