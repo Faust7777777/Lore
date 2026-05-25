@@ -1407,16 +1407,14 @@ func emitPersonaSummaryJSON(stdout io.Writer, workDir, logPath string, openN, dr
 		ExtractLog: extractLog{ByStage: map[string]int{}},
 	}
 
-	data, err := os.ReadFile(logPath)
-	switch {
-	case err == nil:
-		out.ExtractLog.Exists = true
+	all, exists, err := readPersonaLogEntries(logPath)
+	if err != nil {
+		return err
+	}
+	out.ExtractLog.Exists = exists
+	if exists {
 		var latest time.Time
-		for _, raw := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-			if strings.TrimSpace(raw) == "" {
-				continue
-			}
-			entry := parsePersonaLogLine(raw)
+		for _, entry := range all {
 			out.ExtractLog.TotalEntries++
 			if entry.parsed {
 				out.ExtractLog.ByStage[entry.stage]++
@@ -1430,10 +1428,6 @@ func emitPersonaSummaryJSON(stdout io.Writer, workDir, logPath string, openN, dr
 		if !latest.IsZero() {
 			out.ExtractLog.LastEntry = latest.UTC().Format(time.RFC3339)
 		}
-	case os.IsNotExist(err):
-		out.ExtractLog.Exists = false
-	default:
-		return err
 	}
 
 	encoded, err := json.Marshal(out)
@@ -1469,29 +1463,23 @@ func renderPersonaSummary(stdout io.Writer, workDir, logPath string, openN, draf
 	fmt.Fprintln(stdout, "Extract log:")
 	fmt.Fprintf(stdout, "  source: %s\n", logPath)
 
-	data, err := os.ReadFile(logPath)
+	all, exists, err := readPersonaLogEntries(logPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Fprintln(stdout, "  (no log file yet)")
-			return
-		}
 		fmt.Fprintf(stdout, "  (read error: %v)\n", err)
 		return
 	}
-	if len(strings.TrimSpace(string(data))) == 0 {
+	if !exists {
+		fmt.Fprintln(stdout, "  (no log file yet)")
+		return
+	}
+	if len(all) == 0 {
 		fmt.Fprintln(stdout, "  (empty)")
 		return
 	}
 
 	totals := map[string]int{}
 	var latest time.Time
-	total := 0
-	for _, raw := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-		if strings.TrimSpace(raw) == "" {
-			continue
-		}
-		entry := parsePersonaLogLine(raw)
-		total++
+	for _, entry := range all {
 		if entry.parsed {
 			totals[entry.stage]++
 			if entry.ts.After(latest) {
@@ -1501,7 +1489,7 @@ func renderPersonaSummary(stdout io.Writer, workDir, logPath string, openN, draf
 			totals["(malformed)"]++
 		}
 	}
-	fmt.Fprintf(stdout, "  total entries: %d\n", total)
+	fmt.Fprintf(stdout, "  total entries: %d\n", len(all))
 	if len(totals) > 0 {
 		fmt.Fprintln(stdout, "  by stage:")
 		stages := make([]string, 0, len(totals))
@@ -1593,11 +1581,18 @@ func parsePersonaErrorsFlags(args []string, stderr io.Writer) (workDir string, t
 // line. Lines that fail to parse (malformed, truncated) are still
 // retained with parsed=false so the operator sees the raw line; the
 // stage/since filters skip them rather than crashing.
+//
+// session and error are extracted up-front from the third and fourth
+// tab-delimited fields so JSON emit does not have to re-split raw.
+// error is unquoted via unquoteSafe because session.go's
+// logPersonaExtractError formats it as %q.
 type personaLogEntry struct {
-	raw    string
-	ts     time.Time
-	stage  string
-	parsed bool
+	raw     string
+	ts      time.Time
+	stage   string
+	session string
+	errMsg  string
+	parsed  bool
 }
 
 func parsePersonaLogLine(raw string) personaLogEntry {
@@ -1613,11 +1608,37 @@ func parsePersonaLogLine(raw string) personaLogEntry {
 		return personaLogEntry{raw: raw, ts: ts}
 	}
 	return personaLogEntry{
-		raw:    raw,
-		ts:     ts,
-		stage:  strings.TrimPrefix(fields[1], "stage="),
-		parsed: true,
+		raw:     raw,
+		ts:      ts,
+		stage:   strings.TrimPrefix(fields[1], "stage="),
+		session: strings.TrimPrefix(fields[2], "session="),
+		errMsg:  unquoteSafe(strings.TrimPrefix(fields[3], "error=")),
+		parsed:  true,
 	}
+}
+
+// readPersonaLogEntries loads logPath and returns one parsed entry per
+// non-blank line. The boolean indicates whether the file existed --
+// callers (summary / errors / JSON variants) all want to distinguish
+// "no file yet" from "read error" but render that signal differently,
+// so the helper surfaces both rather than coercing a missing file
+// into an empty slice. Trailing newline is trimmed before splitting
+// so the empty tail line does not produce a malformed entry.
+func readPersonaLogEntries(logPath string) (entries []personaLogEntry, exists bool, err error) {
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	for _, raw := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		entries = append(entries, parsePersonaLogLine(raw))
+	}
+	return entries, true, nil
 }
 
 // emitPersonaExtractErrorsJSON is the --json counterpart of
@@ -1673,32 +1694,29 @@ func emitPersonaExtractErrorsJSON(stdout, stderr io.Writer, logPath string, tail
 		Entries: []entryOut{},
 	}
 
-	data, err := os.ReadFile(logPath)
+	all, _, err := readPersonaLogEntries(logPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			encoded, mErr := json.Marshal(out)
-			if mErr != nil {
-				fmt.Fprintf(stderr, "persona errors: emit json: %v\n", mErr)
-				return 1
-			}
-			_, _ = stdout.Write(encoded)
-			_, _ = fmt.Fprintln(stdout)
-			return 0
-		}
 		fmt.Fprintf(stderr, "persona errors: read log: %v\n", err)
 		return 1
+	}
+	if all == nil {
+		// File missing or empty: emit the empty-payload skeleton so
+		// the JSON shape stays uniform and downstream consumers can
+		// branch on summary.total_entries == 0 rather than special-
+		// casing a different top-level shape.
+		encoded, mErr := json.Marshal(out)
+		if mErr != nil {
+			fmt.Fprintf(stderr, "persona errors: emit json: %v\n", mErr)
+			return 1
+		}
+		_, _ = stdout.Write(encoded)
+		_, _ = fmt.Fprintln(stdout)
+		return 0
 	}
 
 	var cutoff time.Time
 	if since > 0 {
 		cutoff = now.Add(-since)
-	}
-	var all []personaLogEntry
-	for _, raw := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-		if strings.TrimSpace(raw) == "" {
-			continue
-		}
-		all = append(all, parsePersonaLogLine(raw))
 	}
 
 	filtered := make([]personaLogEntry, 0, len(all))
@@ -1725,16 +1743,8 @@ func emitPersonaExtractErrorsJSON(stdout, stderr io.Writer, logPath string, tail
 		if e.parsed {
 			entry.Timestamp = e.ts.UTC().Format(time.RFC3339Nano)
 			entry.Stage = e.stage
-			// Session and error are inside the tab-delimited line;
-			// re-extract them here so JSON consumers do not have
-			// to re-parse the raw field. Format guaranteed by
-			// session.go's logPersonaExtractError helper:
-			//   <ts>\tstage=<x>\tsession=<y>\terror=<quoted>\n
-			fields := strings.Split(e.raw, "\t")
-			if len(fields) >= 4 {
-				entry.Session = strings.TrimPrefix(fields[2], "session=")
-				entry.Error = unquoteSafe(strings.TrimPrefix(fields[3], "error="))
-			}
+			entry.Session = e.session
+			entry.Error = e.errMsg
 		}
 		out.Entries = append(out.Entries, entry)
 	}
@@ -1773,29 +1783,21 @@ func renderPersonaExtractErrors(stdout, stderr io.Writer, logPath string, tail i
 		fmt.Fprintln(stdout, "=========================")
 		fmt.Fprintf(stdout, "Source: %s\n", logPath)
 	}
-	data, err := os.ReadFile(logPath)
+	all, exists, err := readPersonaLogEntries(logPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			header()
-			fmt.Fprintln(stdout)
-			fmt.Fprintln(stdout, "No log file yet. Either extraction has not produced any failures in this workdir, or the runtime has not been opened here.")
-			return 0
-		}
 		fmt.Fprintf(stderr, "persona errors: read log: %v\n", err)
 		return 1
+	}
+	if !exists {
+		header()
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "No log file yet. Either extraction has not produced any failures in this workdir, or the runtime has not been opened here.")
+		return 0
 	}
 
 	var cutoff time.Time
 	if since > 0 {
 		cutoff = now.Add(-since)
-	}
-
-	var all []personaLogEntry
-	for _, raw := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-		if strings.TrimSpace(raw) == "" {
-			continue
-		}
-		all = append(all, parsePersonaLogLine(raw))
 	}
 
 	filtered := make([]personaLogEntry, 0, len(all))
@@ -1849,30 +1851,37 @@ func renderPersonaExtractErrors(stdout, stderr io.Writer, logPath string, tail i
 	return 0
 }
 
-// emitPersonaCandidateDetailJSON is the --json counterpart of
-// renderPersonaCandidateDetail. Single-candidate shape that
-// matches an element of `list --json` candidates[] so a consumer
-// can interchange `show --json` and `list --json | jq` without
-// schema drift.
-func emitPersonaCandidateDetailJSON(stdout io.Writer, r persona.PersonaCandidateRecord) error {
-	out := struct {
-		ID              string `json:"id"`
-		State           string `json:"state"`
-		DraftID         string `json:"draft_id"`
-		DedupKey        string `json:"dedup_key"`
-		CreatedAt       string `json:"created_at"`
-		UpdatedAt       string `json:"updated_at"`
-		Field           string `json:"field"`
-		ProposedValue   string `json:"proposed_value"`
-		CurrentValue    string `json:"current_value"`
-		EvidenceQuote   string `json:"evidence_quote"`
-		Reason          string `json:"reason"`
-		Confidence      string `json:"confidence"`
-		Conflict        bool   `json:"conflict"`
-		SourceKind      string `json:"source_kind"`
-		SourceSessionID string `json:"source_session_id"`
-		ObservedAt      string `json:"observed_at"`
-	}{
+// personaCandidateOut is the JSON shape for one persona candidate.
+// Single source of truth for `lore persona candidates show --json`
+// and the `candidates[]` element shape of `lore persona candidates
+// list --json`. Keeping it as a named type avoids field drift between
+// the two endpoints -- any future column additions land in both
+// places automatically.
+type personaCandidateOut struct {
+	ID              string `json:"id"`
+	State           string `json:"state"`
+	DraftID         string `json:"draft_id"`
+	DedupKey        string `json:"dedup_key"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+	Field           string `json:"field"`
+	ProposedValue   string `json:"proposed_value"`
+	CurrentValue    string `json:"current_value"`
+	EvidenceQuote   string `json:"evidence_quote"`
+	Reason          string `json:"reason"`
+	Confidence      string `json:"confidence"`
+	Conflict        bool   `json:"conflict"`
+	SourceKind      string `json:"source_kind"`
+	SourceSessionID string `json:"source_session_id"`
+	ObservedAt      string `json:"observed_at"`
+}
+
+// newPersonaCandidateOut converts a runtime record to its JSON
+// projection. Timestamps are normalized to UTC + RFC3339Nano so
+// scripted consumers see a stable, sortable string regardless of
+// the operator's local timezone.
+func newPersonaCandidateOut(r persona.PersonaCandidateRecord) personaCandidateOut {
+	return personaCandidateOut{
 		ID:              r.ID,
 		State:           string(r.State),
 		DraftID:         r.DraftID,
@@ -1890,6 +1899,15 @@ func emitPersonaCandidateDetailJSON(stdout io.Writer, r persona.PersonaCandidate
 		SourceSessionID: r.Candidate.SourceSessionID,
 		ObservedAt:      r.Candidate.ObservedAt.UTC().Format(time.RFC3339Nano),
 	}
+}
+
+// emitPersonaCandidateDetailJSON is the --json counterpart of
+// renderPersonaCandidateDetail. Single-candidate shape that
+// matches an element of `list --json` candidates[] so a consumer
+// can interchange `show --json` and `list --json | jq` without
+// schema drift.
+func emitPersonaCandidateDetailJSON(stdout io.Writer, r persona.PersonaCandidateRecord) error {
+	out := newPersonaCandidateOut(r)
 	encoded, err := json.Marshal(out)
 	if err != nil {
 		return err
@@ -1907,57 +1925,22 @@ func emitPersonaCandidateDetailJSON(stdout io.Writer, r persona.PersonaCandidate
 // JSON-uniform on the read side. Empty result -> candidates: []
 // (not null) so jq consumers can safely .candidates | length.
 func emitPersonaCandidateListJSON(stdout io.Writer, workDir string, state persona.PersonaCandidateState, limit int, records []persona.PersonaCandidateRecord) error {
-	type candidateOut struct {
-		ID              string `json:"id"`
-		State           string `json:"state"`
-		DraftID         string `json:"draft_id"`
-		DedupKey        string `json:"dedup_key"`
-		CreatedAt       string `json:"created_at"`
-		UpdatedAt       string `json:"updated_at"`
-		Field           string `json:"field"`
-		ProposedValue   string `json:"proposed_value"`
-		CurrentValue    string `json:"current_value"`
-		EvidenceQuote   string `json:"evidence_quote"`
-		Reason          string `json:"reason"`
-		Confidence      string `json:"confidence"`
-		Conflict        bool   `json:"conflict"`
-		SourceKind      string `json:"source_kind"`
-		SourceSessionID string `json:"source_session_id"`
-		ObservedAt      string `json:"observed_at"`
-	}
 	type payload struct {
-		Workdir    string         `json:"workdir"`
-		State      string         `json:"state"`
-		Limit      int            `json:"limit"`
-		Count      int            `json:"count"`
-		Candidates []candidateOut `json:"candidates"`
+		Workdir    string                `json:"workdir"`
+		State      string                `json:"state"`
+		Limit      int                   `json:"limit"`
+		Count      int                   `json:"count"`
+		Candidates []personaCandidateOut `json:"candidates"`
 	}
 	out := payload{
 		Workdir:    workDir,
 		State:      string(state),
 		Limit:      limit,
 		Count:      len(records),
-		Candidates: []candidateOut{},
+		Candidates: []personaCandidateOut{},
 	}
 	for _, r := range records {
-		out.Candidates = append(out.Candidates, candidateOut{
-			ID:              r.ID,
-			State:           string(r.State),
-			DraftID:         r.DraftID,
-			DedupKey:        r.DedupKey,
-			CreatedAt:       r.CreatedAt.UTC().Format(time.RFC3339Nano),
-			UpdatedAt:       r.UpdatedAt.UTC().Format(time.RFC3339Nano),
-			Field:           r.Candidate.Field,
-			ProposedValue:   r.Candidate.ProposedValue,
-			CurrentValue:    r.Candidate.CurrentValue,
-			EvidenceQuote:   r.Candidate.EvidenceQuote,
-			Reason:          r.Candidate.Reason,
-			Confidence:      string(r.Candidate.Confidence),
-			Conflict:        r.Candidate.Conflict,
-			SourceKind:      string(r.Candidate.SourceKind),
-			SourceSessionID: r.Candidate.SourceSessionID,
-			ObservedAt:      r.Candidate.ObservedAt.UTC().Format(time.RFC3339Nano),
-		})
+		out.Candidates = append(out.Candidates, newPersonaCandidateOut(r))
 	}
 	encoded, err := json.Marshal(out)
 	if err != nil {
