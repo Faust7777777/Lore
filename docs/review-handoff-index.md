@@ -2,9 +2,9 @@
 
 Standalone index for the review handoff documents under `docs/archive/review-handoff/`.
 
-Updated: 2026-05-23
+Updated: 2026-05-25
 
-Total handoff documents indexed: 109
+Total handoff documents indexed: 110
 
 ## Current Workstreams
 
@@ -22,6 +22,7 @@ Total handoff documents indexed: 109
 - [B-line Task 5 SQLite State CAS Normalization](archive/review-handoff/review-handoff-b-line-task5-sqlite-state-cas-2026-05-23.md)
 - [B-line Task 6 Config Validate Pass](archive/review-handoff/review-handoff-b-line-task6-config-validate-2026-05-23.md)
 - [B-line Task 8 Vault Atomic Durability](archive/review-handoff/review-handoff-b-line-task8-vault-atomic-durability-2026-05-23.md)
+- [B-line Vault Search & Backlinks Coverage](archive/review-handoff/review-handoff-b-line-vault-search-and-backlinks-2026-05-25.md)
 - [Persona Acceptance Gate Scaffold](archive/review-handoff/review-handoff-codex53-persona-acceptance-gate-scaffold-2026-05-20.md)
 - [Persona Gate Plan Alignment](archive/review-handoff/review-handoff-codex53-persona-gate-plan-alignment-2026-05-22.md)
 - [SQLite Persona Retry CAS Hardening](archive/review-handoff/review-handoff-codex53-persona-retry-cas-2026-05-22.md)
@@ -43,6 +44,7 @@ Total handoff documents indexed: 109
 - [review-handoff-b-line-task5-sqlite-state-cas-2026-05-23.md](archive/review-handoff/review-handoff-b-line-task5-sqlite-state-cas-2026-05-23.md)
 - [review-handoff-b-line-task6-config-validate-2026-05-23.md](archive/review-handoff/review-handoff-b-line-task6-config-validate-2026-05-23.md)
 - [review-handoff-b-line-task8-vault-atomic-durability-2026-05-23.md](archive/review-handoff/review-handoff-b-line-task8-vault-atomic-durability-2026-05-23.md)
+- [review-handoff-b-line-vault-search-and-backlinks-2026-05-25.md](archive/review-handoff/review-handoff-b-line-vault-search-and-backlinks-2026-05-25.md)
 - [review-handoff-b-line-p8-candidate-lifecycle-recovery-2026-05-22.md](archive/review-handoff/review-handoff-b-line-p8-candidate-lifecycle-recovery-2026-05-22.md)
 - [review-handoff-b-line-p9-extraction-observability-2026-05-22.md](archive/review-handoff/review-handoff-b-line-p9-extraction-observability-2026-05-22.md)
 - [review-handoff-codex53.md](archive/review-handoff/review-handoff-codex53.md)

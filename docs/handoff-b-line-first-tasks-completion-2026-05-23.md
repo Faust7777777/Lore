@@ -107,9 +107,8 @@ Approximate as of `be3305b`:
   fallback). Architect P2 item; lives in `internal/vault` and
   is a natural next slice for the B-line.
 - **Vault search returning more than first match per file** and
-  **backlinks beyond wiki-link patterns**. Both architect P2
-  items; lower urgency than the write-side governance gaps that
-  tasks 3/4/5 closed.
+  **backlinks beyond wiki-link patterns**. Both shipped 2026-05-25.
+  See `docs/archive/review-handoff/review-handoff-b-line-vault-search-and-backlinks-2026-05-25.md`.
 - **TUI persona candidate review panel.** A-line scope, listed
   in the architect handoff Recommended Roadmap R3.
 
