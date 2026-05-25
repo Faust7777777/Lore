@@ -9,6 +9,7 @@ import (
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/operatoragent"
 	"obsidian-harness/internal/persona"
+	"obsidian-harness/internal/tools"
 )
 
 type workbenchRuntimeStub struct {
@@ -99,6 +100,10 @@ func (s workbenchRuntimeStub) ContextPack(targetPath string, task string, limit 
 
 func (s workbenchRuntimeStub) WriteLowRiskNote(relPath string, content string, overwrite bool) (model.VaultDocument, error) {
 	return model.VaultDocument{}, nil
+}
+
+func (s workbenchRuntimeStub) ProposalTools() []tools.Tool {
+	return nil
 }
 
 func (s workbenchRuntimeStub) BuildCoreContext(limit int) (model.CoreContext, error) {

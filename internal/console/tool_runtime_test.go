@@ -613,3 +613,61 @@ func initGitRepo(t *testing.T, workDir string) {
 		t.Fatalf("git init error = %v\n%s", err, string(output))
 	}
 }
+
+func TestToolRuntimeProposalToolsExposeAndDispatch(t *testing.T) {
+	runtime := &fakeRuntime{}
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	tools := newToolRuntime(session, runtime)
+
+	defs := tools.DescribeTools(operatoragent.Context{})
+	if !toolDefinitionsContain(defs, "persona_update_propose") {
+		t.Fatal("DescribeTools() missing persona_update_propose")
+	}
+	if !toolDefinitionsContain(defs, "markdown_note_propose") {
+		t.Fatal("DescribeTools() missing markdown_note_propose")
+	}
+
+	if _, err := tools.CallTool("markdown_note_propose", map[string]any{
+		"target_path": "03-notes/class/test.md",
+		"title":       "Test note",
+		"content":     "# Test note\n\nbody",
+		"source_kind": "research",
+		"evidence":    "user dictated",
+		"reason":      "test",
+		"source":      "user",
+		"observed_at": "2026-05-25",
+	}); err != nil {
+		t.Fatalf("markdown_note_propose error = %v", err)
+	}
+	if runtime.proposalHarness == nil {
+		t.Fatal("proposalHarness was not bound")
+	}
+	if runtime.proposalHarness.markdownArg.TargetPath != "03-notes/class/test.md" {
+		t.Errorf("markdownArg.TargetPath = %q, want 03-notes/class/test.md",
+			runtime.proposalHarness.markdownArg.TargetPath)
+	}
+	if runtime.proposalHarness.markdownArg.SourceKind != "research" {
+		t.Errorf("markdownArg.SourceKind = %q, want research",
+			runtime.proposalHarness.markdownArg.SourceKind)
+	}
+
+	if _, err := tools.CallTool("persona_update_propose", map[string]any{
+		"field":          "morning_routine",
+		"proposed_value": "wake at 7",
+		"evidence":       "self reported",
+		"confidence":     "high",
+		"reason":         "consistency",
+		"source":         "user",
+		"observed_at":    "2026-05-25",
+	}); err != nil {
+		t.Fatalf("persona_update_propose error = %v", err)
+	}
+	if runtime.proposalHarness.personaArg.Field != "morning_routine" {
+		t.Errorf("personaArg.Field = %q, want morning_routine",
+			runtime.proposalHarness.personaArg.Field)
+	}
+	if runtime.proposalHarness.personaArg.Confidence != "high" {
+		t.Errorf("personaArg.Confidence = %q, want high",
+			runtime.proposalHarness.personaArg.Confidence)
+	}
+}

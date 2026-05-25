@@ -15,22 +15,25 @@ import (
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/operatoragent"
 	"obsidian-harness/internal/persona"
+	"obsidian-harness/internal/tools"
 )
 
 type fakeRuntime struct {
-	managed           model.ManagedStatusView
-	drafts            []model.Draft
-	review            app.DraftReview
-	processSink       app.ProcessSinkDayView
-	vaultResolve      model.VaultResolveResult
-	writtenNote       *model.VaultDocument
-	supersede         *model.DraftSupersedeUpdate
-	coreContext       model.CoreContext
-	usageRecords      []model.UsageRecord
-	usageErr          error
-	personaMu         sync.Mutex
-	personaCandidates []persona.PersonaCandidateRecord
-	personaErr        error
+	managed             model.ManagedStatusView
+	drafts              []model.Draft
+	review              app.DraftReview
+	processSink         app.ProcessSinkDayView
+	vaultResolve        model.VaultResolveResult
+	writtenNote         *model.VaultDocument
+	supersede           *model.DraftSupersedeUpdate
+	coreContext         model.CoreContext
+	usageRecords        []model.UsageRecord
+	usageErr            error
+	personaMu           sync.Mutex
+	personaCandidates   []persona.PersonaCandidateRecord
+	personaErr          error
+	proposalToolsCalled int
+	proposalHarness     *fakeProposalHarness
 }
 
 func (f *fakeRuntime) ManagedStatus() (model.ManagedStatusView, error) {
@@ -127,6 +130,80 @@ func (f *fakeRuntime) WriteLowRiskNote(relPath string, content string, overwrite
 	doc := model.VaultDocument{Path: relPath, DocClass: model.DocClassNote, Content: content, BaseVersion: "hash"}
 	f.writtenNote = &doc
 	return doc, nil
+}
+
+// ProposalTools returns persona_update_propose + markdown_note_propose
+// bound to a fake harness so console tests can assert both tools are
+// surfaced and dispatched without spinning up a real orchestrator. The
+// per-call counter lets tests verify the lookup is dynamic.
+func (f *fakeRuntime) ProposalTools() []tools.Tool {
+	f.proposalToolsCalled++
+	if f.proposalHarness == nil {
+		f.proposalHarness = &fakeProposalHarness{}
+	}
+	registry := tools.NewRegistry()
+	if err := tools.RegisterProposal(registry, f.proposalHarness); err != nil {
+		panic(err)
+	}
+	return registry.ListBySurface(tools.SurfaceConsole)
+}
+
+// fakeProposalHarness is the minimal subset of tools.Harness the
+// proposal tools call into. Read-only methods return zero values so the
+// proposal tools can ignore them; only the two Propose* hooks are
+// exercised by tests.
+type fakeProposalHarness struct {
+	personaArg model.PersonaUpdateProposal
+	personaAt  time.Time
+	personaRes model.PersonaUpdateProposalResult
+	personaErr error
+
+	markdownArg model.MarkdownNoteProposal
+	markdownAt  time.Time
+	markdownRes model.MarkdownNoteProposalResult
+	markdownErr error
+}
+
+func (f *fakeProposalHarness) ManagedStatus() (model.ManagedStatusView, error) {
+	return model.ManagedStatusView{}, nil
+}
+func (f *fakeProposalHarness) SystemDocGet(string) (model.VaultDocument, error) {
+	return model.VaultDocument{}, nil
+}
+func (f *fakeProposalHarness) VaultRead(string) (model.VaultDocument, error) {
+	return model.VaultDocument{}, nil
+}
+func (f *fakeProposalHarness) VaultList(string) ([]model.VaultEntry, error) { return nil, nil }
+func (f *fakeProposalHarness) VaultSearchText(string, string, int) ([]model.SearchHit, error) {
+	return nil, nil
+}
+func (f *fakeProposalHarness) VaultResolve(string, string, int) (model.VaultResolveResult, error) {
+	return model.VaultResolveResult{}, nil
+}
+func (f *fakeProposalHarness) VaultBacklinks(string, int) ([]model.SearchHit, error) {
+	return nil, nil
+}
+func (f *fakeProposalHarness) DocClassify(string) model.DocClassificationView {
+	return model.DocClassificationView{}
+}
+func (f *fakeProposalHarness) ContextPack(string, string, int) (model.ContextPack, error) {
+	return model.ContextPack{}, nil
+}
+func (f *fakeProposalHarness) ProposePersonaUpdate(p model.PersonaUpdateProposal, at time.Time) (model.PersonaUpdateProposalResult, error) {
+	f.personaArg = p
+	f.personaAt = at
+	if f.personaErr != nil {
+		return model.PersonaUpdateProposalResult{}, f.personaErr
+	}
+	return f.personaRes, nil
+}
+func (f *fakeProposalHarness) ProposeMarkdownNote(p model.MarkdownNoteProposal, at time.Time) (model.MarkdownNoteProposalResult, error) {
+	f.markdownArg = p
+	f.markdownAt = at
+	if f.markdownErr != nil {
+		return model.MarkdownNoteProposalResult{}, f.markdownErr
+	}
+	return f.markdownRes, nil
 }
 
 func (f *fakeRuntime) BuildCoreContext(limit int) (model.CoreContext, error) {

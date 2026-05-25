@@ -13,6 +13,7 @@ import (
 
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/operatoragent"
+	"obsidian-harness/internal/tools"
 	"obsidian-harness/internal/tui"
 	"obsidian-harness/internal/vault"
 )
@@ -51,6 +52,17 @@ func (r toolRuntime) DescribeTools(_ operatoragent.Context) []operatoragent.Tool
 		{Name: "doc_classify", Description: "Return the inferred document class for one vault path.", Arguments: `{"path":"relative/path.md"}`},
 		{Name: "context_pack", Description: "Assemble a read-only Lore context pack for a task or target note.", Arguments: `{"target_path":"optional/path.md","task":"what you need","limit":6}`},
 		{Name: "vault_write_low", Description: "Write a low-governance markdown note inside the vault. Runtime rejects managed core docs, plans, process-sink docs, hidden dirs, and non-markdown files.", Arguments: `{"path":"notes/diary.md","content":"...","overwrite":false}`},
+	}
+	// Append proposal-intake tools (persona_update_propose,
+	// markdown_note_propose) sourced from internal/tools so console and
+	// MCP surfaces share one schema. These tools create a pending_review
+	// draft only; they never write or apply.
+	for _, tool := range r.runtime.ProposalTools() {
+		tools = append(tools, operatoragent.ToolDefinition{
+			Name:        tool.Name(),
+			Description: tool.Description(),
+			Arguments:   renderProposalToolArgsHint(tool),
+		})
 	}
 	if r.localWorkToolsEnabled() {
 		tools = append(tools,
@@ -298,6 +310,22 @@ func (r toolRuntime) CallToolContext(ctx context.Context, name string, arguments
 	case "shell_exec":
 		return r.shellExec(arguments)
 	default:
+		// Proposal-intake tools live in internal/tools and are surfaced
+		// here through r.runtime.ProposalTools() so the console agent can
+		// route "submit a draft for review" turns into pending drafts
+		// without bypassing internal/tools field validation. Looked up
+		// dynamically to keep the static switch above stable.
+		trimmed := strings.TrimSpace(name)
+		for _, tool := range r.runtime.ProposalTools() {
+			if tool.Name() != trimmed {
+				continue
+			}
+			result, err := tool.Call(arguments)
+			if err != nil {
+				return operatoragent.ToolResult{}, err
+			}
+			return jsonToolResult(result)
+		}
 		return operatoragent.ToolResult{}, fmt.Errorf("unknown tool: %s", name)
 	}
 }
@@ -873,6 +901,30 @@ func filterDraftsByStateLocal(drafts []model.Draft, state model.DraftState) []mo
 func shellToolsEnabled() bool {
 	value := strings.TrimSpace(os.Getenv("LORE_AGENT_ENABLE_SHELL"))
 	return value == "1" || strings.EqualFold(value, "true") || strings.EqualFold(value, "yes")
+}
+
+// renderProposalToolArgsHint renders a Tool's argument list as the
+// JSON-skeleton hint string ToolDefinition.Arguments uses. internal/tools
+// owns actual field validation when the call dispatches, so a slightly
+// imperfect example here cannot drift the contract.
+func renderProposalToolArgsHint(tool tools.Tool) string {
+	required := map[string]bool{}
+	for _, name := range tool.Required() {
+		required[name] = true
+	}
+	parts := make([]string, 0, len(tool.Arguments()))
+	for _, arg := range tool.Arguments() {
+		var value string
+		if len(arg.Enum) > 0 {
+			value = fmt.Sprintf("%q", arg.Enum[0])
+		} else if required[arg.Name] {
+			value = `"..."`
+		} else {
+			value = `""`
+		}
+		parts = append(parts, fmt.Sprintf("%q:%s", arg.Name, value))
+	}
+	return "{" + strings.Join(parts, ",") + "}"
 }
 
 func renderShellConfirmationPrompt(command string, timeoutSeconds int) string {

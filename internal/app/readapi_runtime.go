@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/tools"
 )
 
 func (r *Runtime) SystemDocGet(name string) (model.VaultDocument, error) {
@@ -51,4 +52,17 @@ func (r *Runtime) StateDirPath() string {
 
 func (r *Runtime) WriteLowRiskNote(relPath string, content string, overwrite bool) (model.VaultDocument, error) {
 	return r.Harness.WriteLowRiskNote(relPath, []byte(content), overwrite, time.Now())
+}
+
+// ProposalTools returns persona_update_propose + markdown_note_propose
+// bound to this runtime's harness. Reuses the same tools.RegisterProposal
+// call MCP uses so console and MCP surfaces share field validation and
+// schema; SurfaceConsole filter lets a future tool opt out of console
+// exposure without changes here.
+func (r *Runtime) ProposalTools() []tools.Tool {
+	registry := tools.NewRegistry()
+	if err := tools.RegisterProposal(registry, r.Harness); err != nil {
+		panic(err)
+	}
+	return registry.ListBySurface(tools.SurfaceConsole)
 }

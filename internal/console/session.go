@@ -14,6 +14,7 @@ import (
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/operatoragent"
 	"obsidian-harness/internal/persona"
+	"obsidian-harness/internal/tools"
 	"obsidian-harness/internal/tui"
 )
 
@@ -46,6 +47,12 @@ type Runtime interface {
 	DocClassify(relPath string) model.DocClassificationView
 	ContextPack(targetPath string, task string, limit int) (model.ContextPack, error)
 	WriteLowRiskNote(relPath string, content string, overwrite bool) (model.VaultDocument, error)
+	// ProposalTools returns the proposal-intake tools (persona_update_propose,
+	// markdown_note_propose) registered against the current harness so the
+	// console/TUI surface can render them in DescribeTools and dispatch
+	// through CallTool. Reuses the same internal/tools registrations the
+	// MCP server uses; both surfaces stay schema-aligned by construction.
+	ProposalTools() []tools.Tool
 	BuildCoreContext(limit int) (model.CoreContext, error)
 	RecordUsage(records []model.UsageRecord) error
 	RecordPersonaCandidate(record persona.PersonaCandidateRecord) (persona.PersonaCandidateRecord, bool, error)
