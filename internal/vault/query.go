@@ -101,7 +101,6 @@ func SearchText(root string, relDir string, query string, limit int) ([]TextHit,
 				if len(hits) >= limit {
 					return fs.SkipAll
 				}
-				break
 			}
 		}
 		return scanner.Err()
@@ -120,11 +119,24 @@ func FindBacklinks(root string, relDir string, targetPath string, limit int) ([]
 	normalizedTarget := normalizeRelativePath(targetPath)
 	baseName := strings.TrimSuffix(pathBase(normalizedTarget), filepath.Ext(normalizedTarget))
 	targetWithoutExt := strings.TrimSuffix(normalizedTarget, filepath.Ext(normalizedTarget))
-	patterns := []string{
+	wikiPatterns := []string{
 		"[[" + baseName + "]]",
 		"[[" + baseName + "|",
 		"[[" + targetWithoutExt + "]]",
 		"[[" + targetWithoutExt + "|",
+	}
+	// Markdown-link suffix candidates. We accept any URL that ends
+	// in one of these, so `[doc](./notes/refactor.md)` and
+	// `[doc](../notes/refactor.md)` both resolve as backlinks
+	// without per-source-file path arithmetic. The full path is
+	// the most precise match; the basename-with-ext catches
+	// cross-folder relative links like `../refactor.md` that share
+	// the same filename. A bare-basename match (no extension)
+	// would be ambiguous and is intentionally NOT included.
+	markdownSuffixes := []string{normalizedTarget}
+	baseWithExt := pathBase(normalizedTarget)
+	if baseWithExt != "" && baseWithExt != normalizedTarget {
+		markdownSuffixes = append(markdownSuffixes, baseWithExt)
 	}
 
 	hits := make([]TextHit, 0, limit)
@@ -144,19 +156,28 @@ func FindBacklinks(root string, relDir string, targetPath string, limit int) ([]
 		for scanner.Scan() {
 			lineNumber++
 			line := scanner.Text()
-			for _, pattern := range patterns {
+			matched := false
+			for _, pattern := range wikiPatterns {
 				if strings.Contains(line, pattern) {
-					hits = append(hits, TextHit{
-						Path:    relPath,
-						Line:    lineNumber,
-						Preview: trimPreview(line),
-					})
-					if len(hits) >= limit {
-						return fs.SkipAll
-					}
-					return nil
+					matched = true
+					break
 				}
 			}
+			if !matched && lineHasMarkdownLinkTo(line, markdownSuffixes) {
+				matched = true
+			}
+			if !matched {
+				continue
+			}
+			hits = append(hits, TextHit{
+				Path:    relPath,
+				Line:    lineNumber,
+				Preview: trimPreview(line),
+			})
+			if len(hits) >= limit {
+				return fs.SkipAll
+			}
+			return nil
 		}
 		return scanner.Err()
 	})
@@ -164,6 +185,59 @@ func FindBacklinks(root string, relDir string, targetPath string, limit int) ([]
 		err = nil
 	}
 	return hits, err
+}
+
+// lineHasMarkdownLinkTo reports whether the line contains a
+// CommonMark inline link `](URL)` whose URL resolves to one of the
+// `suffixes` (typically the target's full normalized path and its
+// basename-with-extension). The URL extends from `](` up to the
+// first space, `)`, `#` (anchor), or `"` (title), and can optionally
+// be wrapped in angle brackets `](<URL>)`. A leading `./` is
+// stripped before suffix comparison so `./notes/x.md` matches
+// `notes/x.md` and `../notes/x.md` matches `notes/x.md` via the
+// full-path suffix. A bare basename like `[doc](other-folder.md)`
+// only matches when the source URL ends in the basename suffix --
+// callers should pass the basename explicitly when they want that
+// fallback. No regex is used: lineHasMarkdownLinkTo runs once per
+// scanned line in the backlink walk, and a hand-rolled scan is
+// faster and easier to reason about than backtracking patterns.
+func lineHasMarkdownLinkTo(line string, suffixes []string) bool {
+	rest := line
+	for {
+		idx := strings.Index(rest, "](")
+		if idx == -1 {
+			return false
+		}
+		urlStart := idx + 2
+		url := rest[urlStart:]
+		if strings.HasPrefix(url, "<") {
+			closing := strings.Index(url, ">")
+			if closing == -1 {
+				return false
+			}
+			url = url[1:closing]
+		} else {
+			end := len(url)
+			for i, ch := range url {
+				if ch == ')' || ch == ' ' || ch == '\t' || ch == '#' || ch == '"' {
+					end = i
+					break
+				}
+			}
+			url = url[:end]
+		}
+		url = strings.TrimPrefix(url, "./")
+		url = strings.TrimSpace(url)
+		for _, suffix := range suffixes {
+			if suffix == "" {
+				continue
+			}
+			if url == suffix || strings.HasSuffix(url, "/"+suffix) {
+				return true
+			}
+		}
+		rest = rest[urlStart:]
+	}
 }
 
 func WalkMarkdownPaths(root string, relDir string) ([]string, error) {
