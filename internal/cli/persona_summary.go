@@ -162,7 +162,7 @@ func emitPersonaSummaryJSON(stdout io.Writer, workDir, logPath string, openN, dr
 			}
 		}
 		if !latest.IsZero() {
-			out.ExtractLog.LastEntry = latest.UTC().Format(time.RFC3339)
+			out.ExtractLog.LastEntry = latest.UTC().Format(time.RFC3339Nano)
 		}
 	}
 

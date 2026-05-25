@@ -12,6 +12,7 @@ import (
 	"obsidian-harness/internal/app"
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/persona"
+	"obsidian-harness/internal/store"
 )
 
 func runPersonaCommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -320,7 +321,7 @@ func renderPersonaRecoverErrorHint(stderr io.Writer, candidateID, draftID string
 		fmt.Fprintln(stderr, "        list drafts and pick a persona_update entry:")
 		fmt.Fprintln(stderr, "          lore draft list")
 	default:
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, store.ErrNotFound) {
 			fmt.Fprintln(stderr, "  hint: a referenced ID was not found.")
 			fmt.Fprintln(stderr, "        confirm the candidate ID via:")
 			fmt.Fprintf(stderr, "          lore persona candidates show %s\n", candidateID)
