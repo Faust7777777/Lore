@@ -4,7 +4,7 @@ Standalone index for the review handoff documents under `docs/archive/review-han
 
 Updated: 2026-05-25
 
-Total handoff documents indexed: 113
+Total handoff documents indexed: 114
 
 ## Current Workstreams
 
@@ -26,6 +26,7 @@ Total handoff documents indexed: 113
 - [B-line FINAL Q-1/Q-2/Q-3/Q-4 cli.go split + DTO unification](archive/review-handoff/review-handoff-b-line-final-q1-q4-2026-05-25.md)
 - [B-line FINAL Q-5/Q-6 errors.Is + RFC3339Nano](archive/review-handoff/review-handoff-b-line-final-q5-q6-2026-05-25.md)
 - [B-line FINAL Q-12 reorderFlagsBeforePositionals tests](archive/review-handoff/review-handoff-b-line-final-q12-2026-05-25.md)
+- [B-line cross-boundary Console Propose Tools](archive/review-handoff/review-handoff-b-line-cross-boundary-console-propose-tools-2026-05-25.md)
 - [Persona Acceptance Gate Scaffold](archive/review-handoff/review-handoff-codex53-persona-acceptance-gate-scaffold-2026-05-20.md)
 - [Persona Gate Plan Alignment](archive/review-handoff/review-handoff-codex53-persona-gate-plan-alignment-2026-05-22.md)
 - [SQLite Persona Retry CAS Hardening](archive/review-handoff/review-handoff-codex53-persona-retry-cas-2026-05-22.md)
@@ -36,6 +37,7 @@ Total handoff documents indexed: 113
 
 - [review-handoff-backend-stability-workset.md](archive/review-handoff/review-handoff-backend-stability-workset.md)
 - [review-handoff-b-line-cli-hint-batch-2026-05-23.md](archive/review-handoff/review-handoff-b-line-cli-hint-batch-2026-05-23.md)
+- [review-handoff-b-line-cross-boundary-console-propose-tools-2026-05-25.md](archive/review-handoff/review-handoff-b-line-cross-boundary-console-propose-tools-2026-05-25.md)
 - [review-handoff-b-line-cross-boundary-persona-gate-activation-2026-05-21.md](archive/review-handoff/review-handoff-b-line-cross-boundary-persona-gate-activation-2026-05-21.md)
 - [review-handoff-b-line-final-q1-q4-2026-05-25.md](archive/review-handoff/review-handoff-b-line-final-q1-q4-2026-05-25.md)
 - [review-handoff-b-line-final-q5-q6-2026-05-25.md](archive/review-handoff/review-handoff-b-line-final-q5-q6-2026-05-25.md)
