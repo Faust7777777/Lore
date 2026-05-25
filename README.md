@@ -103,7 +103,7 @@ Use the repo-managed Go toolchain on Windows PowerShell:
 .\.tools\go\bin\go.exe run ./cmd/lore tui --workdir .\tmp\p0-smoke --once "show current status"
 ```
 
-`release-gate.ps1` is the targeted governance gate for release candidates. It locks ToolRegistry schema/dispatch tests, MCP boundary/contract tests, daemon watcher and post-scan guardrails, governed note smoke, CLI smoke, the preferred `lore` CLI wrapper, Go SDK v0 contract/transport tests, backend resolve-read-final task-turn coverage, turn cancellation, bounded tool-result reinjection, operator prompt version/critical-rule checks, high-risk local tool argument boundaries, sessionlog task-turn persistence and index atomicity, TUI approval/task-step render/viewport tests, and the deterministic visible task-turn acceptance scenario. Use `.\scripts\release-gate.ps1 -Full` to append the full `verify.ps1` suite.
+`release-gate.ps1` is the targeted governance gate for release candidates. It locks ToolRegistry schema/dispatch tests, MCP boundary/contract tests, daemon watcher and post-scan guardrails, governed note smoke, CLI smoke, the preferred `lore` CLI wrapper, Go SDK v0 contract/transport tests, backend resolve-read-final task-turn coverage, turn cancellation, bounded tool-result reinjection, operator prompt version/critical-rule checks, high-risk local tool argument boundaries, sessionlog task-turn persistence, incremental index updates, streaming search, and index atomicity, TUI approval/task-step render/viewport tests, and the deterministic visible task-turn acceptance scenario. Use `.\scripts\release-gate.ps1 -Full` to append the full `verify.ps1` suite.
 
 Run the opt-in SDK end-to-end smoke with:
 

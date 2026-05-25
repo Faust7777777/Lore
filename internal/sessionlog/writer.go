@@ -10,16 +10,20 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"obsidian-harness/internal/operatoragent"
 )
 
 type Recorder struct {
-	rootDir string
-	path    string
-	meta    Meta
-	limits  Limits
+	mu          sync.Mutex
+	rootDir     string
+	path        string
+	meta        Meta
+	summary     Summary
+	pendingUser bool
+	limits      Limits
 }
 
 type Limits struct {
@@ -53,7 +57,13 @@ func StartWithLimits(rootDir string, meta Meta, limits Limits) (*Recorder, error
 		meta.SessionID = NewSessionID(meta.StartedAt)
 	}
 	path := filepath.Join(rootDir, meta.SessionID+".jsonl")
-	recorder := &Recorder{rootDir: rootDir, path: path, meta: meta, limits: defaultLimits(limits)}
+	recorder := &Recorder{
+		rootDir: rootDir,
+		path:    path,
+		meta:    meta,
+		summary: summaryFromMeta(meta, filepath.ToSlash(meta.SessionID+".jsonl"), meta.StartedAt),
+		limits:  defaultLimits(limits),
+	}
 	if err := recorder.append(Event{
 		Version:   1,
 		Type:      EventSessionMeta,
@@ -87,7 +97,14 @@ func ResumeWithLimits(rootDir string, sessionID string, limits Limits) (*Recorde
 		meta.SessionID = strings.TrimSpace(sessionID)
 	}
 	path := filepath.Join(rootDir, meta.SessionID+".jsonl")
-	return &Recorder{rootDir: rootDir, path: path, meta: meta, limits: defaultLimits(limits)}, snapshot, nil
+	return &Recorder{
+		rootDir:     rootDir,
+		path:        path,
+		meta:        meta,
+		summary:     snapshot.Summary,
+		pendingUser: snapshotHasPendingUser(snapshot),
+		limits:      defaultLimits(limits),
+	}, snapshot, nil
 }
 
 func (r *Recorder) SessionID() string {
@@ -196,14 +213,25 @@ func (r *Recorder) Close(reason string) error {
 }
 
 func (r *Recorder) appendAndIndex(event Event) error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	event = r.normalizeEvent(event)
 	if err := r.append(event); err != nil {
 		return err
 	}
-	snapshot, err := Load(r.rootDir, r.meta.SessionID)
-	if err != nil {
-		return err
+	r.applySummaryEvent(event)
+	return upsertIndex(r.rootDir, r.summary)
+}
+
+func (r *Recorder) normalizeEvent(event Event) Event {
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now()
 	}
-	return upsertIndex(r.rootDir, snapshot.Summary)
+	event.SessionID = r.meta.SessionID
+	return event
 }
 
 func (r *Recorder) append(event Event) error {
@@ -220,6 +248,50 @@ func (r *Recorder) append(event Event) error {
 	}
 	defer file.Close()
 	return json.NewEncoder(file).Encode(event)
+}
+
+func (r *Recorder) applySummaryEvent(event Event) {
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now()
+	}
+	if r.summary.ID == "" {
+		r.summary = summaryFromMeta(r.meta, r.relativePath(), event.Timestamp)
+	}
+	if event.Timestamp.After(r.summary.UpdatedAt) {
+		r.summary.UpdatedAt = event.Timestamp
+	}
+	switch event.Type {
+	case EventSessionMeta:
+		r.summary.ID = event.SessionID
+		r.summary.AgentID = event.AgentID
+		r.summary.Model = event.Model
+		r.summary.StartedAt = event.Timestamp
+		if r.summary.Path == "" {
+			r.summary.Path = filepath.ToSlash(event.SessionID + ".jsonl")
+		}
+	case EventUserMessage:
+		text := strings.TrimSpace(event.Text)
+		if text != "" {
+			r.pendingUser = true
+			if r.summary.Title == "" || r.summary.Title == r.summary.ID {
+				r.summary.Title = titleFromText(text, r.summary.ID)
+			}
+		}
+	case EventAssistantMessage:
+		if strings.TrimSpace(event.Text) != "" && r.pendingUser {
+			r.summary.TurnCount++
+			r.pendingUser = false
+		}
+	}
+	if r.summary.Path == "" {
+		r.summary.Path = r.relativePath()
+	}
+	if r.summary.Title == "" {
+		r.summary.Title = r.summary.ID
+	}
+	if r.summary.StartedAt.IsZero() {
+		r.summary.StartedAt = r.meta.StartedAt
+	}
 }
 
 func Load(rootDir string, sessionID string) (Snapshot, error) {
@@ -355,11 +427,20 @@ func transcriptContains(rootDir string, summary Summary, query string) bool {
 	if strings.TrimSpace(summary.Path) != "" {
 		path = filepath.Join(rootDir, filepath.FromSlash(summary.Path))
 	}
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return false
 	}
-	return strings.Contains(strings.ToLower(string(data)), query)
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	buffer := make([]byte, 0, 64*1024)
+	scanner.Buffer(buffer, MaxJSONLLineBytes)
+	for scanner.Scan() {
+		if strings.Contains(strings.ToLower(scanner.Text()), query) {
+			return true
+		}
+	}
+	return false
 }
 
 func NewSessionID(now time.Time) string {
@@ -375,6 +456,14 @@ func NewSessionID(now time.Time) string {
 
 func summaryFromMeta(meta Meta, relPath string, updatedAt time.Time) Summary {
 	return Summary{ID: meta.SessionID, Path: relPath, StartedAt: meta.StartedAt, UpdatedAt: updatedAt, Title: meta.SessionID, Model: meta.Model, AgentID: meta.AgentID}
+}
+
+func snapshotHasPendingUser(snapshot Snapshot) bool {
+	if len(snapshot.History) == 0 {
+		return false
+	}
+	last := snapshot.History[len(snapshot.History)-1]
+	return last.Role == "user" && strings.TrimSpace(last.Content) != ""
 }
 
 func (r *Recorder) relativePath() string {

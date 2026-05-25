@@ -56,6 +56,9 @@ func TestRecorderWritesIndexAndRestoresSnapshot(t *testing.T) {
 	if len(recent) != 1 || recent[0].ID != "lore-test" {
 		t.Fatalf("recent = %+v", recent)
 	}
+	if recent[0].Title != "open persona" || recent[0].TurnCount != 1 {
+		t.Fatalf("recent[0] = %+v, want title and turn count from incremental index", recent[0])
+	}
 }
 
 func TestResumeAppendsSameTranscript(t *testing.T) {
@@ -87,6 +90,13 @@ func TestResumeAppendsSameTranscript(t *testing.T) {
 	}
 	if len(loaded.History) != 2 {
 		t.Fatalf("history = %+v, want two turns", loaded.History)
+	}
+	recent, err := ListRecent(root, 20)
+	if err != nil {
+		t.Fatalf("ListRecent() error = %v", err)
+	}
+	if len(recent) != 1 || recent[0].TurnCount != 1 {
+		t.Fatalf("recent = %+v, want resumed assistant to close pending user turn", recent)
 	}
 }
 
@@ -428,6 +438,26 @@ func TestSearchMatchesTranscriptContent(t *testing.T) {
 	}
 	if len(matches) != 1 || matches[0].ID != "lore-search-first" {
 		t.Fatalf("matches = %+v, want lore-search-first only", matches)
+	}
+}
+
+func TestSearchScansLargeTranscriptLines(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := Start(root, Meta{SessionID: "lore-search-large", StartedAt: time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	largeReply := strings.Repeat("x", 256*1024) + " searchable-large-needle"
+	if err := recorder.RecordAssistant(largeReply); err != nil {
+		t.Fatalf("RecordAssistant(large) error = %v", err)
+	}
+
+	matches, err := Search(root, "searchable-large-needle", 10)
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(matches) != 1 || matches[0].ID != "lore-search-large" {
+		t.Fatalf("matches = %+v, want lore-search-large", matches)
 	}
 }
 
