@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"obsidian-harness/internal/vault"
@@ -13,15 +14,48 @@ import (
 
 const indexTempSuffix = ".tmp"
 
+var indexLocks = struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}{locks: make(map[string]*sync.Mutex)}
+
 func indexPath(rootDir string) string {
 	return filepath.Join(rootDir, "index.json")
 }
 
+func acquireIndexLock(rootDir string) func() {
+	key := indexLockKey(rootDir)
+	indexLocks.mu.Lock()
+	lock := indexLocks.locks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		indexLocks.locks[key] = lock
+	}
+	indexLocks.mu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
+func indexLockKey(rootDir string) string {
+	rootDir = filepath.Clean(rootDir)
+	absolute, err := filepath.Abs(rootDir)
+	if err != nil {
+		return rootDir
+	}
+	return filepath.Clean(absolute)
+}
+
 func loadIndex(rootDir string) (Index, error) {
 	rootDir = filepath.Clean(rootDir)
+	unlock := acquireIndexLock(rootDir)
+	defer unlock()
+	return loadIndexUnlocked(rootDir)
+}
+
+func loadIndexUnlocked(rootDir string) (Index, error) {
 	data, err := os.ReadFile(indexPath(rootDir))
 	if os.IsNotExist(err) {
-		return rebuildIndex(rootDir)
+		return rebuildIndexUnlocked(rootDir)
 	}
 	if err != nil {
 		return Index{}, err
@@ -38,6 +72,12 @@ func loadIndex(rootDir string) (Index, error) {
 
 func rebuildIndex(rootDir string) (Index, error) {
 	rootDir = filepath.Clean(rootDir)
+	unlock := acquireIndexLock(rootDir)
+	defer unlock()
+	return rebuildIndexUnlocked(rootDir)
+}
+
+func rebuildIndexUnlocked(rootDir string) (Index, error) {
 	entries, err := os.ReadDir(rootDir)
 	if os.IsNotExist(err) {
 		return Index{Version: 1}, nil
@@ -60,13 +100,20 @@ func rebuildIndex(rootDir string) (Index, error) {
 		}
 		index.Sessions = append(index.Sessions, snapshot.Summary)
 	}
-	if err := saveIndex(rootDir, index); err != nil {
+	if err := saveIndexUnlocked(rootDir, index); err != nil {
 		return Index{}, err
 	}
 	return index, nil
 }
 
 func saveIndex(rootDir string, index Index) error {
+	rootDir = filepath.Clean(rootDir)
+	unlock := acquireIndexLock(rootDir)
+	defer unlock()
+	return saveIndexUnlocked(rootDir, index)
+}
+
+func saveIndexUnlocked(rootDir string, index Index) error {
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return err
 	}
@@ -89,7 +136,10 @@ func upsertIndex(rootDir string, summary Summary) error {
 	if summary.UpdatedAt.IsZero() {
 		summary.UpdatedAt = time.Now()
 	}
-	index, err := loadIndex(rootDir)
+	rootDir = filepath.Clean(rootDir)
+	unlock := acquireIndexLock(rootDir)
+	defer unlock()
+	index, err := loadIndexUnlocked(rootDir)
 	if err != nil {
 		return err
 	}
@@ -104,7 +154,7 @@ func upsertIndex(rootDir string, summary Summary) error {
 	if !updated {
 		index.Sessions = append(index.Sessions, summary)
 	}
-	return saveIndex(rootDir, index)
+	return saveIndexUnlocked(rootDir, index)
 }
 
 func mergeSummary(existing Summary, next Summary) Summary {

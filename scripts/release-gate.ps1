@@ -180,7 +180,7 @@ try {
     Invoke-GoGate `
         -Label "sessionlog task-turn persistence and index guardrails" `
         -Package "./internal/sessionlog" `
-        -Run "Test(RecorderWritesIndexAndRestoresSnapshot|ResumeAppendsSameTranscript|ResumeRefreshesIndexTurnCount|Search(MatchesTranscriptContent|ScansLargeTranscriptLines)|RecordTaskTurnEnd(WritesEvent|EmptyReasonIsNoOp)|SaveIndexReplacesAtomicallyAndCleansTempFile)$"
+        -Run "Test(RecorderWritesIndexAndRestoresSnapshot|ResumeAppendsSameTranscript|ResumeRefreshesIndexTurnCount|Search(MatchesTranscriptContent|ScansLargeTranscriptLines)|RecordTaskTurnEnd(WritesEvent|EmptyReasonIsNoOp)|SaveIndexReplacesAtomicallyAndCleansTempFile|ConcurrentRecordersPreserveIndexEntries)$"
 
     Invoke-GoGate `
         -Label "TUI approval state, task-step render, and viewport guardrails" `

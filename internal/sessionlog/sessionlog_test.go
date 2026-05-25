@@ -3,9 +3,11 @@ package sessionlog
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -579,5 +581,67 @@ func TestListRecentLimitAndOrder(t *testing.T) {
 	}
 	if !recent[0].UpdatedAt.After(recent[len(recent)-1].UpdatedAt) {
 		t.Fatalf("recent not sorted: first=%s last=%s", recent[0].UpdatedAt, recent[len(recent)-1].UpdatedAt)
+	}
+}
+
+func TestConcurrentRecordersPreserveIndexEntries(t *testing.T) {
+	root := t.TempDir()
+	const sessionCount = 24
+	started := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	start := make(chan struct{})
+	errs := make(chan error, sessionCount)
+	var wg sync.WaitGroup
+
+	for i := 0; i < sessionCount; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			id := fmt.Sprintf("lore-concurrent-%02d", i)
+			recorder, err := Start(root, Meta{SessionID: id, StartedAt: started.Add(time.Duration(i) * time.Second)})
+			if err != nil {
+				errs <- fmt.Errorf("Start(%s): %w", id, err)
+				return
+			}
+			if err := recorder.RecordUser("user " + id); err != nil {
+				errs <- fmt.Errorf("RecordUser(%s): %w", id, err)
+				return
+			}
+			if err := recorder.RecordAssistant("assistant " + id); err != nil {
+				errs <- fmt.Errorf("RecordAssistant(%s): %w", id, err)
+				return
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	recent, err := ListRecent(root, 0)
+	if err != nil {
+		t.Fatalf("ListRecent() error = %v", err)
+	}
+	if len(recent) != sessionCount {
+		t.Fatalf("len(recent) = %d, want %d; recent=%+v", len(recent), sessionCount, recent)
+	}
+	seen := make(map[string]Summary, sessionCount)
+	for _, summary := range recent {
+		seen[summary.ID] = summary
+	}
+	for i := 0; i < sessionCount; i++ {
+		id := fmt.Sprintf("lore-concurrent-%02d", i)
+		summary, ok := seen[id]
+		if !ok {
+			t.Fatalf("missing %s in recent index: %+v", id, recent)
+		}
+		if summary.TurnCount != 1 {
+			t.Fatalf("summary[%s].TurnCount = %d, want 1", id, summary.TurnCount)
+		}
 	}
 }
