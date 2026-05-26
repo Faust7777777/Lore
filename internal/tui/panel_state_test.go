@@ -7,6 +7,7 @@ import (
 
 	"obsidian-harness/internal/app"
 	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/operatoragent"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -482,9 +483,10 @@ func TestApprovalActionErrorSurfacedWithCorrectPrefix(t *testing.T) {
 // --- Shared stub for panel tests ---
 
 type panelDriverStub struct {
-	findings []model.Finding
-	sink     app.ProcessSinkDayView
-	drafts   []model.Draft
+	findings     []model.Finding
+	sink         app.ProcessSinkDayView
+	drafts       []model.Draft
+	conversation []operatoragent.ConversationTurn
 }
 
 func (d *panelDriverStub) Load(lastOutput string) (WorkbenchViewModel, error) {
@@ -493,6 +495,9 @@ func (d *panelDriverStub) Load(lastOutput string) (WorkbenchViewModel, error) {
 		ProcessSink:   d.sink,
 		PendingDrafts: d.drafts,
 		Snapshot:      WorkbenchSnapshot{},
+		Conversation: WorkbenchConversation{
+			Turns: d.conversation,
+		},
 	}, nil
 }
 
@@ -551,4 +556,97 @@ func (d *errorDriverStub) ExecuteApprovalAction(action string, draftID string) (
 
 func (d *errorDriverStub) ExecuteFindingAction(action string, findingID string) (InteractiveWorkbenchUpdate, error) {
 	return InteractiveWorkbenchUpdate{}, fmt.Errorf("finding %s %s failed: stub error", action, findingID)
+}
+
+// TestP0PaneOverlapPrevention verifies that the layout never exceeds
+// model.height lines and that pane content doesn't bleed across panes
+// when Tab-cycling through all focus states with long conversation content.
+func TestP0PaneOverlapPrevention(t *testing.T) {
+	// Build 50 long conversation turns that fill the chat viewport
+	turns := make([]operatoragent.ConversationTurn, 50)
+	for i := range turns {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		turns[i] = operatoragent.ConversationTurn{
+			Role:    role,
+			Content: fmt.Sprintf("Turn %d: This is a very long conversation message that wraps across multiple lines to simulate real usage patterns with extensive dialogue and detailed responses from the LLM agent.", i),
+		}
+	}
+
+	drafts := []model.Draft{
+		{ID: "d1", Title: "Persona update proposal: target_role -> 学生", State: model.DraftPendingReview},
+	}
+	findings := []model.Finding{
+		{ID: "f1", Title: "Test finding", State: model.FindingOpen, Severity: model.FindingSeverityWarning},
+	}
+	checkpoints := []model.CheckpointDoc{
+		{Title: "CP 1 09:00-09:30", State: model.CheckpointMaterialized},
+		{Title: "CP 2 10:00-10:30", State: model.CheckpointMaterialized},
+	}
+
+	driver := &panelDriverStub{
+		drafts:       drafts,
+		findings:     findings,
+		conversation: turns,
+		sink: app.ProcessSinkDayView{
+			Checkpoints: checkpoints,
+		},
+	}
+
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	// Terminal dimensions: 160 columns x 32 rows
+	m.width = 160
+	m.height = 32
+	m.resize()
+	m.refreshContent(true)
+
+	// Cycle through all 6 focus states
+	focusOrder := []interactiveFocus{
+		focusInput, focusConversation, focusStatus,
+		focusFindings, focusProcessSink, focusApproval,
+	}
+
+	for _, f := range focusOrder {
+		m.focus = f
+		m.resize()
+		m.clampCurrentPanelOffset()
+		m.refreshContent(false)
+
+		rendered := m.View()
+		lines := strings.Split(rendered, "\n")
+		if len(lines) > m.height {
+			t.Fatalf("focus %d: rendered %d lines, want ≤ %d (height). First 40 lines:\n%s", f, len(lines), m.height, strings.Join(lines[:minInt(40, len(lines))], "\n"))
+		}
+
+		// Verify Reviewable Drafts appears at most once (no overlap repeat)
+		draftCount := 0
+		for _, line := range lines {
+			if strings.Contains(line, "Reviewable Drafts") {
+				draftCount++
+			}
+		}
+		if draftCount > 1 {
+			t.Fatalf("focus %d: 'Reviewable Drafts' appears %d times, want ≤ 1 (pane overlap)", f, draftCount)
+		}
+	}
+
+	// Verify full Tab cycle: start at focusInput, tab 6 times, should return to input
+	m.focus = focusInput
+	for i := 0; i < 6; i++ {
+		m.focus = nextFocus(m.focus)
+		m.resize()
+		m.clampCurrentPanelOffset()
+		m.refreshContent(false)
+		rendered := m.View()
+		lines := strings.Split(rendered, "\n")
+		if len(lines) > m.height {
+			t.Fatalf("Tab cycle step %d: rendered %d lines > height %d", i, len(lines), m.height)
+		}
+	}
+	if m.focus != focusInput {
+		t.Fatalf("after 6 Tabs, focus = %d, want %d (focusInput)", m.focus, focusInput)
+	}
 }

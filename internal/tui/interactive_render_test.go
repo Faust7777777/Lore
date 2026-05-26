@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -343,10 +344,10 @@ func TestRenderApprovalDetailPendingReview(t *testing.T) {
 	if !strings.Contains(result, "Draft Detail") {
 		t.Errorf("approval detail should show 'Draft Detail', got: %q", result)
 	}
-	if !strings.Contains(result, "a=approve") {
+	if !strings.Contains(result, "a=同意") {
 		t.Errorf("pending review detail should show approve action, got: %q", result)
 	}
-	if strings.Contains(result, "p=apply") {
+	if strings.Contains(result, "p=应用") {
 		t.Errorf("pending review detail should NOT show apply action, got: %q", result)
 	}
 }
@@ -357,10 +358,10 @@ func TestRenderApprovalDetailApproved(t *testing.T) {
 		State: model.DraftApproved, Summary: "A summary here", ProposedContent: "Note content",
 	}
 	result := renderApprovalPane([]model.Draft{draft}, 0, 0, true, nil, 36, 20)
-	if !strings.Contains(result, "p=apply") {
+	if !strings.Contains(result, "p=应用") {
 		t.Errorf("approved detail should show apply action, got: %q", result)
 	}
-	if strings.Contains(result, "a=approve") {
+	if strings.Contains(result, "a=同意") {
 		t.Errorf("approved detail should NOT show approve action, got: %q", result)
 	}
 }
@@ -540,5 +541,105 @@ func TestRenderInteractiveStatusShortensLogPath(t *testing.T) {
 	}
 	if !strings.Contains(result, "session-2026-04-25.jsonl") {
 		t.Errorf("status pane should show the filename, got: %q", result)
+	}
+}
+
+func TestRenderApprovalDetailPersonaUpdateStructured(t *testing.T) {
+	prop := model.PersonaUpdateProposal{
+		Field:         "目标角色",
+		CurrentValue:  "讲师",
+		ProposedValue: "学生",
+		Evidence:      "用户说'我是个学生'",
+		Reason:        "用户自我描述与当前画像不一致",
+		Confidence:    "high",
+	}
+	data, err := json.Marshal(prop)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	draft := model.Draft{
+		ID:              "d1",
+		Kind:            model.DraftKindPersonaUpdate,
+		State:           model.DraftPendingReview,
+		Title:           "Persona update: 目标角色",
+		ProposedContent: string(data),
+	}
+	result := renderApprovalPane([]model.Draft{draft}, 0, 0, true, nil, 60, 30)
+
+	for _, expected := range []string{
+		"Field:",
+		"目标角色",
+		"学生",
+		"讲师",
+		"Evidence",
+		"我是个学生",
+		"Confidence:",
+		"high",
+		"a=同意",
+	} {
+		if !strings.Contains(result, expected) {
+			t.Errorf("persona_update detail missing %q in output:\n%s", expected, result)
+		}
+	}
+}
+
+func TestRenderApprovalDetailMarkdownNoteStructured(t *testing.T) {
+	prop := model.MarkdownNoteProposal{
+		Title:    "学习计划",
+		Reason:   "每天下午有固定学习时间",
+		Content:  "# 学习计划\n\n- 下午 2-5 点复习",
+		Evidence: "用户说'我下午2-5点学习'",
+	}
+	data, err := json.Marshal(prop)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	draft := model.Draft{
+		ID:              "d2",
+		Kind:            model.DraftKindMarkdownNoteWrite,
+		State:           model.DraftPendingReview,
+		Title:           "Markdown note: 学习计划",
+		ProposedContent: string(data),
+	}
+	result := renderApprovalPane([]model.Draft{draft}, 0, 0, true, nil, 60, 30)
+
+	for _, expected := range []string{
+		"学习计划",
+		"每天下午有固定学习时间",
+		"下午 2-5 点复习",
+		"Evidence",
+		"Proposed Content",
+	} {
+		if !strings.Contains(result, expected) {
+			t.Errorf("markdown_note detail missing %q in output:\n%s", expected, result)
+		}
+	}
+
+	// Verify raw JSON is NOT leaked
+	if strings.Contains(result, `"field"`) || strings.Contains(result, `"title"`) {
+		t.Errorf("markdown_note detail should not show raw JSON keys, got:\n%s", result)
+	}
+}
+
+func TestRenderApprovalDetailFallbackRawJSON(t *testing.T) {
+	// Invalid JSON should fall back to generic Raw display
+	draft := model.Draft{
+		ID:              "d3",
+		Kind:            model.DraftKindPersonaUpdate,
+		State:           model.DraftPendingReview,
+		Title:           "Broken proposal",
+		ProposedContent: `{not valid json}`,
+	}
+	result := renderApprovalPane([]model.Draft{draft}, 0, 0, true, nil, 60, 30)
+
+	// Should show the raw content as fallback
+	if !strings.Contains(result, "{not valid json}") {
+		t.Errorf("fallback should show raw ProposedContent, got:\n%s", result)
+	}
+	// Should NOT crash or show structured section headers
+	if strings.Contains(result, "Plan") {
+		t.Errorf("fallback should NOT show structured sections, got:\n%s", result)
 	}
 }

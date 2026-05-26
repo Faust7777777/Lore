@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -26,13 +27,21 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 	contentHeight := maxInt(12, model.height-8)
 	rightTopHeight := maxInt(8, (contentHeight*2)/3)
 	rightBottomHeight := maxInt(5, contentHeight-rightTopHeight-1)
+	// Input pane budget: header(1) + textarea(3) + border(2) = 6 lines max.
+	// Reserve enough so total layout ≤ model.height.
+	inputBudget := maxInt(5, model.height-contentHeight)
+	if inputBudget > 8 {
+		inputBudget = 8
+	}
 
-	leftPane := paneStyle(model.focus == focusConversation).Width(leftWidth).Height(contentHeight).Render(
-		renderPaneTitle("Conversation Lane", model.focus == focusConversation, model.running, model.pendingLine, model.spin.View()) + "\n" + model.chatViewport.View(),
-	)
-	statusPane := paneStyle(model.focus == focusStatus).Width(rightWidth).Height(rightTopHeight).Render(
-		renderPaneTitle("Context & Status", model.focus == focusStatus, false, "", "") + "\n" + model.statusViewport.View(),
-	)
+	leftPane := clipPaneLines(
+		paneStyle(model.focus == focusConversation).Width(leftWidth).Height(contentHeight).Render(
+			renderPaneTitle("Conversation Lane", model.focus == focusConversation, model.running, model.pendingLine, model.spin.View())+"\n"+model.chatViewport.View(),
+		), contentHeight)
+	statusPane := clipPaneLines(
+		paneStyle(model.focus == focusStatus).Width(rightWidth).Height(rightTopHeight).Render(
+			renderPaneTitle("Context & Status", model.focus == focusStatus, false, "", "")+"\n"+model.statusViewport.View(),
+		), rightTopHeight)
 
 	var approvalTitle string
 	if narrow {
@@ -61,19 +70,37 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 		rightBottomContent = renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalOffset, model.approvalDetail, model.viewModel.FocusedReview, rightWidth-4, visiblePanelHeight(model.approvalHeight, rightBottomHeight-4))
 	}
 
-	rightBottomPane := paneStyle(model.focus == focusApproval || model.focus == focusFindings || model.focus == focusProcessSink).Width(rightWidth).Height(rightBottomHeight).Render(
-		renderPaneTitle(rightBottomTitle, model.focus == focusApproval || model.focus == focusFindings || model.focus == focusProcessSink, false, "", "") + "\n" + rightBottomContent,
-	)
+	rightBottomPane := clipPaneLines(
+		paneStyle(model.focus == focusApproval || model.focus == focusFindings || model.focus == focusProcessSink).Width(rightWidth).Height(rightBottomHeight).Render(
+			renderPaneTitle(rightBottomTitle, model.focus == focusApproval || model.focus == focusFindings || model.focus == focusProcessSink, false, "", "")+"\n"+rightBottomContent,
+		), rightBottomHeight)
 	rightColumn := lipgloss.JoinVertical(lipgloss.Left, statusPane, rightBottomPane)
 
-	inputPane := inputPaneStyle(model.focus == focusInput).Width(w).Render(
-		renderInputHeader(model.focus == focusInput, model.running) + "\n" + model.input.View(),
-	)
+	inputPane := clipPaneLines(
+		inputPaneStyle(model.focus == focusInput).Width(w).Render(
+			renderInputHeader(model.focus == focusInput, model.running)+"\n"+model.input.View(),
+		), inputBudget)
 
-	return lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightColumn),
-		inputPane,
-	)
+	return clipPaneLines(
+		lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightColumn),
+			inputPane,
+		), model.height)
+}
+
+// clipPaneLines trims a multi-line string to at most maxLines lines.
+// Preserves ANSI escape sequences; used as a safety net so no pane can
+// visually overflow its allocated height budget and bleed into adjacent
+// panes on the next frame.
+func clipPaneLines(content string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) <= maxLines {
+		return content
+	}
+	return strings.Join(lines[:maxLines], "\n")
 }
 
 func visiblePanelHeight(configured int, fallback int) int {
@@ -243,16 +270,6 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 		}
 	}
 
-	builder.WriteString("\n" + styleSectionHead.Render("Reviewable Drafts") + "\n")
-	if len(viewModel.PendingDrafts) == 0 {
-		builder.WriteString("  " + styleMutedText.Render("None.") + "\n")
-	} else {
-		limit := minInt(4, len(viewModel.PendingDrafts))
-		for _, draft := range viewModel.PendingDrafts[:limit] {
-			builder.WriteString("  " + styleWarn.Render(glyphItem) + " " + oneLine(draft.Title, 36) + "\n")
-		}
-	}
-
 	builder.WriteString("\n" + styleSectionHead.Render("Process Sink") + "\n")
 	if len(viewModel.ProcessSink.Checkpoints) == 0 {
 		builder.WriteString("  " + styleMutedText.Render("No data.") + "\n")
@@ -302,27 +319,73 @@ func renderApprovalList(drafts []model.Draft, cursor int, offset int, width int,
 			titleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
 		}
 
-		// State badge
-		var stateBadge string
-		switch draft.State {
-		case model.DraftApproved:
-			stateBadge = styleOK.Render("approved")
-		case model.DraftPendingReview:
-			stateBadge = styleWarn.Render("review")
-		default:
-			stateBadge = styleMutedText.Render(string(draft.State))
-		}
-
-		title := oneLine(draft.Title, maxInt(16, width-8))
-
-		builder.WriteString(prefix + stateBadge + " " + titleStyle.Render(title))
+		stateBadge := renderDraftStateBadge(draft.State)
+		kindBadge := renderDraftKindBadge(draft.Kind)
+		idShort := shortDraftID(draft.ID)
+		title := oneLine(draft.Title, maxInt(8, width-22))
+		builder.WriteString(prefix + stateBadge + " " + kindBadge + " " + styleMutedText.Render(idShort) + " " + titleStyle.Render(title))
 		builder.WriteString("\n")
 	}
 
-	builder.WriteString(styleMutedText.Render(fmt.Sprintf("[%d/%d] enter=detail", cursor+1, len(drafts))))
+	// Contextual footer: show available actions for the currently selected draft
+	footer := fmt.Sprintf("[%d/%d]", cursor+1, len(drafts))
+	if cursor < len(drafts) {
+		switch drafts[cursor].State {
+		case model.DraftPendingReview:
+			footer += " enter=detail a=approve r=reject"
+		case model.DraftApproved:
+			footer += " enter=detail p=apply"
+		default:
+			footer += " enter=detail"
+		}
+	} else {
+		footer += " enter=detail"
+	}
+	builder.WriteString(styleMutedText.Render(footer))
 	builder.WriteString("\n")
 
 	return builder.String()
+}
+
+func renderDraftStateBadge(state model.DraftState) string {
+	switch state {
+	case model.DraftApproved:
+		return styleOK.Render("ok")
+	case model.DraftPendingReview:
+		return styleWarn.Render("rev")
+	case model.DraftApplied:
+		return styleOK.Render("app")
+	case model.DraftRejected:
+		return styleMutedText.Render("rej")
+	case model.DraftConflicted:
+		return styleErr.Render("cnf")
+	default:
+		return styleMutedText.Render(string(state[:minInt(3, len(state))]))
+	}
+}
+
+func renderDraftKindBadge(kind model.DraftKind) string {
+	switch kind {
+	case model.DraftKindPersonaUpdate:
+		return styleAssistantLabel.Render("persona")
+	case model.DraftKindMarkdownNoteWrite:
+		return styleToolName.Render("note")
+	case model.DraftKindProgressSync:
+		return styleOK.Render("sync")
+	case model.DraftKindWeaknessUpdate:
+		return styleErr.Render("weak")
+	case model.DraftKindPlanAdjustment:
+		return styleWarn.Render("plan")
+	default:
+		return styleMutedText.Render(string(kind))
+	}
+}
+
+func shortDraftID(id string) string {
+	if len(id) <= 7 {
+		return id
+	}
+	return id[:7]
 }
 
 func renderSessionDetail(snap WorkbenchSnapshot) string {
@@ -533,7 +596,7 @@ func renderSinkTimelineList(sink app.ProcessSinkDayView, cursor int, offset int,
 		builder.WriteString("\n")
 	}
 
-	builder.WriteString(styleMutedText.Render(fmt.Sprintf("[%d/%d] enter=detail", cursor+1, len(sink.Checkpoints))))
+	builder.WriteString(styleMutedText.Render(fmt.Sprintf("[%d/%d] enter=detail j/k=navigate", cursor+1, len(sink.Checkpoints))))
 	builder.WriteString("\n")
 
 	return builder.String()
@@ -573,28 +636,25 @@ func renderApprovalDetailWithTarget(draft model.Draft, review *app.DraftReview, 
 	var builder strings.Builder
 
 	builder.WriteString(styleSectionHead.Render("Draft Detail") + "\n")
+	builder.WriteString("  ID     " + styleMutedText.Render(draft.ID) + "\n")
 	builder.WriteString("  Kind   " + string(draft.Kind) + "\n")
 	builder.WriteString("  Target " + oneLine(draft.Target.Path, maxInt(10, width-10)) + "\n")
 	builder.WriteString("  State  " + string(draft.State) + "\n")
 
-	if draft.Summary != "" {
-		builder.WriteString("\n" + styleSectionHead.Render("Summary") + "\n")
-		summaryLines := maxInt(1, (height-12)/3)
-		summary := oneLine(draft.Summary, width*summaryLines)
-		builder.WriteString("  " + wrapText(summary, maxInt(10, width-2)) + "\n")
+	// Parse ProposedContent for structured display
+	switch draft.Kind {
+	case model.DraftKindPersonaUpdate:
+		renderPersonaUpdateDetail(&builder, draft, width, height)
+	case model.DraftKindMarkdownNoteWrite:
+		renderMarkdownNoteDetail(&builder, draft, review, width, height)
+	default:
+		renderGenericProposalDetail(&builder, draft, width, height)
 	}
 
-	if draft.ProposedContent != "" {
-		builder.WriteString("\n" + styleSectionHead.Render("Proposed") + "\n")
-		contentLines := maxInt(1, (height-14)/3)
-		content := oneLine(draft.ProposedContent, width*contentLines)
-		builder.WriteString("  " + wrapText(content, maxInt(10, width-2)) + "\n")
-	}
-
-	// Show current target content for diff comparison
+	// Current target content for diff comparison
 	if review != nil && review.TargetDocument != nil && strings.TrimSpace(review.TargetDocument.Content) != "" {
 		builder.WriteString("\n" + styleSectionHead.Render("Current Target") + "\n")
-		diffLines := maxInt(1, (height-16)/3)
+		diffLines := maxInt(1, (height-18)/4)
 		current := oneLine(review.TargetDocument.Content, width*diffLines)
 		builder.WriteString("  " + wrapText(current, maxInt(10, width-2)) + "\n")
 	}
@@ -602,12 +662,87 @@ func renderApprovalDetailWithTarget(draft model.Draft, review *app.DraftReview, 
 	builder.WriteString("\n")
 	switch draft.State {
 	case model.DraftPendingReview:
-		builder.WriteString(styleWarn.Render("a") + "=approve " + styleErr.Render("r") + "=reject " + styleMutedText.Render("esc=back"))
+		builder.WriteString(styleOK.Render("a") + "=同意 " + styleErr.Render("r") + "=拒绝 " + styleMutedText.Render("esc=返回"))
 	case model.DraftApproved:
-		builder.WriteString(styleOK.Render("p") + "=apply " + styleMutedText.Render("esc=back"))
+		builder.WriteString(styleOK.Render("p") + "=应用 " + styleMutedText.Render("esc=返回"))
 	default:
-		builder.WriteString(styleMutedText.Render("esc=back"))
+		builder.WriteString(styleMutedText.Render("esc=返回"))
 	}
 
 	return builder.String()
+}
+
+func renderPersonaUpdateDetail(b *strings.Builder, draft model.Draft, width int, _ int) {
+	var prop model.PersonaUpdateProposal
+	if err := json.Unmarshal([]byte(draft.ProposedContent), &prop); err != nil {
+		b.WriteString("\n" + styleSectionHead.Render("Proposed") + "\n")
+		b.WriteString("  " + wrapText(draft.ProposedContent, maxInt(10, width-2)) + "\n")
+		return
+	}
+
+	if prop.Field != "" {
+		b.WriteString("\n" + styleSectionHead.Render("Plan") + "\n")
+		b.WriteString("  Field:    " + styleWarn.Render(prop.Field) + "\n")
+	}
+	if prop.CurrentValue != "" {
+		b.WriteString("  Current:  " + styleMutedText.Render(oneLine(prop.CurrentValue, maxInt(8, width-14))) + "\n")
+	} else {
+		b.WriteString("  Current:  " + styleMutedText.Render("(empty)") + "\n")
+	}
+	if prop.ProposedValue != "" {
+		b.WriteString("  Proposed: " + styleOK.Render(oneLine(prop.ProposedValue, maxInt(8, width-14))) + "\n")
+	}
+	if prop.Evidence != "" {
+		b.WriteString("\n" + styleSectionHead.Render("Evidence") + "\n")
+		b.WriteString("  " + wrapText(prop.Evidence, maxInt(10, width-2)) + "\n")
+	}
+	if prop.Reason != "" {
+		b.WriteString("\n" + styleSectionHead.Render("Reason") + "\n")
+		b.WriteString("  " + wrapText(prop.Reason, maxInt(10, width-2)) + "\n")
+	}
+	if prop.Confidence != "" {
+		b.WriteString("  Confidence: " + oneLine(prop.Confidence, maxInt(8, width-16)) + "\n")
+	}
+}
+
+func renderMarkdownNoteDetail(b *strings.Builder, draft model.Draft, review *app.DraftReview, width int, height int) {
+	var prop model.MarkdownNoteProposal
+	if err := json.Unmarshal([]byte(draft.ProposedContent), &prop); err != nil {
+		renderGenericProposalDetail(b, draft, width, height)
+		return
+	}
+
+	if prop.Title != "" {
+		b.WriteString("\n" + styleSectionHead.Render("Title") + "\n")
+		b.WriteString("  " + wrapText(prop.Title, maxInt(10, width-2)) + "\n")
+	}
+	if prop.Reason != "" {
+		b.WriteString("\n" + styleSectionHead.Render("Reason") + "\n")
+		b.WriteString("  " + wrapText(prop.Reason, maxInt(10, width-2)) + "\n")
+	}
+	if prop.Content != "" {
+		b.WriteString("\n" + styleSectionHead.Render("Proposed Content") + "\n")
+		excerptLines := maxInt(1, (height-10)/3)
+		excerpt := oneLine(prop.Content, width*excerptLines)
+		b.WriteString("  " + wrapText(excerpt, maxInt(10, width-2)) + "\n")
+	}
+	if prop.Evidence != "" {
+		b.WriteString("\n" + styleSectionHead.Render("Evidence") + "\n")
+		b.WriteString("  " + wrapText(prop.Evidence, maxInt(10, width-2)) + "\n")
+	}
+}
+
+func renderGenericProposalDetail(b *strings.Builder, draft model.Draft, width int, height int) {
+	if draft.Summary != "" {
+		b.WriteString("\n" + styleSectionHead.Render("Summary") + "\n")
+		summaryLines := maxInt(1, (height-12)/3)
+		summary := oneLine(draft.Summary, width*summaryLines)
+		b.WriteString("  " + wrapText(summary, maxInt(10, width-2)) + "\n")
+	}
+	if draft.ProposedContent != "" {
+		b.WriteString("\n" + styleSectionHead.Render("Proposed") + "\n")
+		contentLines := maxInt(1, (height-14)/3)
+		content := oneLine(draft.ProposedContent, width*contentLines)
+		b.WriteString("  " + wrapText(content, maxInt(10, width-2)) + "\n")
+	}
 }

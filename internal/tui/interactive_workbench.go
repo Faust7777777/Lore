@@ -213,9 +213,15 @@ func (m interactiveWorkbenchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "tab":
 			m.focus = nextFocus(m.focus)
+			m.resize()
+			m.clampCurrentPanelOffset()
+			m.refreshContent(false)
 			return m, m.applyFocus()
 		case "shift+tab":
 			m.focus = previousFocus(m.focus)
+			m.resize()
+			m.clampCurrentPanelOffset()
+			m.refreshContent(false)
 			return m, m.applyFocus()
 		}
 
@@ -513,7 +519,7 @@ func isTerminalWriter(output io.Writer) bool {
 }
 
 // Approval pane keyboard handler.
-// List view: up/down select draft, enter opens detail.
+// List view: up/down select, a/r quick-approve/reject, enter opens detail.
 // Detail view: a=approve, r=reject, p=apply, esc=back to list.
 func (m interactiveWorkbenchModel) handleApprovalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	drafts := m.viewModel.PendingDrafts
@@ -541,6 +547,16 @@ func (m interactiveWorkbenchModel) handleApprovalKeys(msg tea.KeyMsg) (tea.Model
 		if len(drafts) > 0 {
 			m.approvalDetail = true
 			m.refreshContent(false)
+		}
+		return m, nil
+	case "a":
+		if len(drafts) > 0 && m.approvalCursor < len(drafts) && drafts[m.approvalCursor].State == model.DraftPendingReview {
+			return m.executeApprovalAction("approve", drafts[m.approvalCursor].ID)
+		}
+		return m, nil
+	case "r":
+		if len(drafts) > 0 && m.approvalCursor < len(drafts) && drafts[m.approvalCursor].State == model.DraftPendingReview {
+			return m.executeApprovalAction("reject", drafts[m.approvalCursor].ID)
 		}
 		return m, nil
 	}
@@ -729,6 +745,19 @@ func (m interactiveWorkbenchModel) handleSinkKeys(msg tea.KeyMsg) (tea.Model, te
 
 func (m *interactiveWorkbenchModel) clampSinkOffset() {
 	m.sinkOffset = clampPanelOffset(m.sinkCursor, m.sinkOffset, m.sinkHeight, 2)
+}
+
+// clampCurrentPanelOffset clamps the offset for whichever panel currently has focus.
+// Called on Tab/Shift+Tab so the visible window stays aligned after focus switch.
+func (m *interactiveWorkbenchModel) clampCurrentPanelOffset() {
+	switch m.focus {
+	case focusApproval:
+		m.clampApprovalOffset()
+	case focusFindings:
+		m.clampFindingsOffset()
+	case focusProcessSink:
+		m.clampSinkOffset()
+	}
 }
 
 func clampPanelOffset(cursor int, offset int, visibleHeight int, reservedRows int) int {
