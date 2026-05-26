@@ -124,8 +124,9 @@ func (d interactiveWorkbenchDriver) ExecuteContext(ctx context.Context, line str
 			return tui.InteractiveWorkbenchUpdate{ViewModel: viewModel, LastOutput: lastOutput}, loadErr
 		}
 		lastOutput = output
-	viewModel, err := d.Load(lastOutput)
-	return tui.InteractiveWorkbenchUpdate{ViewModel: viewModel, LastOutput: lastOutput}, err
+		viewModel, err := d.Load(lastOutput)
+		return tui.InteractiveWorkbenchUpdate{ViewModel: viewModel, LastOutput: lastOutput}, err
+	}
 }
 
 // --- Model management ---
@@ -212,7 +213,6 @@ func (d interactiveWorkbenchDriver) TestModel(name string) error {
 	// Ping the model with a minimal completion
 	_, err = client.ChatCompletion(context.Background(), openai.ChatCompletionRequest{
 		Messages:    []openai.Message{{Role: "user", Content: "ping"}},
-		Model:       name,
 		MaxTokens:   1,
 		Temperature: 0,
 	})
@@ -241,7 +241,6 @@ func inferProvider(name string) string {
 		return "zhipu"
 	}
 	return "openai"
-}
 }
 
 func (d interactiveWorkbenchDriver) ExecuteApprovalAction(action string, draftID string) (tui.InteractiveWorkbenchUpdate, error) {
