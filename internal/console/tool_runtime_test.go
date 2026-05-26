@@ -671,3 +671,40 @@ func TestToolRuntimeProposalToolsExposeAndDispatch(t *testing.T) {
 			runtime.proposalHarness.personaArg.Confidence)
 	}
 }
+
+// TestToolRuntimeProposalToolsDescribeMatchesRegistryContract pins the
+// console DescribeTools entries to the registry-owned Tool metadata so a
+// future change that re-hardcodes proposal tool descriptions (drift the
+// MCP server has caught historically) breaks here first. The MCP surface
+// reaches the same Tool objects via Registry.ListBySurface, so any
+// description/required-field divergence between the two surfaces would
+// fail this test.
+func TestToolRuntimeProposalToolsDescribeMatchesRegistryContract(t *testing.T) {
+	runtime := &fakeRuntime{}
+	session := NewSessionWithAgent("test", &fakeAgent{})
+	tools := newToolRuntime(session, runtime)
+
+	defs := tools.DescribeTools(operatoragent.Context{})
+	defByName := map[string]operatoragent.ToolDefinition{}
+	for _, def := range defs {
+		defByName[def.Name] = def
+	}
+
+	for _, tool := range runtime.ProposalTools() {
+		def, ok := defByName[tool.Name()]
+		if !ok {
+			t.Errorf("DescribeTools() missing %q surfaced by ProposalTools()", tool.Name())
+			continue
+		}
+		if def.Description != tool.Description() {
+			t.Errorf("%s description = %q, want registry %q",
+				tool.Name(), def.Description, tool.Description())
+		}
+		for _, required := range tool.Required() {
+			if !strings.Contains(def.Arguments, `"`+required+`"`) {
+				t.Errorf("%s arg hint = %q, missing required field %q",
+					tool.Name(), def.Arguments, required)
+			}
+		}
+	}
+}
