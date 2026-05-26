@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"obsidian-harness/internal/app"
+	"obsidian-harness/internal/config"
 	"obsidian-harness/internal/console"
 	"obsidian-harness/internal/llm/openai"
 	"obsidian-harness/internal/operatoragent"
@@ -74,7 +75,10 @@ func loadWorkbenchViewModel(version string, runtime console.Runtime, session *co
 
 // modelLabel returns the active model name from the session's agent.
 func modelLabel(session *console.Session) string {
-	if ma, ok := session.Agent.(operatoragent.ModelAgent); ok {
+	if session == nil || session.Agent == nil {
+		return ""
+	}
+	if ma, ok := session.Agent.(interface{ CurrentModel() string }); ok {
 		return ma.CurrentModel()
 	}
 	return ""
@@ -105,7 +109,7 @@ func (d interactiveWorkbenchDriver) ExecuteContext(ctx context.Context, line str
 		if err != nil {
 			return tui.InteractiveWorkbenchUpdate{}, err
 		}
-		lastOutput = tui.RenderManagedStatus(d.version, managed)
+		lastOutput = tui.RenderManagedStatus(d.version, managed) + runtimeDiagnostics(d.runtime)
 		viewModel, err := d.Load(lastOutput)
 		return tui.InteractiveWorkbenchUpdate{ViewModel: viewModel, LastOutput: lastOutput}, err
 	case "/drafts":
@@ -132,25 +136,26 @@ func (d interactiveWorkbenchDriver) ExecuteContext(ctx context.Context, line str
 // --- Model management ---
 
 func (d interactiveWorkbenchDriver) DiscoverModels() ([]tui.ModelInfo, error) {
-	cfg, ok, err := operatoragent.LoadEnvConfig()
+	cfg, err := d.resolveOperatorLLMConfig()
 	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
-	}
-	if !ok {
-		return nil, fmt.Errorf("LLM environment not configured (set LORE_LLM_BASE_URL + LORE_LLM_API_KEY + LORE_LLM_MODEL)")
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	catalog, err := operatoragent.DiscoverModels(ctx, cfg)
+	catalog, err := operatoragent.DiscoverModels(ctx, operatorEnvConfig(cfg))
 	if err != nil {
 		current := modelLabel(d.session)
+		if current == "" {
+			current = strings.TrimSpace(cfg.Model)
+		}
 		return []tui.ModelInfo{{
-			Name:      current,
-			Provider:  inferProvider(current),
-			BaseURL:   cfg.BaseURL,
-			Source:    "env",
-			KeyStatus: keyStatus(cfg.APIKey),
-			Current:   true,
+			Name:       current,
+			Provider:   modelPanelProvider(cfg.Provider, current),
+			BaseURL:    cfg.BaseURL,
+			Source:     string(cfg.Source),
+			KeyStatus:  keyStatus(cfg.APIKey),
+			TestStatus: "discovery failed: " + err.Error(),
+			Current:    true,
 		}}, nil
 	}
 	current := modelLabel(d.session)
@@ -158,9 +163,9 @@ func (d interactiveWorkbenchDriver) DiscoverModels() ([]tui.ModelInfo, error) {
 	for _, m := range catalog.Models {
 		result = append(result, tui.ModelInfo{
 			Name:      m,
-			Provider:  inferProvider(m),
+			Provider:  modelPanelProvider(cfg.Provider, m),
 			BaseURL:   cfg.BaseURL,
-			Source:    "discovered",
+			Source:    string(cfg.Source),
 			KeyStatus: keyStatus(cfg.APIKey),
 			Current:   m == current,
 		})
@@ -169,16 +174,16 @@ func (d interactiveWorkbenchDriver) DiscoverModels() ([]tui.ModelInfo, error) {
 }
 
 func (d interactiveWorkbenchDriver) SwitchModel(name string) ([]tui.ModelInfo, error) {
-	cfg, ok, err := operatoragent.LoadEnvConfig()
+	cfg, err := d.resolveOperatorLLMConfig()
 	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
-	}
-	if !ok {
-		return nil, fmt.Errorf("LLM environment not configured")
+		return nil, err
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fmt.Errorf("model name is required")
+	}
+	if d.session == nil {
+		return nil, fmt.Errorf("session is required")
 	}
 	client, err := openai.NewClient(openai.Config{
 		BaseURL: cfg.BaseURL,
@@ -189,17 +194,28 @@ func (d interactiveWorkbenchDriver) SwitchModel(name string) ([]tui.ModelInfo, e
 	if err != nil {
 		return nil, fmt.Errorf("create client: %w", err)
 	}
-	d.session.Agent = operatoragent.NewModelAgent(client, inferProvider(name), name)
+	personaBinding, err := d.buildPersonaExtractorForSwitch(name)
+	if err != nil {
+		return nil, err
+	}
+	agent := operatoragent.NewModelAgent(client, modelPanelProvider(cfg.Provider, name), name)
+	d.session.DrainPersonaExtractions(consolePersonaDrainTimeout)
+	d.session.Agent = agent
+	if personaBinding != nil {
+		d.session.PersonaExtractor = personaBinding.Extractor
+		d.session.PersonaExtractModelInfo = console.PersonaExtractModelInfo{
+			Provider: personaBinding.Provider,
+			Model:    personaBinding.Model,
+			BaseURL:  personaBinding.BaseURL,
+		}
+	}
 	return d.DiscoverModels()
 }
 
 func (d interactiveWorkbenchDriver) TestModel(name string) error {
-	cfg, ok, err := operatoragent.LoadEnvConfig()
+	cfg, err := d.resolveOperatorLLMConfig()
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	if !ok {
-		return fmt.Errorf("LLM environment not configured")
+		return err
 	}
 	client, err := openai.NewClient(openai.Config{
 		BaseURL: cfg.BaseURL,
@@ -219,11 +235,62 @@ func (d interactiveWorkbenchDriver) TestModel(name string) error {
 	return err
 }
 
+func (d interactiveWorkbenchDriver) resolveOperatorLLMConfig() (config.ResolvedLLMConfig, error) {
+	workDir := ""
+	if d.runtime != nil {
+		workDir = d.runtime.WorkDirPath()
+	}
+	cfg, err := config.ResolveLLMConfig(workDir, config.LLMPurposeOperator)
+	if err != nil {
+		return cfg, fmt.Errorf("load config: %w", err)
+	}
+	if !cfg.Enabled {
+		return cfg, fmt.Errorf("LLM config not configured (set llm.active_profile in .lore/config.json or LORE_LLM_BASE_URL + LORE_LLM_API_KEY + LORE_LLM_MODEL)")
+	}
+	return cfg, nil
+}
+
+func operatorEnvConfig(cfg config.ResolvedLLMConfig) operatoragent.EnvConfig {
+	return operatoragent.EnvConfig{
+		BaseURL: cfg.BaseURL,
+		APIKey:  cfg.APIKey,
+		Model:   cfg.Model,
+		Timeout: cfg.Timeout,
+	}
+}
+
+func (d interactiveWorkbenchDriver) buildPersonaExtractorForSwitch(modelName string) (*app.PersonaExtractorBinding, error) {
+	runtime, ok := d.runtime.(*app.Runtime)
+	if !ok || runtime == nil {
+		return nil, nil
+	}
+	binding, err := runtime.BuildPersonaExtractorForOperatorModel(modelName)
+	if err != nil {
+		return nil, fmt.Errorf("switch persona extractor: %w", err)
+	}
+	return &binding, nil
+}
+
+func runtimeDiagnostics(runtime console.Runtime) string {
+	rt, ok := runtime.(*app.Runtime)
+	if !ok || rt == nil {
+		return ""
+	}
+	return tui.RenderConfigLayers(rt.ConfigDiagnostics) + renderLLMConfigDiagnostics(rt.LLMDiagnostics)
+}
+
 func keyStatus(apiKey string) string {
 	if strings.TrimSpace(apiKey) == "" {
 		return "missing"
 	}
 	return "OK"
+}
+
+func modelPanelProvider(configuredProvider string, modelName string) string {
+	if provider := strings.TrimSpace(configuredProvider); provider != "" {
+		return provider
+	}
+	return inferProvider(modelName)
 }
 
 func inferProvider(name string) string {

@@ -1,10 +1,20 @@
 package cli
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"obsidian-harness/internal/app"
+	"obsidian-harness/internal/config"
+	"obsidian-harness/internal/config/configtest"
 	"obsidian-harness/internal/console"
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/operatoragent"
@@ -204,5 +214,223 @@ func TestLoadWorkbenchViewModelBuildsSnapshotFromRuntimeAndSession(t *testing.T)
 	}
 	if got, want := viewModel.Conversation.LastOutput, "ready"; got != want {
 		t.Fatalf("viewModel.Conversation.LastOutput = %q, want %q", got, want)
+	}
+}
+
+func TestInteractiveWorkbenchModelPanelUsesWorkspaceLLMProfileOverEnv(t *testing.T) {
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+
+	var workspaceHits int32
+	workspaceServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&workspaceHits, 1)
+		if r.URL.Path != "/models" {
+			t.Fatalf("workspace server path = %q, want /models", r.URL.Path)
+		}
+		if got, want := r.Header.Get("Authorization"), "Bearer deepseek-secret"; got != want {
+			t.Fatalf("workspace server Authorization = %q, want %q", got, want)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "deepseek-reasoner"},
+				{"id": "deepseek-chat"},
+			},
+		})
+	}))
+	defer workspaceServer.Close()
+
+	var envHits int32
+	envServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&envHits, 1)
+		http.Error(w, "env endpoint must not be used", http.StatusTeapot)
+	}))
+	defer envServer.Close()
+
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	t.Setenv("LORE_LLM_BASE_URL", envServer.URL)
+	t.Setenv("LORE_LLM_API_KEY", "env-secret")
+	t.Setenv("LORE_LLM_MODEL", "gpt-5.4")
+
+	writeWorkbenchLLMConfig(t, workDir, workspaceServer.URL)
+
+	session := console.NewSessionWithAgent("test", operatoragent.NewUnavailable(nil))
+	driver := interactiveWorkbenchDriver{
+		version: "test",
+		runtime: workbenchRuntimeStub{
+			managed: model.ManagedStatusView{WorkDir: workDir},
+		},
+		session: session,
+	}
+
+	models, err := driver.DiscoverModels()
+	if err != nil {
+		t.Fatalf("DiscoverModels() error = %v", err)
+	}
+	if got := atomic.LoadInt32(&workspaceHits); got != 1 {
+		t.Fatalf("workspace hits = %d, want 1", got)
+	}
+	if got := atomic.LoadInt32(&envHits); got != 0 {
+		t.Fatalf("env hits = %d, want 0", got)
+	}
+	if len(models) != 2 {
+		t.Fatalf("len(models) = %d, want 2: %+v", len(models), models)
+	}
+	for _, item := range models {
+		if item.BaseURL != workspaceServer.URL {
+			t.Fatalf("model BaseURL = %q, want workspace %q", item.BaseURL, workspaceServer.URL)
+		}
+		if item.Source != "workspace" {
+			t.Fatalf("model Source = %q, want workspace", item.Source)
+		}
+		if item.Provider != "deepseek" {
+			t.Fatalf("model Provider = %q, want deepseek", item.Provider)
+		}
+		if item.KeyStatus != "OK" {
+			t.Fatalf("model KeyStatus = %q, want OK", item.KeyStatus)
+		}
+	}
+	names := []string{models[0].Name, models[1].Name}
+	if got := strings.Join(names, ","); got != "deepseek-chat,deepseek-reasoner" {
+		t.Fatalf("model names = %q, want sorted deepseek models", got)
+	}
+}
+
+func TestInteractiveWorkbenchModelDiscoveryFallbackUsesConfiguredModelAndError(t *testing.T) {
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "models unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	writeWorkbenchLLMConfig(t, workDir, server.URL)
+
+	session := console.NewSessionWithAgent("test", operatoragent.NewUnavailable(nil))
+	driver := interactiveWorkbenchDriver{
+		version: "test",
+		runtime: workbenchRuntimeStub{
+			managed: model.ManagedStatusView{WorkDir: workDir},
+		},
+		session: session,
+	}
+
+	models, err := driver.DiscoverModels()
+	if err != nil {
+		t.Fatalf("DiscoverModels() error = %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("len(models) = %d, want fallback row: %+v", len(models), models)
+	}
+	row := models[0]
+	if row.Name != "deepseek-chat" {
+		t.Fatalf("fallback Name = %q, want configured model", row.Name)
+	}
+	if row.TestStatus == "" || !strings.Contains(row.TestStatus, "discovery failed") {
+		t.Fatalf("fallback TestStatus = %q, want discovery failure", row.TestStatus)
+	}
+	if row.Source != "workspace" {
+		t.Fatalf("fallback Source = %q, want workspace", row.Source)
+	}
+	if !row.Current {
+		t.Fatal("fallback row Current = false, want true")
+	}
+}
+
+func TestInteractiveWorkbenchSwitchModelUpdatesPersonaExtractor(t *testing.T) {
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{
+					{"id": "deepseek-chat"},
+					{"id": "deepseek-reasoner"},
+				},
+			})
+		case "/chat/completions":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"final\",\"message\":\"ok\"}"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	writeWorkbenchLLMConfig(t, workDir, server.URL)
+
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, config.LoadOptions{
+		UserGlobalPath: filepath.Join(t.TempDir(), "absent-user-global.json"),
+	})
+	if err != nil {
+		t.Fatalf("OpenRuntimeWithConfigOptions() error = %v", err)
+	}
+	defer runtime.Close()
+
+	session := console.NewSessionWithAgent("test", runtime.OperatorAgent)
+	session.PersonaExtractor = runtime.PersonaExtractor
+	session.PersonaExtractModelInfo = console.PersonaExtractModelInfo{
+		Provider: runtime.PersonaExtractProvider,
+		Model:    runtime.PersonaExtractModel,
+		BaseURL:  runtime.PersonaExtractBaseURL,
+	}
+
+	driver := interactiveWorkbenchDriver{
+		version: "test",
+		runtime: runtime,
+		session: session,
+	}
+
+	models, err := driver.SwitchModel("deepseek-reasoner")
+	if err != nil {
+		t.Fatalf("SwitchModel() error = %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("len(models) = %d, want discovered rows", len(models))
+	}
+	if got := modelLabel(session); got != "deepseek-reasoner" {
+		t.Fatalf("session model = %q, want deepseek-reasoner", got)
+	}
+	if session.PersonaExtractor == nil {
+		t.Fatal("PersonaExtractor nil after switch")
+	}
+	if got := session.PersonaExtractModelInfo.Model; got != "deepseek-reasoner" {
+		t.Fatalf("PersonaExtractModelInfo.Model = %q, want switched model", got)
+	}
+	if got := session.PersonaExtractModelInfo.Provider; got != "deepseek" {
+		t.Fatalf("PersonaExtractModelInfo.Provider = %q, want deepseek", got)
+	}
+	if got := session.PersonaExtractModelInfo.BaseURL; got != server.URL {
+		t.Fatalf("PersonaExtractModelInfo.BaseURL = %q, want %q", got, server.URL)
+	}
+}
+
+func writeWorkbenchLLMConfig(t *testing.T, workDir string, baseURL string) {
+	t.Helper()
+	configDir := filepath.Join(workDir, ".lore")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(.lore) error = %v", err)
+	}
+	body := fmt.Sprintf(`{
+  "llm": {
+    "active_profile": "deepseek",
+    "profiles": {
+      "deepseek": {
+        "provider": "deepseek",
+        "base_url": %q,
+        "model": "deepseek-chat",
+        "api_key_env": "DEEPSEEK_API_KEY"
+      }
+    }
+  }
+}`, baseURL)
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
 	}
 }

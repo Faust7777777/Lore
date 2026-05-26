@@ -161,6 +161,11 @@ try {
         -Run "TestOpenRuntimeUsesWorkspaceLLMProfileOverGenericEnv$"
 
     Invoke-GoGate `
+        -Label "interactive model panel LLM config guardrails" `
+        -Package "./internal/cli" `
+        -Run "TestInteractiveWorkbench(ModelPanelUsesWorkspaceLLMProfileOverEnv|ModelDiscoveryFallbackUsesConfiguredModelAndError|SwitchModelUpdatesPersonaExtractor)$"
+
+    Invoke-GoGate `
         -Label "vault symlink and traversal guardrails" `
         -Package "./internal/vault" `
         -Run "Test(ReadRelativeWithHash(BlocksTraversal|RejectsSymlinkFileOutsideRoot)|WalkListSearchAndBacklinksSkip(FileSymlink|DirectorySymlink)OutsideRoot)$"
