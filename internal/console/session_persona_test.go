@@ -538,6 +538,103 @@ func TestSessionHandleParserWarningsSuppressedOnSuccess(t *testing.T) {
 	}
 }
 
+func TestSessionHandleExtractionFailureStampsModelTagColumns(t *testing.T) {
+	// B-line model-consistency contract: when Session.PersonaExtractModelInfo
+	// is populated (runtime wires it from the resolved persona-extract
+	// LLM profile), failure lines must carry the model + base_url
+	// columns so operators tailing the workdir log can correlate a
+	// failure with the specific upstream model that produced it.
+	// Tests on the reader side (cli/persona_errors_test.go) round-trip
+	// the same line back into a personaLogEntry; this test pins the
+	// writer half of that contract.
+	session, _, runtime := newLoopSession(t)
+	var buf bytes.Buffer
+	session.PersonaExtractLogger = &buf
+	session.PersonaExtractModelInfo = PersonaExtractModelInfo{
+		Provider: "deepseek",
+		Model:    "deepseek-chat",
+		BaseURL:  "https://api.deepseek.com/v1",
+	}
+	session.PersonaExtractor = &scriptedPersonaExtractor{
+		err: errors.New("upstream provider unavailable"),
+	}
+
+	if _, err := session.Handle("anything", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if !session.DrainPersonaExtractions(time.Second) {
+		t.Fatal("DrainPersonaExtractions timed out")
+	}
+
+	line := strings.TrimSuffix(buf.String(), "\n")
+	if line == "" {
+		t.Fatal("PersonaExtractLogger empty; want one tagged failure line")
+	}
+	if strings.Count(line, "\n") != 0 {
+		t.Fatalf("expected a single log record, got multiple:\n%s", line)
+	}
+	for _, want := range []string{
+		"stage=extract",
+		"upstream provider unavailable",
+		"\tmodel=deepseek-chat",
+		"\tbase_url=\"https://api.deepseek.com/v1\"",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log line missing %q:\n%s", want, line)
+		}
+	}
+	// Provider is informational only; the writer deliberately omits it
+	// from the TSV columns so the on-disk surface stays minimal.
+	if strings.Contains(line, "provider=") {
+		t.Fatalf("log line should not carry provider= column (informational only):\n%s", line)
+	}
+	// Column ordering matters for downstream awk-style parsers: the
+	// legacy four columns must precede any model-tag columns so older
+	// readers that ignore fields[4:] keep working.
+	fields := strings.Split(line, "\t")
+	if len(fields) < 6 {
+		t.Fatalf("expected >=6 tab fields (ts, stage, session, error, model, base_url); got %d in %q", len(fields), line)
+	}
+	if !strings.HasPrefix(fields[1], "stage=") || !strings.HasPrefix(fields[2], "session=") || !strings.HasPrefix(fields[3], "error=") {
+		t.Fatalf("legacy four-column ordering broken: %v", fields[:4])
+	}
+}
+
+func TestSessionHandleExtractionFailureOmitsModelTagWhenInfoEmpty(t *testing.T) {
+	// Backward-compat: when PersonaExtractModelInfo is the zero value
+	// (no LLM resolved, or runtime constructed before the model-tag
+	// wiring), the writer must keep emitting the legacy four-column
+	// shape so pre-B-line tooling that did not know about the optional
+	// columns continues to behave identically.
+	session, _, runtime := newLoopSession(t)
+	var buf bytes.Buffer
+	session.PersonaExtractLogger = &buf
+	// PersonaExtractModelInfo intentionally left zero.
+	session.PersonaExtractor = &scriptedPersonaExtractor{
+		err: errors.New("zero-info probe"),
+	}
+
+	if _, err := session.Handle("anything", runtime); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if !session.DrainPersonaExtractions(time.Second) {
+		t.Fatal("DrainPersonaExtractions timed out")
+	}
+
+	line := strings.TrimSuffix(buf.String(), "\n")
+	if line == "" {
+		t.Fatal("PersonaExtractLogger empty")
+	}
+	for _, banned := range []string{"\tmodel=", "\tbase_url="} {
+		if strings.Contains(line, banned) {
+			t.Fatalf("zero ModelInfo should not emit %q column:\n%s", banned, line)
+		}
+	}
+	if got := strings.Count(line, "\t"); got != 3 {
+		t.Fatalf("legacy line should have exactly 3 tabs (4 columns); got %d in %q", got, line)
+	}
+}
+
 func TestSessionHandleExtractionTimeoutWritesLoggerLine(t *testing.T) {
 	// Slow-LLM path: extractor blocks past PersonaExtractTimeout,
 	// ctx.Done fires, the scripted extractor returns ctx.Err(), and

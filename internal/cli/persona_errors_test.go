@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -459,6 +460,165 @@ func TestRunPersonaErrorsJSONEndToEnd(t *testing.T) {
 	}
 	if got.Entries[0].Session != "lore-cli-test" {
 		t.Fatalf("session = %q, want lore-cli-test", got.Entries[0].Session)
+	}
+}
+
+// TestParsePersonaLogLineRoundTripsModelTagColumns pins the B-line
+// model-consistency contract: a line written by the Session log writer
+// using the documented format (session.go logPersonaExtractError, with
+// PersonaExtractModelInfo populated) is parsed back into a
+// personaLogEntry that exposes the model and base_url columns
+// distinctly from the legacy four-column fields. Format drift on the
+// writer side would surface here as a parse mismatch rather than a
+// silent data-loss bug in the operator-facing `lore persona errors`
+// surface.
+func TestParsePersonaLogLineRoundTripsModelTagColumns(t *testing.T) {
+	const (
+		ts       = "2026-05-26T12:34:56.789012345Z"
+		stage    = "extract"
+		session  = "lore-roundtrip"
+		errMsg   = "upstream timeout"
+		modelTag = "deepseek-chat"
+		baseURL  = "https://api.deepseek.com/v1"
+	)
+	// Mirror session.go logPersonaExtractError verbatim: error and
+	// base_url are formatted via %q, model is plain. Format pinned by
+	// internal/console/session.go's fmt.Fprintf at the time of writing
+	// (see PersonaExtractModelInfo doc comment for the contract).
+	line := fmt.Sprintf("%s\tstage=%s\tsession=%s\terror=%q\tmodel=%s\tbase_url=%q",
+		ts, stage, session, errMsg, modelTag, baseURL)
+
+	got := parsePersonaLogLine(line)
+	if !got.parsed {
+		t.Fatalf("parsed = false; line = %q", line)
+	}
+	if got.stage != stage {
+		t.Fatalf("stage = %q, want %q", got.stage, stage)
+	}
+	if got.session != session {
+		t.Fatalf("session = %q, want %q", got.session, session)
+	}
+	if got.errMsg != errMsg {
+		t.Fatalf("errMsg = %q, want %q (unquoteSafe should strip %%q wrapping)", got.errMsg, errMsg)
+	}
+	if got.model != modelTag {
+		t.Fatalf("model = %q, want %q (plain, no %%q wrapping)", got.model, modelTag)
+	}
+	if got.baseURL != baseURL {
+		t.Fatalf("baseURL = %q, want %q (unquoteSafe should strip %%q wrapping)", got.baseURL, baseURL)
+	}
+	wantTS, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		t.Fatalf("seed timestamp: %v", err)
+	}
+	if !got.ts.Equal(wantTS) {
+		t.Fatalf("ts = %v, want %v", got.ts, wantTS)
+	}
+	if got.raw != line {
+		t.Fatalf("raw preserved incorrectly:\n got: %q\nwant: %q", got.raw, line)
+	}
+}
+
+// TestParsePersonaLogLineParsesLegacyFourColumnFormat protects the
+// pre-B-line readers: lines written before PersonaExtractModelInfo was
+// added carry only four columns. They must keep parsing as parsed=true
+// with empty model / baseURL so older workdir logs continue to render
+// cleanly under the new schema.
+func TestParsePersonaLogLineParsesLegacyFourColumnFormat(t *testing.T) {
+	const line = "2026-05-22T10:00:00Z\tstage=extract\tsession=lore-legacy\terror=\"upstream provider unavailable\""
+
+	got := parsePersonaLogLine(line)
+	if !got.parsed {
+		t.Fatalf("parsed = false for legacy 4-column line; want true")
+	}
+	if got.stage != "extract" {
+		t.Fatalf("stage = %q, want extract", got.stage)
+	}
+	if got.session != "lore-legacy" {
+		t.Fatalf("session = %q, want lore-legacy", got.session)
+	}
+	if got.errMsg != "upstream provider unavailable" {
+		t.Fatalf("errMsg = %q, want unquoted form", got.errMsg)
+	}
+	if got.model != "" {
+		t.Fatalf("model = %q, want empty for legacy line", got.model)
+	}
+	if got.baseURL != "" {
+		t.Fatalf("baseURL = %q, want empty for legacy line", got.baseURL)
+	}
+}
+
+// TestParsePersonaLogLineHandlesModelOnlyTail covers the asymmetric
+// case where the writer captured a model identity but no base_url
+// (e.g. resolved profile populated PersonaExtractModelInfo.Model but
+// the base URL was elided). The parser must still surface the model
+// field and leave baseURL empty.
+func TestParsePersonaLogLineHandlesModelOnlyTail(t *testing.T) {
+	const line = "2026-05-22T10:00:00Z\tstage=store\tsession=lore-1\terror=\"disk full\"\tmodel=gpt-5.4"
+
+	got := parsePersonaLogLine(line)
+	if !got.parsed {
+		t.Fatal("parsed = false; want true")
+	}
+	if got.model != "gpt-5.4" {
+		t.Fatalf("model = %q, want gpt-5.4", got.model)
+	}
+	if got.baseURL != "" {
+		t.Fatalf("baseURL = %q, want empty (column omitted)", got.baseURL)
+	}
+}
+
+// TestEmitPersonaExtractErrorsJSONIncludesModelAndBaseURL covers the
+// downstream JSON surface: when the log carries model-tag columns,
+// `lore persona errors --json` must expose them through the
+// `model` and `base_url` keys (omitempty on legacy lines).
+func TestEmitPersonaExtractErrorsJSONIncludesModelAndBaseURL(t *testing.T) {
+	logPath := writePersonaLog(t, []string{
+		"2026-05-26T01:00:00Z\tstage=extract\tsession=tagged\terror=\"timeout\"\tmodel=deepseek-chat\tbase_url=\"https://api.deepseek.com/v1\"",
+		"2026-05-26T01:01:00Z\tstage=extract\tsession=legacy\terror=\"timeout\"",
+	})
+
+	var stdout, stderr bytes.Buffer
+	now := time.Date(2026, 5, 26, 2, 0, 0, 0, time.UTC)
+	if exit := emitPersonaExtractErrorsJSON(&stdout, &stderr, logPath, 0, "", 0, now); exit != 0 {
+		t.Fatalf("exit = %d, stderr = %q", exit, stderr.String())
+	}
+	var got struct {
+		Entries []struct {
+			Session string `json:"session"`
+			Model   string `json:"model"`
+			BaseURL string `json:"base_url"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout.String())), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\nstdout: %s", err, stdout.String())
+	}
+	if len(got.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(got.Entries))
+	}
+	tagged := got.Entries[0]
+	if tagged.Session != "tagged" {
+		t.Fatalf("entries[0].session = %q, want tagged", tagged.Session)
+	}
+	if tagged.Model != "deepseek-chat" {
+		t.Fatalf("entries[0].model = %q, want deepseek-chat", tagged.Model)
+	}
+	if tagged.BaseURL != "https://api.deepseek.com/v1" {
+		t.Fatalf("entries[0].base_url = %q, want unquoted form", tagged.BaseURL)
+	}
+	legacy := got.Entries[1]
+	if legacy.Session != "legacy" {
+		t.Fatalf("entries[1].session = %q, want legacy", legacy.Session)
+	}
+	if legacy.Model != "" || legacy.BaseURL != "" {
+		t.Fatalf("entries[1] model/base_url should be empty for legacy line; got model=%q base=%q", legacy.Model, legacy.BaseURL)
+	}
+	// Confirm omitempty: the raw JSON for the legacy entry must not
+	// carry the keys at all so downstream monitoring scripts can
+	// distinguish "absent" from "empty string".
+	raw := stdout.String()
+	if strings.Count(raw, `"model":""`) != 0 || strings.Count(raw, `"base_url":""`) != 0 {
+		t.Fatalf("omitempty broken: legacy entry emitted empty model/base_url keys:\n%s", raw)
 	}
 }
 
