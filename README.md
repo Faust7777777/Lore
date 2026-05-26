@@ -59,6 +59,18 @@ Example workspace override:
 
 ```json
 {
+  "llm": {
+    "active_profile": "deepseek",
+    "profiles": {
+      "deepseek": {
+        "provider": "deepseek",
+        "base_url": "https://api.deepseek.com/v1",
+        "model": "deepseek-chat",
+        "timeout": 30000000000,
+        "api_key_env": "DEEPSEEK_API_KEY"
+      }
+    }
+  },
   "vault": {
     "managed_core": {
       "agent_doc": "runtime/agent.md"
@@ -70,9 +82,10 @@ Example workspace override:
 Limitations:
 
 - Duration fields (e.g. `vault.debounce_window`, `process_sink.checkpoint_every`) currently must be expressed as nanoseconds in JSON (for example `500000000` for 500ms). String forms such as `"500ms"` are not yet supported.
+- LLM profile API keys are never stored in config. Set `llm.profiles.<name>.api_key_env` to an environment variable name; `api_key_ref` is reserved for future OS credential-store support.
 - `paths.work_dir` is derived from the runtime invocation; setting it from a layer file is allowed but unusual.
 
-Run `lore status [workdir]` to see which layer files were loaded, missing, or errored.
+Run `lore status [workdir]` to see which layer files were loaded, missing, or errored, and which model profile/source each runtime purpose uses.
 
 ## Current Commands
 
@@ -117,7 +130,7 @@ In GitHub Actions, pull requests run the deterministic release gate, pushes to
 so the gate also fails if it leaves generated files in the repository.
 
 `smoke p0` verifies the current P0 chain: managed core bootstrap, managed document draft/apply, checkpoint materialization, daily report write, and audit records. Add `--full` to also run governed markdown note intake.
-It requires a configured model provider via `LORE_LLM_BASE_URL`, `LORE_LLM_API_KEY`, and `LORE_LLM_MODEL` because checkpoint and daily report summarization are model-backed.
+It requires a configured model provider via an `llm` profile in config or the legacy `LORE_LLM_BASE_URL`, `LORE_LLM_API_KEY`, and `LORE_LLM_MODEL` environment variables because checkpoint and daily report summarization are model-backed.
 
 ## Toolchain
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"obsidian-harness/internal/app"
+	"obsidian-harness/internal/config"
 	"obsidian-harness/internal/console"
 	"obsidian-harness/internal/mcp"
 	"obsidian-harness/internal/model"
@@ -50,6 +51,7 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 		}
 		fmt.Fprint(stdout, tui.RenderManagedStatus(version, managed))
 		fmt.Fprint(stdout, tui.RenderConfigLayers(runtime.ConfigDiagnostics))
+		fmt.Fprint(stdout, renderLLMConfigDiagnostics(runtime.LLMDiagnostics))
 		if summary, err := runtime.SummarizeUsage(time.Now()); err == nil && summary.Calls > 0 {
 			fmt.Fprint(stdout, renderTodayUsageTail(summary))
 		}
@@ -204,7 +206,7 @@ Commands:
   usage [workdir]      Summarize model-call usage and token cost
   process-sink         Inspect checkpoint and daily report status
   smoke                Run verification smoke checks (for example: smoke p0)
-  models               List models from the configured LLM endpoint
+  models               List models from the configured LLM endpoint/profile
   mcp [workdir]        Run the MCP intake server over stdio (read + proposal, no direct write)
   import-codex-jsonl   Import a Codex session JSONL into checkpoints and daily reports
   import-external-jsonl Import Lore external transcript JSONL into checkpoints and daily reports
@@ -401,6 +403,7 @@ func renderSessionSummaries(stdout io.Writer, sessions []sessionlog.Summary) {
 		fmt.Fprintf(stdout, "%s\t%s\t%d\t%s\n", summary.ID, summary.UpdatedAt.Format("2006-01-02 15:04"), summary.TurnCount, summary.Title)
 	}
 }
+
 // consolePersonaDrainTimeout caps how long the console / TUI shell
 // waits at exit for in-flight persona extraction goroutines to land
 // their candidates in the store. Short enough that a stuck LLM does
@@ -421,7 +424,7 @@ func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 		return 1
 	}
 	defer closeRuntime(stderr, runtime, "console")
-	session := console.NewSession(version)
+	session := console.NewSessionWithAgent(version, runtime.OperatorAgent)
 	session.EnableLocalWorkTools = localExec
 	// Wire the persona candidate extractor from the runtime so the
 	// fire-and-forget mining path (P4) is actually live in production.
@@ -434,6 +437,11 @@ func RunConsoleCommand(args []string, stdin io.Reader, stdout io.Writer, stderr 
 	session.PersonaExtractor = runtime.PersonaExtractor
 	session.PersonaExtractLogger = runtime.PersonaExtractLogger
 	session.PersonaExtractTimeout = runtime.PersonaExtractTimeout
+	session.PersonaExtractModelInfo = console.PersonaExtractModelInfo{
+		Provider: runtime.PersonaExtractProvider,
+		Model:    runtime.PersonaExtractModel,
+		BaseURL:  runtime.PersonaExtractBaseURL,
+	}
 	defer session.DrainPersonaExtractions(consolePersonaDrainTimeout)
 	if err := configureSessionRecorder(session, runtime, resume, resumeID, stdin, stdout, stderr, "console"); err != nil {
 		fmt.Fprintf(stderr, "console: %v\n", err)
@@ -498,7 +506,7 @@ func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 	}
 	defer closeRuntime(stderr, runtime, "tui")
 
-	session := console.NewSession(version)
+	session := console.NewSessionWithAgent(version, runtime.OperatorAgent)
 	session.DefaultAgentID = agentID
 	session.EnableLocalWorkTools = localExec
 	// Same persona extractor wiring + drain defer as the console
@@ -506,6 +514,11 @@ func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 	session.PersonaExtractor = runtime.PersonaExtractor
 	session.PersonaExtractLogger = runtime.PersonaExtractLogger
 	session.PersonaExtractTimeout = runtime.PersonaExtractTimeout
+	session.PersonaExtractModelInfo = console.PersonaExtractModelInfo{
+		Provider: runtime.PersonaExtractProvider,
+		Model:    runtime.PersonaExtractModel,
+		BaseURL:  runtime.PersonaExtractBaseURL,
+	}
 	defer session.DrainPersonaExtractions(consolePersonaDrainTimeout)
 	if err := configureSessionRecorder(session, runtime, resume, resumeID, stdin, stdout, stderr, "tui"); err != nil {
 		fmt.Fprintf(stderr, "tui: %v\n", err)
@@ -595,7 +608,7 @@ func RunTUICommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.W
 				fmt.Fprintf(stderr, "tui: %v\n", err)
 				return 1
 			}
-			lastOutput = tui.RenderManagedStatus(version, managed) + tui.RenderConfigLayers(runtime.ConfigDiagnostics)
+			lastOutput = tui.RenderManagedStatus(version, managed) + tui.RenderConfigLayers(runtime.ConfigDiagnostics) + renderLLMConfigDiagnostics(runtime.LLMDiagnostics)
 			if err := render(lastOutput); err != nil {
 				fmt.Fprintf(stderr, "tui: %v\n", err)
 				return 1
@@ -1165,23 +1178,33 @@ func runProcessSinkCommand(args []string, stdout io.Writer, stderr io.Writer) in
 func runModelsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "models: missing subcommand")
-		fmt.Fprintln(stderr, "usage: lore models list")
+		fmt.Fprintln(stderr, "usage: lore models list [workdir]")
 		return 1
 	}
 
 	switch args[0] {
 	case "list":
-		cfg, enabled, err := operatoragent.LoadEnvConfig()
+		workDir, err := resolveWorkDir(args[1:])
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		llmCfg, err := config.ResolveLLMConfig(workDir, config.LLMPurposeOperator)
 		if err != nil {
 			fmt.Fprintf(stderr, "models list: %v\n", err)
 			return 1
 		}
-		if !enabled {
-			fmt.Fprintln(stderr, "models list: configure LORE_LLM_BASE_URL and LORE_LLM_API_KEY first (legacy OBSIDIAN_HARNESS_LLM_* is still supported)")
+		if !llmCfg.Enabled {
+			fmt.Fprintln(stderr, "models list: configure llm.active_profile in .lore/config.json or set LORE_LLM_BASE_URL and LORE_LLM_API_KEY first (legacy OBSIDIAN_HARNESS_LLM_* is still supported)")
 			return 1
 		}
 
-		catalog, err := operatoragent.DiscoverModels(context.Background(), cfg)
+		catalog, err := operatoragent.DiscoverModels(context.Background(), operatoragent.EnvConfig{
+			BaseURL: llmCfg.BaseURL,
+			APIKey:  llmCfg.APIKey,
+			Model:   llmCfg.Model,
+			Timeout: llmCfg.Timeout,
+		})
 		if err != nil {
 			fmt.Fprintf(stderr, "models list: %v\n", err)
 			return 1
@@ -1195,12 +1218,13 @@ func runModelsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			}
 			fmt.Fprintf(stdout, "%s %s\n", marker, modelName)
 		}
-		if strings.TrimSpace(cfg.Model) != "" {
-			fmt.Fprintf(stdout, "\nConfigured model: %s\n", cfg.Model)
+		if strings.TrimSpace(llmCfg.Model) != "" {
+			fmt.Fprintf(stdout, "\nConfigured model: %s\n", llmCfg.Model)
 		}
 		if catalog.Recommended != "" {
 			fmt.Fprintf(stdout, "Recommended model: %s\n", catalog.Recommended)
 		}
+		fmt.Fprintf(stdout, "Config source: %s\n", llmCfg.Source)
 		return 0
 	default:
 		fmt.Fprintf(stderr, "models: unknown subcommand %q\n", args[0])

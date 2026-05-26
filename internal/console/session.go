@@ -117,11 +117,19 @@ type Session struct {
 	// file while running real-world sessions.
 	//
 	// Each line is a single \n-terminated UTF-8 record:
-	//   <RFC3339Nano UTC>\tstage=<extract|store>\tsession=<id>\terror=<quoted>\n
-	// The format is intentionally line-per-event tab-delimited so a
-	// future `lore persona errors` reader or a plain `awk` / `grep`
-	// pipeline can parse it without a structured log dependency.
+	//   <RFC3339Nano UTC>\tstage=<extract|store>\tsession=<id>\terror=<quoted>[\tmodel=<name>\tbase_url=<quoted>]\n
+	// The optional model/base_url columns are written when
+	// PersonaExtractModelInfo is populated (P4+/B-line model-consistency
+	// slice); old readers that only look at the first four columns
+	// continue to work unchanged.
 	PersonaExtractLogger io.Writer
+	// PersonaExtractModelInfo carries the upstream model identity used
+	// by the current PersonaExtractor so log lines can record which
+	// model produced the failure. Provider is informational; Model and
+	// BaseURL appear as TSV columns. The API key is intentionally not
+	// part of this struct -- the log file lives in workdir and must
+	// stay key-free.
+	PersonaExtractModelInfo PersonaExtractModelInfo
 	// personaExtractWG tracks in-flight extraction goroutines so the
 	// shell can call DrainPersonaExtractions before exit.
 	personaExtractWG sync.WaitGroup
@@ -129,6 +137,19 @@ type Session struct {
 type pendingShellCommand struct {
 	Command        string
 	TimeoutSeconds int
+}
+
+// PersonaExtractModelInfo captures the upstream model identity for
+// persona-extract failure logging. All fields are optional. The API
+// key is deliberately absent: the log file is in workdir and must
+// stay key-free. When the A-line LLM resolver lands, this struct will
+// gain a Source field (workspace / user_global / env / default) — the
+// log writer will append it as a third optional TSV column at that
+// time, no breaking change to today's reader.
+type PersonaExtractModelInfo struct {
+	Provider string
+	Model    string
+	BaseURL  string
 }
 
 func NewSession(version string) *Session {
@@ -749,21 +770,32 @@ func (s *Session) launchPersonaExtraction(runtime Runtime, userText, priorAssist
 // logPersonaExtractError emits a single tab-delimited line to
 // PersonaExtractLogger describing a failure inside the fire-and-forget
 // extraction goroutine. The format is documented on the Session field:
-// timestamp\tstage=...\tsession=...\terror="..."\n. Nil logger or nil
-// session is a silent no-op so legacy P4 callers / unit tests that do
-// not wire a logger keep their existing behavior.
+// timestamp\tstage=...\tsession=...\terror="..."[\tmodel=...\tbase_url="..."]\n.
+// Nil logger or nil session is a silent no-op so legacy P4 callers /
+// unit tests that do not wire a logger keep their existing behavior.
+// The trailing model/base_url columns are appended only when
+// PersonaExtractModelInfo is populated, so callers that have not yet
+// adopted the model-tagged shape stay format-stable.
 func (s *Session) logPersonaExtractError(stage, sessionID string, err error) {
 	if s == nil || s.PersonaExtractLogger == nil || err == nil {
 		return
 	}
 	msg := strings.ReplaceAll(err.Error(), "\n", " ")
+	var tail string
+	if model := strings.TrimSpace(s.PersonaExtractModelInfo.Model); model != "" {
+		tail += "\tmodel=" + model
+	}
+	if base := strings.TrimSpace(s.PersonaExtractModelInfo.BaseURL); base != "" {
+		tail += fmt.Sprintf("\tbase_url=%q", base)
+	}
 	fmt.Fprintf(
 		s.PersonaExtractLogger,
-		"%s\tstage=%s\tsession=%s\terror=%q\n",
+		"%s\tstage=%s\tsession=%s\terror=%q%s\n",
 		time.Now().UTC().Format(time.RFC3339Nano),
 		stage,
 		sessionID,
 		msg,
+		tail,
 	)
 }
 

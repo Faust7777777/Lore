@@ -11,6 +11,7 @@ import (
 	"obsidian-harness/internal/adapter/codexjsonl"
 	"obsidian-harness/internal/config"
 	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/operatoragent"
 	"obsidian-harness/internal/orchestrator"
 	"obsidian-harness/internal/persona"
 	"obsidian-harness/internal/store"
@@ -37,6 +38,8 @@ const personaExtractTimeoutEnv = "LORE_LLM_PERSONA_EXTRACT_TIMEOUT"
 type Runtime struct {
 	Config                   config.Config
 	ConfigDiagnostics        []config.LoadDiagnostic
+	LLMDiagnostics           []config.LLMDiagnostic
+	OperatorAgent            operatoragent.Agent
 	Harness                  *orchestrator.Harness
 	Store                    store.StateStore
 	ProcessSinkSummarizer    ProcessSinkSummarizer
@@ -70,6 +73,15 @@ type Runtime struct {
 	// defaultPersonaExtractTimeout. Console / TUI shells wire this onto
 	// Session.PersonaExtractTimeout alongside the extractor itself.
 	PersonaExtractTimeout time.Duration
+	// PersonaExtractProvider / PersonaExtractModel / PersonaExtractBaseURL
+	// snapshot the resolved LLM identity used to build PersonaExtractor
+	// so the console / TUI shell can stamp them onto persona-extract.log
+	// failure lines. Empty when no LLM is configured. The API key is
+	// deliberately not surfaced here -- the log file lives in workdir
+	// and must stay key-free.
+	PersonaExtractProvider string
+	PersonaExtractModel    string
+	PersonaExtractBaseURL  string
 }
 
 type DemoP0BResult struct {
@@ -111,12 +123,16 @@ func OpenRuntimeWithConfigOptions(workDir string, opts config.LoadOptions) (*Run
 		}
 		return nil, err
 	}
-	processSinkSummarizer, processSinkErr := defaultProcessSinkSummarizer()
-	personaExtractor, personaErr := defaultPersonaExtractor()
+	llmRuntime := resolveRuntimeLLM(cfg, diagnostics)
+	processSinkSummarizer, processSinkErr := defaultProcessSinkSummarizer(llmRuntime.byPurpose[config.LLMPurposeProcessSink], llmRuntime.errors[config.LLMPurposeProcessSink])
+	personaExtractor, personaErr := defaultPersonaExtractor(llmRuntime.byPurpose[config.LLMPurposePersonaExtract], llmRuntime.errors[config.LLMPurposePersonaExtract])
+	personaCfg := llmRuntime.byPurpose[config.LLMPurposePersonaExtract]
 	personaLogger, personaLogCloser := openPersonaExtractLog(cfg.Paths.StateDir)
 	runtime := &Runtime{
 		Config:                   cfg,
 		ConfigDiagnostics:        diagnostics,
+		LLMDiagnostics:           llmRuntime.diagnostics,
+		OperatorAgent:            llmRuntime.operatorAgent,
 		Harness:                  h,
 		Store:                    st,
 		ProcessSinkSummarizer:    processSinkSummarizer,
@@ -126,6 +142,9 @@ func OpenRuntimeWithConfigOptions(workDir string, opts config.LoadOptions) (*Run
 		PersonaExtractLogger:     personaLogger,
 		personaExtractLogCloser:  personaLogCloser,
 		PersonaExtractTimeout:    parsePersonaExtractTimeoutEnv(),
+		PersonaExtractProvider:   personaExtractIdentity(personaCfg, personaErr, llmProvider),
+		PersonaExtractModel:      personaExtractIdentity(personaCfg, personaErr, func(c config.ResolvedLLMConfig) string { return c.Model }),
+		PersonaExtractBaseURL:    personaExtractIdentity(personaCfg, personaErr, func(c config.ResolvedLLMConfig) string { return c.BaseURL }),
 	}
 	// Second-phase wiring: route summarizer cost records into the
 	// runtime's usage store. The sink is a no-op for non-model-backed

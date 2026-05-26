@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"obsidian-harness/internal/adapter/codexjsonl"
+	"obsidian-harness/internal/config"
 	openai "obsidian-harness/internal/llm/openai"
 	"obsidian-harness/internal/model"
-	"obsidian-harness/internal/operatoragent"
 )
 
 type ProcessSinkSummarizer interface {
@@ -40,31 +40,21 @@ type processSinkSummaryPayload struct {
 	Content string `json:"content"`
 }
 
-func defaultProcessSinkSummarizer() (ProcessSinkSummarizer, error) {
-	cfg, enabled, err := operatoragent.LoadEnvConfig()
-	if err != nil {
-		return nil, err
+func defaultProcessSinkSummarizer(cfg config.ResolvedLLMConfig, resolveErr error) (ProcessSinkSummarizer, error) {
+	if resolveErr != nil {
+		return nil, resolveErr
 	}
-	if !enabled {
+	if !cfg.Enabled {
 		return nil, nil
 	}
 
-	modelName, err := operatoragent.ResolveModel(context.Background(), cfg)
-	if err != nil {
-		return nil, err
-	}
-	client, err := openai.NewClient(openai.Config{
-		BaseURL: cfg.BaseURL,
-		APIKey:  cfg.APIKey,
-		Model:   modelName,
-		Timeout: cfg.Timeout,
-	})
+	client, modelName, err := openAIClientFromResolvedLLMConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
 	return &modelProcessSinkSummarizer{
 		client:   client,
-		provider: "openai-compatible",
+		provider: llmProvider(cfg),
 		model:    modelName,
 	}, nil
 }

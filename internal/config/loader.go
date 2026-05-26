@@ -32,6 +32,7 @@ type LoadDiagnostic struct {
 	Source LayerSource
 	Path   string
 	Status LayerStatus
+	HasLLM bool
 	Err    error
 }
 
@@ -143,6 +144,7 @@ func applyLayerFile(cfg *Config, source LayerSource, path string) (LoadDiagnosti
 		diag.Status = LayerStatusMissing
 		return diag, nil
 	}
+	diag.HasLLM = jsonHasTopLevelKey(data, "llm")
 	if err := json.Unmarshal(data, cfg); err != nil {
 		diag.Status = LayerStatusError
 		diag.Err = err
@@ -150,4 +152,13 @@ func applyLayerFile(cfg *Config, source LayerSource, path string) (LoadDiagnosti
 	}
 	diag.Status = LayerStatusLoaded
 	return diag, nil
+}
+
+func jsonHasTopLevelKey(data []byte, key string) bool {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return false
+	}
+	_, ok := raw[key]
+	return ok
 }

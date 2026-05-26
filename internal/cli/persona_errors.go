@@ -82,12 +82,19 @@ func parsePersonaErrorsFlags(args []string, stderr io.Writer) (workDir string, t
 // tab-delimited fields so JSON emit does not have to re-split raw.
 // error is unquoted via unquoteSafe because session.go's
 // logPersonaExtractError formats it as %q.
+//
+// model and baseURL are optional fifth/sixth columns introduced by
+// the B-line model-consistency slice. Absent on legacy lines (those
+// stay parsed=true with empty values); the JSON emitter omits empty
+// strings via the omitempty tag below.
 type personaLogEntry struct {
 	raw     string
 	ts      time.Time
 	stage   string
 	session string
 	errMsg  string
+	model   string
+	baseURL string
 	parsed  bool
 }
 
@@ -103,7 +110,7 @@ func parsePersonaLogLine(raw string) personaLogEntry {
 	if !strings.HasPrefix(fields[1], "stage=") {
 		return personaLogEntry{raw: raw, ts: ts}
 	}
-	return personaLogEntry{
+	entry := personaLogEntry{
 		raw:     raw,
 		ts:      ts,
 		stage:   strings.TrimPrefix(fields[1], "stage="),
@@ -111,6 +118,15 @@ func parsePersonaLogLine(raw string) personaLogEntry {
 		errMsg:  unquoteSafe(strings.TrimPrefix(fields[3], "error=")),
 		parsed:  true,
 	}
+	for _, extra := range fields[4:] {
+		switch {
+		case strings.HasPrefix(extra, "model="):
+			entry.model = strings.TrimPrefix(extra, "model=")
+		case strings.HasPrefix(extra, "base_url="):
+			entry.baseURL = unquoteSafe(strings.TrimPrefix(extra, "base_url="))
+		}
+	}
+	return entry
 }
 
 // readPersonaLogEntries loads logPath and returns one parsed entry per
@@ -162,6 +178,8 @@ func emitPersonaExtractErrorsJSON(stdout, stderr io.Writer, logPath string, tail
 		Stage     string `json:"stage"`
 		Session   string `json:"session"`
 		Error     string `json:"error"`
+		Model     string `json:"model,omitempty"`
+		BaseURL   string `json:"base_url,omitempty"`
 		Raw       string `json:"raw"`
 	}
 	type filterOut struct {
@@ -241,6 +259,8 @@ func emitPersonaExtractErrorsJSON(stdout, stderr io.Writer, logPath string, tail
 			entry.Stage = e.stage
 			entry.Session = e.session
 			entry.Error = e.errMsg
+			entry.Model = e.model
+			entry.BaseURL = e.baseURL
 		}
 		out.Entries = append(out.Entries, entry)
 	}

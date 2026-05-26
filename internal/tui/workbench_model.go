@@ -45,6 +45,7 @@ type WorkbenchSnapshot struct {
 	HealthStatus    string
 	HealthMessage   string
 	AgentID         string
+	CurrentModel    string // e.g. "gpt-5.4 @ api.ikuncode.cc"
 	Day             time.Time
 	DailyReportPath string
 	SessionID       string

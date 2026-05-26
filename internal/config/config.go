@@ -16,6 +16,7 @@ type Config struct {
 	Runtime     RuntimeConfig     `json:"runtime"`
 	ProcessSink ProcessSinkConfig `json:"process_sink"`
 	Usage       UsageConfig       `json:"usage"`
+	LLM         LLMConfig         `json:"llm"`
 	Bootstrap   BootstrapConfig   `json:"bootstrap"`
 }
 
@@ -58,6 +59,20 @@ type ProcessSinkConfig struct {
 type UsageConfig struct {
 	TrackUsage        bool `json:"track_usage"`
 	SoftWarningTokens int  `json:"soft_warning_tokens"`
+}
+
+type LLMConfig struct {
+	ActiveProfile string                      `json:"active_profile"`
+	Profiles      map[string]LLMProfileConfig `json:"profiles"`
+}
+
+type LLMProfileConfig struct {
+	Provider  string        `json:"provider"`
+	BaseURL   string        `json:"base_url"`
+	Model     string        `json:"model"`
+	Timeout   time.Duration `json:"timeout"`
+	APIKeyEnv string        `json:"api_key_env"`
+	APIKeyRef string        `json:"api_key_ref"`
 }
 
 type BootstrapConfig struct {

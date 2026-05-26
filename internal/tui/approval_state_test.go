@@ -61,6 +61,18 @@ func (d *approvalDriverStub) ExecuteApprovalAction(action string, draftID string
 	return InteractiveWorkbenchUpdate{ViewModel: vm, LastOutput: action + " " + draftID}, nil
 }
 
+func (d *approvalDriverStub) DiscoverModels() ([]ModelInfo, error) {
+	return nil, nil
+}
+
+func (d *approvalDriverStub) SwitchModel(name string) ([]ModelInfo, error) {
+	return nil, nil
+}
+
+func (d *approvalDriverStub) TestModel(name string) error {
+	return nil
+}
+
 func newApprovalModel(drafts []model.Draft) interactiveWorkbenchModel {
 	driver := &approvalDriverStub{drafts: drafts}
 	vm, _ := driver.Load("")

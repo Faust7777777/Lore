@@ -487,6 +487,7 @@ type panelDriverStub struct {
 	sink         app.ProcessSinkDayView
 	drafts       []model.Draft
 	conversation []operatoragent.ConversationTurn
+	models       []ModelInfo
 }
 
 func (d *panelDriverStub) Load(lastOutput string) (WorkbenchViewModel, error) {
@@ -531,6 +532,21 @@ func (d *panelDriverStub) ExecuteFindingAction(action string, findingID string) 
 	return InteractiveWorkbenchUpdate{ViewModel: vm, LastOutput: action + " " + findingID}, nil
 }
 
+func (d *panelDriverStub) DiscoverModels() ([]ModelInfo, error) {
+	return d.models, nil
+}
+
+func (d *panelDriverStub) SwitchModel(name string) ([]ModelInfo, error) {
+	for i := range d.models {
+		d.models[i].Current = (d.models[i].Name == name)
+	}
+	return d.models, nil
+}
+
+func (d *panelDriverStub) TestModel(name string) error {
+	return nil
+}
+
 // errorDriverStub always returns errors from ExecuteFindingAction and ExecuteApprovalAction.
 type errorDriverStub struct {
 	findings []model.Finding
@@ -556,6 +572,18 @@ func (d *errorDriverStub) ExecuteApprovalAction(action string, draftID string) (
 
 func (d *errorDriverStub) ExecuteFindingAction(action string, findingID string) (InteractiveWorkbenchUpdate, error) {
 	return InteractiveWorkbenchUpdate{}, fmt.Errorf("finding %s %s failed: stub error", action, findingID)
+}
+
+func (d *errorDriverStub) DiscoverModels() ([]ModelInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (d *errorDriverStub) SwitchModel(name string) ([]ModelInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (d *errorDriverStub) TestModel(name string) error {
+	return fmt.Errorf("not implemented")
 }
 
 // TestP0PaneOverlapPrevention verifies that the layout never exceeds
@@ -648,5 +676,156 @@ func TestP0PaneOverlapPrevention(t *testing.T) {
 	}
 	if m.focus != focusInput {
 		t.Fatalf("after 6 Tabs, focus = %d, want %d (focusInput)", m.focus, focusInput)
+	}
+}
+
+// --- Model panel tests ---
+
+func TestModelPanelEnterExit(t *testing.T) {
+	models := []ModelInfo{
+		{Name: "gpt-5.4", Provider: "openai", Source: "discovered", KeyStatus: "OK"},
+		{Name: "deepseek-v4-pro", Provider: "deepseek", Source: "discovered", KeyStatus: "OK", Current: true},
+	}
+	driver := &panelDriverStub{models: models}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+
+	// Enter model panel — handleLocalCommand returns a Cmd that populates the list
+	handled, updated, cmd := m.handleLocalCommand("/model")
+	if !handled {
+		t.Fatal("/model should be handled as local command")
+	}
+	m = *updated.(*interactiveWorkbenchModel)
+	if !m.modelPanelActive {
+		t.Fatal("model panel should be active after /model")
+	}
+	// Execute the Cmd to populate model list
+	if cmd == nil {
+		t.Fatal("/model should return a Cmd to load models")
+	}
+	result := cmd()
+	if msg, ok := result.(modelPanelMsg); ok && msg.err != nil {
+		t.Fatalf("loading model list: %v", msg.err)
+	}
+	// Process the msg in Update
+	updated, _ = m.Update(result)
+	m = updated.(interactiveWorkbenchModel)
+	if len(m.modelPanelList) == 0 {
+		t.Fatal("model list should be populated after /model")
+	}
+
+	// Exit with esc
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(interactiveWorkbenchModel)
+	if m.modelPanelActive {
+		t.Fatal("model panel should not be active after esc")
+	}
+}
+
+func TestModelPanelNavigation(t *testing.T) {
+	models := []ModelInfo{
+		{Name: "gpt-5.4", Provider: "openai", Source: "discovered", KeyStatus: "OK"},
+		{Name: "deepseek-v4-pro", Provider: "deepseek", Source: "discovered", KeyStatus: "OK", Current: true},
+		{Name: "claude-4", Provider: "anthropic", Source: "discovered", KeyStatus: "OK"},
+	}
+	driver := &panelDriverStub{models: models}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+
+	handled, updated, cmd := m.handleLocalCommand("/model")
+	if !handled {
+		t.Fatal("/model should be handled")
+	}
+	m = *updated.(*interactiveWorkbenchModel)
+	// Execute Cmd to populate list
+	result := cmd()
+	updated, _ = m.Update(result)
+	m = updated.(interactiveWorkbenchModel)
+	if m.modelPanelCursor != 0 {
+		t.Fatalf("initial cursor = %d, want 0", m.modelPanelCursor)
+	}
+
+	// j moves down
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(interactiveWorkbenchModel)
+	if m.modelPanelCursor != 1 {
+		t.Fatalf("after j cursor = %d, want 1", m.modelPanelCursor)
+	}
+
+	// k moves up
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updated.(interactiveWorkbenchModel)
+	if m.modelPanelCursor != 0 {
+		t.Fatalf("after k cursor = %d, want 0", m.modelPanelCursor)
+	}
+
+	// k at top should stay
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updated.(interactiveWorkbenchModel)
+	if m.modelPanelCursor != 0 {
+		t.Fatalf("after k at top cursor = %d, want 0", m.modelPanelCursor)
+	}
+
+	// j at bottom should stay
+	for i := 0; i < 5; i++ {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		m = updated.(interactiveWorkbenchModel)
+	}
+	if m.modelPanelCursor != 2 {
+		t.Fatalf("after j at bottom cursor = %d, want 2", m.modelPanelCursor)
+	}
+}
+
+func TestModelLocalCommandCurrent(t *testing.T) {
+	vm := WorkbenchViewModel{
+		Snapshot: WorkbenchSnapshot{CurrentModel: "gpt-5.4 @ api.ikuncode.cc"},
+	}
+	m := newInteractiveWorkbenchModel(&panelDriverStub{}, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+
+	handled, _, _ := m.handleLocalCommand("/model current")
+	if !handled {
+		t.Fatal("/model current should be handled")
+	}
+	if !strings.Contains(m.lastOutput, "gpt-5.4") {
+		t.Fatalf("current model output should contain model name, got: %q", m.lastOutput)
+	}
+}
+
+func TestModelPanelRenderShowsFooterActions(t *testing.T) {
+	models := []ModelInfo{
+		{Name: "gpt-5.4", Provider: "openai", BaseURL: "https://api.test.com/v1", Source: "discovered", KeyStatus: "OK"},
+		{Name: "deepseek-v4-pro", Provider: "deepseek", BaseURL: "https://api.test.com/v1", Source: "discovered", KeyStatus: "OK"},
+	}
+	result := renderModelPanel(models, 0, false, "", 50, 10)
+	for _, expected := range []string{"r=refresh", "t=test", "enter=use", "e=edit", "esc=back"} {
+		if !strings.Contains(result, expected) {
+			t.Errorf("model panel footer missing %q in output:\n%s", expected, result)
+		}
+	}
+	if !strings.Contains(result, "api.test.com") {
+		t.Errorf("model panel should show base URL (not secret), got:\n%s", result)
+	}
+	// API key must not appear
+	if strings.Contains(result, "sk-") || strings.Contains(result, "API_KEY") {
+		t.Errorf("model panel must NOT contain API key, got:\n%s", result)
+	}
+}
+
+func TestModelPanelRenderEmpty(t *testing.T) {
+	result := renderModelPanel(nil, 0, false, "", 50, 10)
+	if !strings.Contains(result, "No models discovered") {
+		t.Errorf("empty state should show 'No models discovered', got: %q", result)
 	}
 }

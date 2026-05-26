@@ -1,48 +1,29 @@
 package app
 
 import (
-	"context"
-
-	openai "obsidian-harness/internal/llm/openai"
+	"obsidian-harness/internal/config"
 	"obsidian-harness/internal/model"
-	"obsidian-harness/internal/operatoragent"
 	"obsidian-harness/internal/persona"
 )
 
 // defaultPersonaExtractor returns a persona.PersonaCandidateExtractor
-// built from the same LORE_LLM_* env config the operator agent uses,
-// or (nil, nil) when those env vars are not set so the runtime can
-// still operate without an LLM (the console fire-and-forget call site
-// guards on a nil extractor). Errors from env parsing or model
-// resolution bubble up so OpenRuntime can stash them on
-// Runtime.personaExtractorErr for diagnostic surfacing.
-//
-// Reuses operatoragent.LoadEnvConfig + ResolveModel rather than
-// growing a parallel env contract, mirroring how
-// defaultProcessSinkSummarizer composes its client. The shared env
-// keeps "no LLM configured" a single decision rather than three.
-func defaultPersonaExtractor() (persona.PersonaCandidateExtractor, error) {
-	cfg, enabled, err := operatoragent.LoadEnvConfig()
-	if err != nil {
-		return nil, err
+// built from the runtime-resolved LLM config. Workspace/user-global
+// profiles take precedence over legacy env-only config; the resolved
+// profile still reads the actual API key from api_key_env so secrets
+// stay out of repo, vault, and sessionlog. A disabled config returns
+// (nil, nil), preserving the fire-and-forget call site's nil guard.
+func defaultPersonaExtractor(cfg config.ResolvedLLMConfig, resolveErr error) (persona.PersonaCandidateExtractor, error) {
+	if resolveErr != nil {
+		return nil, resolveErr
 	}
-	if !enabled {
+	if !cfg.Enabled {
 		return nil, nil
 	}
-	modelName, err := operatoragent.ResolveModel(context.Background(), cfg)
+	client, modelName, err := openAIClientFromResolvedLLMConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
-	client, err := openai.NewClient(openai.Config{
-		BaseURL: cfg.BaseURL,
-		APIKey:  cfg.APIKey,
-		Model:   modelName,
-		Timeout: cfg.Timeout,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return persona.NewLLMExtractor(client, "openai-compatible", modelName), nil
+	return persona.NewLLMExtractor(client, llmProvider(cfg), modelName), nil
 }
 
 // attachPersonaExtractorUsageSink wires a usage sink into a
@@ -55,4 +36,18 @@ func attachPersonaExtractorUsageSink(extractor persona.PersonaCandidateExtractor
 	if e, ok := extractor.(*persona.LLMExtractor); ok {
 		e.AttachUsageSink(sink)
 	}
+}
+
+// personaExtractIdentity returns one of the resolved-config identity
+// strings (provider, model, base URL) when the persona-extract LLM
+// resolved without error. resolveErr non-nil or Enabled false yields
+// "" so the console wiring layer leaves Session.PersonaExtractModelInfo
+// fields empty rather than logging stale values from a failed resolve.
+// The selector indirection lets one helper cover provider / model /
+// base URL without duplicating the gating logic.
+func personaExtractIdentity(cfg config.ResolvedLLMConfig, resolveErr error, selector func(config.ResolvedLLMConfig) string) string {
+	if resolveErr != nil || !cfg.Enabled {
+		return ""
+	}
+	return selector(cfg)
 }

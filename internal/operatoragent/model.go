@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"obsidian-harness/internal/config"
 	openai "obsidian-harness/internal/llm/openai"
 	"obsidian-harness/internal/model"
 )
@@ -24,6 +25,10 @@ type ModelAgent struct {
 	provider string
 	model    string
 }
+
+// CurrentModel returns the active model name (e.g. "gpt-5.4").
+func (a ModelAgent) CurrentModel() string { return a.model }
+func (a ErrorAgent) CurrentModel() string { return "" }
 
 type ErrorAgent struct {
 	err error
@@ -136,6 +141,35 @@ func NewFromEnv() (Agent, error) {
 		return nil, err
 	}
 	return NewModelAgent(client, "openai-compatible", modelName), nil
+}
+
+func NewFromResolvedLLMConfig(cfg config.ResolvedLLMConfig) (Agent, error) {
+	if !cfg.Enabled {
+		return nil, nil
+	}
+	modelName, err := ResolveModel(context.Background(), EnvConfig{
+		BaseURL: cfg.BaseURL,
+		APIKey:  cfg.APIKey,
+		Model:   cfg.Model,
+		Timeout: cfg.Timeout,
+	})
+	if err != nil {
+		return nil, err
+	}
+	client, err := openai.NewClient(openai.Config{
+		BaseURL: cfg.BaseURL,
+		APIKey:  cfg.APIKey,
+		Model:   modelName,
+		Timeout: cfg.Timeout,
+	})
+	if err != nil {
+		return nil, err
+	}
+	provider := strings.TrimSpace(cfg.Provider)
+	if provider == "" {
+		provider = "openai-compatible"
+	}
+	return NewModelAgent(client, provider, modelName), nil
 }
 
 // NewModelAgent constructs a ModelAgent bound to a client and the

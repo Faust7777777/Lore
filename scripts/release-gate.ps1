@@ -151,6 +151,16 @@ try {
         -Run "Test(LiveMCPToolContractV1Snapshot|SDKFacingToolContractSnapshot|MCPV1ExposesOnlyReadAndProposalTools|ExternalMCPDoesNotExposeDirectWrites)$"
 
     Invoke-GoGate `
+        -Label "LLM config resolver guardrails" `
+        -Package "./internal/config" `
+        -Run "TestResolveLLMConfig"
+
+    Invoke-GoGate `
+        -Label "runtime LLM profile wiring guardrails" `
+        -Package "./internal/app" `
+        -Run "TestOpenRuntimeUsesWorkspaceLLMProfileOverGenericEnv$"
+
+    Invoke-GoGate `
         -Label "vault symlink and traversal guardrails" `
         -Package "./internal/vault" `
         -Run "Test(ReadRelativeWithHash(BlocksTraversal|RejectsSymlinkFileOutsideRoot)|WalkListSearchAndBacklinksSkip(FileSymlink|DirectorySymlink)OutsideRoot)$"

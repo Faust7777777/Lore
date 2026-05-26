@@ -53,26 +53,33 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 	// Right-bottom pane switches content based on focus
 	var rightBottomContent string
 	var rightBottomTitle string
-	switch model.focus {
-	case focusFindings:
-		rightBottomTitle = "Findings"
-		rightBottomContent = renderFindingsPane(model.viewModel.Findings, model.findingsCursor, model.findingsOffset, model.findingsDetail, rightWidth-4, visiblePanelHeight(model.findingsHeight, rightBottomHeight-4))
-	case focusProcessSink:
-		if narrow {
-			rightBottomTitle = "Sink Timeline"
-		} else {
-			rightBottomTitle = "Process-sink Timeline"
+	if model.modelPanelActive {
+		rightBottomTitle = "Model"
+		rightBottomContent = renderModelPanel(model.modelPanelList, model.modelPanelCursor, model.modelPanelEditing, model.modelPanelEditText, rightWidth-4, visiblePanelHeight(model.approvalHeight, rightBottomHeight-4))
+	} else {
+		switch model.focus {
+		case focusFindings:
+			rightBottomTitle = "Findings"
+			rightBottomContent = renderFindingsPane(model.viewModel.Findings, model.findingsCursor, model.findingsOffset, model.findingsDetail, rightWidth-4, visiblePanelHeight(model.findingsHeight, rightBottomHeight-4))
+		case focusProcessSink:
+			if narrow {
+				rightBottomTitle = "Sink Timeline"
+			} else {
+				rightBottomTitle = "Process-sink Timeline"
+			}
+			rightBottomContent = renderSinkTimelinePane(model.viewModel.ProcessSink, model.sinkCursor, model.sinkOffset, model.sinkDetail, rightWidth-4, visiblePanelHeight(model.sinkHeight, rightBottomHeight-4))
+		default:
+			// focusApproval (and any other) shows drafts
+			rightBottomTitle = approvalTitle
+			rightBottomContent = renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalOffset, model.approvalDetail, model.viewModel.FocusedReview, rightWidth-4, visiblePanelHeight(model.approvalHeight, rightBottomHeight-4))
 		}
-		rightBottomContent = renderSinkTimelinePane(model.viewModel.ProcessSink, model.sinkCursor, model.sinkOffset, model.sinkDetail, rightWidth-4, visiblePanelHeight(model.sinkHeight, rightBottomHeight-4))
-	default:
-		// focusApproval (and any other) shows drafts
-		rightBottomTitle = approvalTitle
-		rightBottomContent = renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalOffset, model.approvalDetail, model.viewModel.FocusedReview, rightWidth-4, visiblePanelHeight(model.approvalHeight, rightBottomHeight-4))
 	}
 
+	rightBottomFocused := model.modelPanelActive || model.focus == focusApproval || model.focus == focusFindings || model.focus == focusProcessSink
+
 	rightBottomPane := clipPaneLines(
-		paneStyle(model.focus == focusApproval || model.focus == focusFindings || model.focus == focusProcessSink).Width(rightWidth).Height(rightBottomHeight).Render(
-			renderPaneTitle(rightBottomTitle, model.focus == focusApproval || model.focus == focusFindings || model.focus == focusProcessSink, false, "", "")+"\n"+rightBottomContent,
+		paneStyle(rightBottomFocused).Width(rightWidth).Height(rightBottomHeight).Render(
+			renderPaneTitle(rightBottomTitle, rightBottomFocused, false, "", "")+"\n"+rightBottomContent,
 		), rightBottomHeight)
 	rightColumn := lipgloss.JoinVertical(lipgloss.Left, statusPane, rightBottomPane)
 
@@ -249,6 +256,9 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 	}
 	builder.WriteString("  Drafts   " + viewModel.Snapshot.DraftSummary() + "\n")
 	builder.WriteString("  Agent    " + oneLine(viewModel.Snapshot.AgentID, 20) + "\n")
+	if viewModel.Snapshot.CurrentModel != "" {
+		builder.WriteString("  Model    " + styleOK.Render(viewModel.Snapshot.CurrentModel) + "\n")
+	}
 	if viewModel.Snapshot.SessionID != "" {
 		builder.WriteString("  Session  " + oneLine(viewModel.Snapshot.SessionID, 20) + "\n")
 	}
@@ -293,6 +303,75 @@ func renderApprovalPane(drafts []model.Draft, cursor int, offset int, detail boo
 	}
 
 	return renderApprovalList(drafts, cursor, offset, width, height)
+}
+
+// --- Model panel ---
+
+func renderModelPanel(models []ModelInfo, cursor int, editing bool, editText string, width int, height int) string {
+	if len(models) == 0 {
+		return styleMutedText.Render("No models discovered.") + "\n" +
+			styleMutedText.Render("Check LORE_LLM_BASE_URL and LORE_LLM_API_KEY.")
+	}
+
+	var builder strings.Builder
+
+	listHeight := height - 2
+	if listHeight < 1 {
+		listHeight = 1
+	}
+
+	start := cursor - listHeight/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + listHeight
+	if end > len(models) {
+		end = len(models)
+		start = maxInt(0, end-listHeight)
+	}
+
+	for i := start; i < end; i++ {
+		m := models[i]
+		prefix := "  "
+		nameStyle := styleMutedText
+		if i == cursor {
+			prefix = styleWarn.Render(glyphFocus + " ")
+			nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
+		}
+
+		currentMark := "  "
+		if m.Current {
+			currentMark = styleOK.Render("* ")
+		}
+
+		testMark := styleMutedText.Render("? ")
+		if m.TestStatus == "OK" {
+			testMark = styleOK.Render("ok ")
+		} else if strings.HasPrefix(m.TestStatus, "failed") {
+			testMark = styleErr.Render("!! ")
+		}
+
+		line := prefix + currentMark + nameStyle.Render(m.Name)
+		if width > 55 {
+			line += "  " + testMark + styleMutedText.Render(m.Provider)
+		}
+		builder.WriteString(oneLine(line, maxInt(8, width-2)))
+		builder.WriteString("\n")
+	}
+
+	if editing {
+		builder.WriteString(styleWarn.Render("model> ") + editText)
+		builder.WriteString("\n")
+	}
+
+	footer := fmt.Sprintf("[%d/%d] r=refresh t=test enter=use e=edit esc=back", cursor+1, len(models))
+	if len(models) > 0 && models[0].BaseURL != "" {
+		footer += " @ " + models[0].BaseURL
+	}
+	builder.WriteString(styleMutedText.Render(footer))
+	builder.WriteString("\n")
+
+	return builder.String()
 }
 
 func renderApprovalList(drafts []model.Draft, cursor int, offset int, width int, height int) string {

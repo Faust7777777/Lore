@@ -21,6 +21,10 @@ type InteractiveWorkbenchDriver interface {
 	Execute(line string, lastOutput string) (InteractiveWorkbenchUpdate, error)
 	ExecuteApprovalAction(action string, draftID string) (InteractiveWorkbenchUpdate, error)
 	ExecuteFindingAction(action string, findingID string) (InteractiveWorkbenchUpdate, error)
+	// Model management: discover available models and switch the session agent.
+	DiscoverModels() ([]ModelInfo, error)
+	SwitchModel(name string) ([]ModelInfo, error)
+	TestModel(name string) error
 }
 
 type InteractiveWorkbenchContextDriver interface {
@@ -32,6 +36,18 @@ type InteractiveWorkbenchUpdate struct {
 	ViewModel  WorkbenchViewModel
 	LastOutput string
 	Quit       bool
+}
+
+// ModelInfo describes a single model entry for the TUI model panel.
+// API key information MUST NOT appear in any rendered field.
+type ModelInfo struct {
+	Name       string // e.g. "gpt-5.4", "deepseek-v4-pro"
+	Provider   string // e.g. "openai", "deepseek"
+	BaseURL    string // e.g. "https://api.ikuncode.cc/v1" (never contains key)
+	Source     string // "env", "discovered", "manual"
+	KeyStatus  string // "OK", "missing" (never the key value)
+	TestStatus string // "", "OK", "failed: reason"
+	Current    bool
 }
 
 type interactiveFocus int
@@ -48,6 +64,14 @@ const (
 type interactiveResultMsg struct {
 	update InteractiveWorkbenchUpdate
 	err    error
+}
+
+// modelPanelMsg carries the result of a /model list or /model use operation.
+type modelPanelMsg struct {
+	models []ModelInfo
+	err    error
+	action string // "list", "switch", "test"
+	name   string // model name for switch/test
 }
 
 type textSelection struct {
@@ -85,6 +109,12 @@ type interactiveWorkbenchModel struct {
 	sinkOffset       int
 	sinkDetail       bool
 	sinkHeight       int
+	// Model panel state: toggled via /model command.
+	modelPanelActive   bool
+	modelPanelCursor   int
+	modelPanelList     []ModelInfo
+	modelPanelEditing  bool
+	modelPanelEditText string
 }
 
 func RunInteractiveWorkbench(input io.Reader, output io.Writer, driver InteractiveWorkbenchDriver) error {
@@ -180,9 +210,22 @@ func (m interactiveWorkbenchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleApprovalResult(msg)
 	case findingsResultMsg:
 		return m.handleFindingsResult(msg)
+	case modelPanelMsg:
+		return m.handleModelPanelResult(msg)
 	case tea.MouseMsg:
 		return m.handleMouse(tea.MouseEvent(msg))
 	case tea.KeyMsg:
+		// When model panel is active, route all keys to the model handler
+		if m.modelPanelActive && !m.running {
+			switch msg.String() {
+			case "ctrl+c", "ctrl+q":
+				m.modelPanelActive = false
+				m.refreshContent(false)
+				return m, nil
+			default:
+				return m.handleModelPanelKeys(msg)
+			}
+		}
 		switch msg.String() {
 		case "ctrl+c":
 			if m.selection.active {
@@ -267,8 +310,8 @@ func (m interactiveWorkbenchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if line == "" {
 					return m, nil
 				}
-				if handled, model := m.handleLocalCommand(line); handled {
-					return model, nil
+				if handled, model, cmd := m.handleLocalCommand(line); handled {
+					return model, cmd
 				}
 				m.running = true
 				m.pendingLine = line
@@ -303,6 +346,31 @@ func (m *interactiveWorkbenchModel) executeLine(line string) tea.Cmd {
 		}
 		update, err := m.driver.Execute(line, m.lastOutput)
 		return interactiveResultMsg{update: update, err: err}
+	}
+}
+
+// modelPanelCmds dispatch model panel operations via tea.Cmd.
+func modelPanelListCmd(driver InteractiveWorkbenchDriver) tea.Cmd {
+	return func() tea.Msg {
+		models, err := driver.DiscoverModels()
+		return modelPanelMsg{models: models, err: err, action: "list"}
+	}
+}
+
+func modelPanelSwitchCmd(driver InteractiveWorkbenchDriver, name string) tea.Cmd {
+	return func() tea.Msg {
+		models, err := driver.SwitchModel(name)
+		return modelPanelMsg{models: models, err: err, action: "switch", name: name}
+	}
+}
+
+func modelPanelTestCmd(driver InteractiveWorkbenchDriver, name string) tea.Cmd {
+	return func() tea.Msg {
+		err := driver.TestModel(name)
+		if err != nil {
+			return modelPanelMsg{err: err, action: "test", name: name}
+		}
+		return modelPanelMsg{action: "test", name: name}
 	}
 }
 
@@ -460,15 +528,179 @@ func (m *interactiveWorkbenchModel) applySelectionHighlight(content string) stri
 	return strings.Join(lines, "\n")
 }
 
-func (m *interactiveWorkbenchModel) handleLocalCommand(line string) (bool, tea.Model) {
-	switch strings.ToLower(line) {
-	case "/session":
+func (m *interactiveWorkbenchModel) handleLocalCommand(line string) (bool, tea.Model, tea.Cmd) {
+	lower := strings.ToLower(line)
+	switch {
+	case lower == "/session":
 		m.input.Reset()
 		m.lastOutput = renderSessionDetail(m.viewModel.Snapshot)
 		m.refreshContent(true)
-		return true, m
+		return true, m, nil
+	case lower == "/model", lower == "/model list":
+		m.input.Reset()
+		m.modelPanelActive = true
+		m.modelPanelEditing = false
+		m.refreshContent(false)
+		return true, m, modelPanelListCmd(m.driver)
+	case lower == "/model current":
+		m.input.Reset()
+		model := m.viewModel.Snapshot.CurrentModel
+		if model == "" {
+			model = "unknown"
+		}
+		m.lastOutput = "Current model: " + model
+		m.refreshContent(true)
+		return true, m, nil
+	case strings.HasPrefix(lower, "/model use "):
+		name := strings.TrimSpace(line[len("/model use "):])
+		if name == "" {
+			return true, m, nil
+		}
+		m.input.Reset()
+		m.running = true
+		m.pendingLine = "/model use " + name
+		m.refreshContent(true)
+		m.modelPanelActive = false
+		return true, m, modelPanelSwitchCmd(m.driver, name)
+	case lower == "/model test":
+		m.input.Reset()
+		model := m.viewModel.Snapshot.CurrentModel
+		if model == "" {
+			m.lastOutput = "No current model to test"
+			m.refreshContent(true)
+			return true, m, nil
+		}
+		m.running = true
+		m.refreshContent(true)
+		return true, m, modelPanelTestCmd(m.driver, model)
 	default:
-		return false, m
+		return false, m, nil
+	}
+}
+
+// --- Model panel handlers ---
+
+func (m interactiveWorkbenchModel) handleModelPanelResult(msg modelPanelMsg) (tea.Model, tea.Cmd) {
+	switch msg.action {
+	case "list":
+		if msg.err != nil {
+			m.lastOutput = "Error: model: " + msg.err.Error()
+		} else {
+			m.modelPanelList = msg.models
+			if m.modelPanelCursor >= len(msg.models) {
+				m.modelPanelCursor = maxInt(0, len(msg.models)-1)
+			}
+		}
+		m.refreshContent(false)
+		return m, nil
+	case "switch":
+		m.running = false
+		m.pendingLine = ""
+		if msg.err != nil {
+			m.lastOutput = "Error: model: " + msg.err.Error()
+		} else {
+			m.modelPanelList = msg.models
+			m.lastOutput = "Switched to model: " + msg.name
+			if refreshed, loadErr := m.driver.Load(m.lastOutput); loadErr == nil {
+				m.viewModel = refreshed
+			}
+		}
+		m.refreshContent(true)
+		return m, nil
+	case "test":
+		m.running = false
+		m.pendingLine = ""
+		if msg.err != nil {
+			m.lastOutput = "Error: model test: " + msg.err.Error()
+		} else {
+			m.lastOutput = "Model " + msg.name + ": OK"
+		}
+		m.refreshContent(true)
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m interactiveWorkbenchModel) handleModelPanelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.modelPanelEditing {
+		return m.handleModelEditKeys(msg)
+	}
+
+	switch msg.String() {
+	case "esc":
+		m.modelPanelActive = false
+		m.modelPanelEditing = false
+		m.modelPanelEditText = ""
+		m.refreshContent(false)
+		return m, nil
+	case "up", "k":
+		if m.modelPanelCursor > 0 {
+			m.modelPanelCursor--
+		}
+		return m, nil
+	case "down", "j":
+		if m.modelPanelCursor < len(m.modelPanelList)-1 {
+			m.modelPanelCursor++
+		}
+		return m, nil
+	case "r":
+		return m, modelPanelListCmd(m.driver)
+	case "t":
+		if m.modelPanelCursor < len(m.modelPanelList) {
+			sel := m.modelPanelList[m.modelPanelCursor]
+			m.running = true
+			m.refreshContent(true)
+			return m, modelPanelTestCmd(m.driver, sel.Name)
+		}
+		return m, nil
+	case "enter":
+		if m.modelPanelCursor < len(m.modelPanelList) {
+			sel := m.modelPanelList[m.modelPanelCursor]
+			if sel.Current {
+				return m, nil
+			}
+			m.running = true
+			m.pendingLine = "/model use " + sel.Name
+			m.refreshContent(true)
+			return m, modelPanelSwitchCmd(m.driver, sel.Name)
+		}
+		return m, nil
+	case "e":
+		m.modelPanelEditing = true
+		m.modelPanelEditText = ""
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m interactiveWorkbenchModel) handleModelEditKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.modelPanelEditing = false
+		m.modelPanelEditText = ""
+		return m, nil
+	case "enter":
+		name := strings.TrimSpace(m.modelPanelEditText)
+		m.modelPanelEditing = false
+		m.modelPanelEditText = ""
+		if name == "" {
+			return m, nil
+		}
+		m.running = true
+		m.pendingLine = "/model use " + name
+		m.refreshContent(true)
+		return m, modelPanelSwitchCmd(m.driver, name)
+	case "backspace":
+		if len(m.modelPanelEditText) > 0 {
+			runes := []rune(m.modelPanelEditText)
+			m.modelPanelEditText = string(runes[:len(runes)-1])
+		}
+		return m, nil
+	default:
+		if len(msg.Runes) == 1 {
+			m.modelPanelEditText += string(msg.Runes)
+		}
+		return m, nil
 	}
 }
 
