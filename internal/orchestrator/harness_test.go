@@ -3,8 +3,11 @@ package orchestrator
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -102,6 +105,30 @@ func (failingAuditStore) AppendAudit(model.AuditRecord) error {
 func (failingAuditStore) ListAudit(int) ([]model.AuditRecord, error) {
 	return nil, errors.New("forced audit failure")
 }
+
+func requireSymlink(t *testing.T, target string, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink creation unavailable in this environment: %v", err)
+	}
+}
+
+func requireDirectoryLink(t *testing.T, target string, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("cmd", "/c", "mklink", "/J", link, target)
+		if output, err := cmd.CombinedOutput(); err == nil {
+			return
+		} else {
+			t.Skipf("directory symlink/junction creation unavailable in this environment: %v: %s", err, string(output))
+		}
+	}
+	t.Skipf("directory symlink creation unavailable in this environment")
+}
+
 func TestWriteLowRiskNoteRejectsGovernedPaths(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := config.Default(workDir)
@@ -128,6 +155,88 @@ func TestWriteLowRiskNoteRejectsGovernedPaths(t *testing.T) {
 		if _, err := h.WriteLowRiskNote(path, []byte("blocked"), true, time.Now()); !errors.Is(err, ErrDirectWriteDenied) {
 			t.Fatalf("WriteLowRiskNote(%q) error = %v, want ErrDirectWriteDenied", path, err)
 		}
+	}
+}
+
+func TestWriteLowRiskNoteRejectsParentSymlinkOutsideRoot(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if err := os.MkdirAll(cfg.Paths.VaultRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(vault) error = %v", err)
+	}
+	outsideDir := t.TempDir()
+	requireDirectoryLink(t, outsideDir, filepath.Join(cfg.Paths.VaultRoot, "03-notes"))
+
+	if _, err := h.WriteLowRiskNote("03-notes/leak.md", []byte("# Leak"), false, time.Now()); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("WriteLowRiskNote(parent symlink) error = %v, want fs.ErrPermission", err)
+	}
+	if _, err := os.Stat(filepath.Join(outsideDir, "leak.md")); !os.IsNotExist(err) {
+		t.Fatalf("outside file stat error = %v, want not exist", err)
+	}
+}
+
+func TestApplyDraftRejectsParentSymlinkOutsideRoot(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if err := os.MkdirAll(cfg.Paths.VaultRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(vault) error = %v", err)
+	}
+	outsideDir := t.TempDir()
+	requireDirectoryLink(t, outsideDir, filepath.Join(cfg.Paths.VaultRoot, "03-notes"))
+
+	at := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+	proposal := model.MarkdownNoteProposal{
+		TargetPath: "03-notes/leak.md",
+		Title:      "Leak",
+		Content:    "# Leak\n",
+		SourceKind: "other",
+		Evidence:   "security test",
+		Reason:     "prove parent symlink rejection",
+		Source:     "test",
+		ObservedAt: at,
+	}
+	payload, err := json.MarshalIndent(proposal, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(proposal) error = %v", err)
+	}
+	draft := model.Draft{
+		ID:    "draft-symlink-apply",
+		Kind:  model.DraftKindMarkdownNoteWrite,
+		State: model.DraftPendingReview,
+		Target: model.DocumentRef{
+			Path:        proposal.TargetPath,
+			Class:       model.DocClassNote,
+			BaseVersion: model.DraftBaseVersionNewFile,
+		},
+		Title:           "Markdown note proposal: Leak",
+		Summary:         "security test",
+		ProposedContent: string(payload),
+		CreatedAt:       at,
+		UpdatedAt:       at,
+	}
+	if err := st.Drafts().SaveDraft(draft); err != nil {
+		t.Fatalf("SaveDraft() error = %v", err)
+	}
+	if _, err := h.ApproveDraft(draft.ID, at.Add(time.Minute)); err != nil {
+		t.Fatalf("ApproveDraft() error = %v", err)
+	}
+	if _, err := h.ApplyDraft(draft.ID, at.Add(2*time.Minute)); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("ApplyDraft(parent symlink) error = %v, want fs.ErrPermission", err)
+	}
+	if _, err := os.Stat(filepath.Join(outsideDir, "leak.md")); !os.IsNotExist(err) {
+		t.Fatalf("outside file stat error = %v, want not exist", err)
 	}
 }
 

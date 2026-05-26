@@ -1,6 +1,9 @@
 package orchestrator
 
 import (
+	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -259,6 +262,53 @@ func TestVaultReadRejectsTraversal(t *testing.T) {
 
 	if _, err := h.VaultRead("..\\outside.md"); err == nil {
 		t.Fatal("VaultRead() error = nil, want traversal rejection")
+	}
+}
+
+func TestVaultReadRejectsSymlinkFileOutsideRoot(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.Paths.VaultRoot, "03-notes"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(notes) error = %v", err)
+	}
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "secret.md")
+	if err := os.WriteFile(outsideFile, []byte("# Secret"), 0o644); err != nil {
+		t.Fatalf("WriteFile(outsideFile) error = %v", err)
+	}
+	requireSymlink(t, outsideFile, filepath.Join(cfg.Paths.VaultRoot, "03-notes", "evil.md"))
+
+	if _, err := h.VaultRead("03-notes/evil.md"); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("VaultRead(symlink) error = %v, want fs.ErrPermission", err)
+	}
+}
+
+func TestVaultReadRejectsParentSymlinkOutsideRoot(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	st := memory.New()
+
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if err := os.MkdirAll(cfg.Paths.VaultRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(vault) error = %v", err)
+	}
+	outsideDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outsideDir, "secret.md"), []byte("# Secret"), 0o644); err != nil {
+		t.Fatalf("WriteFile(outside) error = %v", err)
+	}
+	requireDirectoryLink(t, outsideDir, filepath.Join(cfg.Paths.VaultRoot, "03-notes"))
+
+	if _, err := h.VaultRead("03-notes/secret.md"); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("VaultRead(parent symlink) error = %v, want fs.ErrPermission", err)
 	}
 }
 

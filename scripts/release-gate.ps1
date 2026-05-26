@@ -151,6 +151,16 @@ try {
         -Run "Test(LiveMCPToolContractV1Snapshot|SDKFacingToolContractSnapshot|MCPV1ExposesOnlyReadAndProposalTools|ExternalMCPDoesNotExposeDirectWrites)$"
 
     Invoke-GoGate `
+        -Label "vault symlink and traversal guardrails" `
+        -Package "./internal/vault" `
+        -Run "Test(ReadRelativeWithHash(BlocksTraversal|RejectsSymlinkFileOutsideRoot)|WalkListSearchAndBacklinksSkip(FileSymlink|DirectorySymlink)OutsideRoot)$"
+
+    Invoke-GoGate `
+        -Label "orchestrator vault symlink guardrails" `
+        -Package "./internal/orchestrator" `
+        -Run "Test(VaultReadRejects(SymlinkFile|ParentSymlink)OutsideRoot|WriteLowRiskNoteRejectsParentSymlinkOutsideRoot|ApplyDraftRejectsParentSymlinkOutsideRoot)$"
+
+    Invoke-GoGate `
         -Label "governed smoke, daemon watcher, and post-scan guardrails" `
         -Package "./internal/app" `
         -Run "Test(RuntimeSmokeP0|RuntimeSmokeGovernedMarkdownNoteIntake|RuntimeSmokeExternalMCPGovernedMarkdownNoteIntake|RunVaultDaemonWatcherCreatesDraftAfterFileChange|RunVaultDaemonWatcherIgnoresObsidianDirectory|RunVaultDaemonWatcherSyncsCodexJSONLBeforePoll|RuntimeScanVaultChangesPrimesThenCreatesDraft|RuntimeScanVaultChangesWaitsForDebounceBeforeCreatingDraft|RuntimeScanVaultChangesAuditsOutOfBandOrdinaryNote|RuntimeScanVaultChangesAuditsGovernedCoreOutOfBandChange|RuntimeScanVaultChangesAuditsProcessSinkOutOfBandChange|RuntimeScanVaultChangesAuditsNewOutOfBandOrdinaryNoteAfterBaseline|RuntimeScanVaultChangesAuditsRecreatedGovernedCoreAfterBaseline|RuntimeScanVaultChangesAuditsNewProcessSinkAfterBaseline)$"
@@ -168,9 +178,9 @@ try {
     Invoke-SDKGate
 
     Invoke-GoGate `
-        -Label "operator-agent turn-step, context, and tool-result guardrails" `
+        -Label "operator-agent turn-step, context, parser, and tool-result guardrails" `
         -Package "./internal/operatoragent" `
-        -Run "Test(ModelAgentRespondAppendsTurnStepPerToolCall|ModelAgentRespondTurnStepTruncatesLongObservation|ModelAgentRespondTurnStepRedactsBinaryObservation|ModelAgentRespondTurnStepCapturesToolError|ModelAgentRespondTurnStepsCarriedThroughUsageError|ModelAgentRespondStepsAreIsolatedFromTraceAndOtherSnapshots|ModelAgentRespondBoundsToolResultReinjectionIntoModelContext|ModelAgentRespondContextBeforeModelCallCancelled|ModelAgentRespondContextDuringModelCallCancelled|ModelAgentRespondContextDuringToolCallCancelled|OperatorPromptVersionsAndCriticalRules|CloneTurnStepsDeepCopiesArguments|BuildObservationExcerptRuneBoundaryTruncation)$"
+        -Run "Test(ModelAgentRespondAppendsTurnStepPerToolCall|ModelAgentRespondTurnStepTruncatesLongObservation|ModelAgentRespondTurnStepRedactsBinaryObservation|ModelAgentRespondTurnStepCapturesToolError|ModelAgentRespondTurnStepsCarriedThroughUsageError|ModelAgentRespondStepsAreIsolatedFromTraceAndOtherSnapshots|ModelAgentRespondBoundsToolResultReinjectionIntoModelContext|ModelAgentRespondContextBeforeModelCallCancelled|ModelAgentRespondContextDuringModelCallCancelled|ModelAgentRespondContextDuringToolCallCancelled|ModelAgentRespondTreatsNonEnvelopeJSONAsFinal|ModelAgentRespondTreatsMarkdownJSONExampleAsFinal|ModelAgentRespondRejectsControlLikeJSONWithoutType|OperatorPromptVersionsAndCriticalRules|LoopSystemPromptIsolatesRuntimeDocsAsUntrustedContext|PromptDocExcerptTruncatesUTF8Safely|CloneTurnStepsDeepCopiesArguments|BuildObservationExcerptRuneBoundaryTruncation)$"
 
     Invoke-GoGate `
         -Label "console resolve-read-final, task-turn, and context guardrails" `

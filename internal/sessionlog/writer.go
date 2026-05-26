@@ -216,6 +216,10 @@ func (r *Recorder) appendAndIndex(event Event) error {
 	if r == nil {
 		return nil
 	}
+	// Lock order is load-bearing: Recorder.mu is always acquired
+	// before the root-level index lock reached through upsertIndex.
+	// Do not call Recorder methods while already holding an index
+	// lock, or future code can invert this order and deadlock.
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	event = r.normalizeEvent(event)

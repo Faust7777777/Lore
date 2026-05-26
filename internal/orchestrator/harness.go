@@ -72,14 +72,13 @@ func (h *Harness) BootstrapManagedVault(now time.Time) ([]model.DocumentRef, err
 	templates := bootstrap.DefaultManagedTemplates(now)
 	created := make([]model.DocumentRef, 0, len(templates))
 	for _, template := range templates {
-		absolutePath := filepath.Join(h.cfg.Paths.VaultRoot, template.Ref.Path)
-		if _, err := os.Stat(absolutePath); err == nil {
+		if _, _, err := vault.ResolveExistingUnderRoot(h.cfg.Paths.VaultRoot, template.Ref.Path); err == nil {
 			continue
 		} else if !os.IsNotExist(err) {
 			return nil, err
 		}
 
-		if _, err := vault.WriteFileAtomic(absolutePath, []byte(template.Content), h.cfg.Vault.TempSuffix); err != nil {
+		if _, _, err := vault.WriteRelativeAtomic(h.cfg.Paths.VaultRoot, template.Ref.Path, []byte(template.Content), h.cfg.Vault.TempSuffix); err != nil {
 			return nil, err
 		}
 		created = append(created, template.Ref)
@@ -118,8 +117,7 @@ func (h *Harness) ObserveDocumentChange(relPath string, content []byte, at time.
 	}
 
 	targetPath := h.cfg.Vault.ManagedCore.ProgressIndex
-	targetAbs := filepath.Join(h.cfg.Paths.VaultRoot, targetPath)
-	_, baseVersion, err := vault.ReadFileWithHash(targetAbs)
+	_, baseVersion, _, err := vault.ReadRelativeWithHash(h.cfg.Paths.VaultRoot, targetPath)
 	if err != nil {
 		return model.Draft{}, err
 	}
@@ -186,8 +184,7 @@ func (h *Harness) ProposePersonaUpdate(proposal model.PersonaUpdateProposal, at 
 	}
 
 	targetPath := h.cfg.Vault.ManagedCore.Persona
-	targetAbs := filepath.Join(h.cfg.Paths.VaultRoot, targetPath)
-	_, baseVersion, err := vault.ReadFileWithHash(targetAbs)
+	_, baseVersion, _, err := vault.ReadRelativeWithHash(h.cfg.Paths.VaultRoot, targetPath)
 	if err != nil {
 		return model.PersonaUpdateProposalResult{}, err
 	}
@@ -257,8 +254,7 @@ func (h *Harness) ProposeMarkdownNote(proposal model.MarkdownNoteProposal, at ti
 	}
 	proposal.TargetPath = targetPath
 
-	targetAbs := filepath.Join(h.cfg.Paths.VaultRoot, filepath.FromSlash(targetPath))
-	_, baseVersion, err := vault.ReadFileWithHash(targetAbs)
+	_, baseVersion, _, err := vault.ReadRelativeWithHash(h.cfg.Paths.VaultRoot, targetPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return model.MarkdownNoteProposalResult{}, err
@@ -405,8 +401,7 @@ func (h *Harness) SupersedeDraft(id string, update model.DraftSupersedeUpdate, a
 		return model.Draft{}, err
 	}
 	proposal.TargetPath = targetPath
-	targetAbs := filepath.Join(h.cfg.Paths.VaultRoot, filepath.FromSlash(targetPath))
-	_, baseVersion, err := vault.ReadFileWithHash(targetAbs)
+	_, baseVersion, _, err := vault.ReadRelativeWithHash(h.cfg.Paths.VaultRoot, targetPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return model.Draft{}, err
@@ -496,8 +491,11 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 		return model.Draft{}, err
 	}
 
-	targetAbs := filepath.Join(h.cfg.Paths.VaultRoot, filepath.FromSlash(draft.Target.Path))
-	current, err := h.readDraftTargetForApply(draft, targetAbs, at)
+	targetAbs, _, err := vault.ResolveWriteUnderRoot(h.cfg.Paths.VaultRoot, draft.Target.Path)
+	if err != nil {
+		return model.Draft{}, err
+	}
+	current, err := h.readDraftTargetForApply(draft, at)
 	if err != nil {
 		return model.Draft{}, err
 	}
@@ -506,7 +504,7 @@ func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
 	if err != nil {
 		return model.Draft{}, err
 	}
-	if _, err := vault.WriteFileAtomic(targetAbs, next, h.cfg.Vault.TempSuffix); err != nil {
+	if _, _, err := vault.WriteRelativeAtomic(h.cfg.Paths.VaultRoot, draft.Target.Path, next, h.cfg.Vault.TempSuffix); err != nil {
 		return model.Draft{}, err
 	}
 
@@ -592,9 +590,9 @@ func findingID(prefix string, at time.Time) string {
 	return fmt.Sprintf("finding-%s-%d", prefix, at.UnixNano())
 }
 
-func (h *Harness) readDraftTargetForApply(draft model.Draft, targetAbs string, at time.Time) ([]byte, error) {
+func (h *Harness) readDraftTargetForApply(draft model.Draft, at time.Time) ([]byte, error) {
 	if draft.Kind == model.DraftKindMarkdownNoteWrite && draft.Target.BaseVersion == model.DraftBaseVersionNewFile {
-		if _, err := os.Stat(targetAbs); err == nil {
+		if _, _, err := vault.ResolveExistingUnderRoot(h.cfg.Paths.VaultRoot, draft.Target.Path); err == nil {
 			return nil, h.markDraftConflicted(draft, at)
 		} else if !os.IsNotExist(err) {
 			return nil, err
@@ -602,7 +600,7 @@ func (h *Harness) readDraftTargetForApply(draft model.Draft, targetAbs string, a
 		return nil, nil
 	}
 
-	current, hash, err := vault.ReadFileWithHash(targetAbs)
+	current, hash, _, err := vault.ReadRelativeWithHash(h.cfg.Paths.VaultRoot, draft.Target.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -652,16 +650,15 @@ func (h *Harness) WriteLowRiskNote(relPath string, content []byte, overwrite boo
 		return model.VaultDocument{}, err
 	}
 
-	targetAbs := filepath.Join(h.cfg.Paths.VaultRoot, filepath.FromSlash(normalizedPath))
 	if !overwrite {
-		if _, err := os.Stat(targetAbs); err == nil {
+		if _, _, err := vault.ResolveExistingUnderRoot(h.cfg.Paths.VaultRoot, normalizedPath); err == nil {
 			return model.VaultDocument{}, os.ErrExist
 		} else if !os.IsNotExist(err) {
 			return model.VaultDocument{}, err
 		}
 	}
 
-	hash, err := vault.WriteFileAtomic(targetAbs, content, h.cfg.Vault.TempSuffix)
+	hash, _, err := vault.WriteRelativeAtomic(h.cfg.Paths.VaultRoot, normalizedPath, content, h.cfg.Vault.TempSuffix)
 	if err != nil {
 		return model.VaultDocument{}, err
 	}

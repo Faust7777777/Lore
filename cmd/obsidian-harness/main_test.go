@@ -1543,7 +1543,7 @@ func TestRunUsageCLIReadsFailedTurnUsageEndToEnd(t *testing.T) {
 		}
 		client := &failingTurnClient{
 			resp: openai.ChatCompletionResponse{
-				Content:          `not a json loop envelope`,
+				Content:          `{"tool":"vault_read","arguments":{"path":"03-画像/人物画像.md"}}`,
 				PromptTokens:     42,
 				CompletionTokens: 9,
 			},

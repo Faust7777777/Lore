@@ -23,6 +23,11 @@ func indexPath(rootDir string) string {
 	return filepath.Join(rootDir, "index.json")
 }
 
+// acquireIndexLock serializes index.json access per sessionlog root.
+// Lock order convention: this root-level index lock is below
+// Recorder.mu. Code that already holds an index lock must not call
+// Recorder methods, because recorder writes intentionally take
+// Recorder.mu first and then enter upsertIndex.
 func acquireIndexLock(rootDir string) func() {
 	key := indexLockKey(rootDir)
 	indexLocks.mu.Lock()

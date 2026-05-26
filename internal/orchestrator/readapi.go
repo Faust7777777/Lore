@@ -374,7 +374,7 @@ func (h *Harness) currentWeekDocument() (*model.VaultDocument, error) {
 		if classification.Class != model.DocClassPlanWeek {
 			continue
 		}
-		info, err := os.Stat(filepath.Join(h.cfg.Paths.VaultRoot, filepath.FromSlash(path)))
+		info, _, err := vault.StatRelative(h.cfg.Paths.VaultRoot, path)
 		if err != nil {
 			continue
 		}
@@ -430,7 +430,7 @@ func (h *Harness) resolveSystemDoc(name string) (string, model.DocClass, error) 
 }
 
 func (h *Harness) coreDocStatus(name string, relPath string) model.ManagedCoreStatus {
-	_, err := os.Stat(filepath.Join(h.cfg.Paths.VaultRoot, filepath.FromSlash(relPath)))
+	_, _, err := vault.StatRelative(h.cfg.Paths.VaultRoot, relPath)
 	return model.ManagedCoreStatus{
 		Name:   name,
 		Path:   relPath,

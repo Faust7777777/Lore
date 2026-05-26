@@ -2,6 +2,7 @@ package vault
 
 import (
 	"bufio"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -32,7 +33,7 @@ func ShouldIgnoreRelativePath(rel string) bool {
 }
 
 func ListEntries(root string, relDir string) ([]ListEntry, error) {
-	absolute, normalized, err := resolveUnderRoot(root, relDir)
+	absolute, normalized, err := ResolveExistingUnderRoot(root, relDir)
 	if err != nil {
 		return nil, err
 	}
@@ -48,9 +49,18 @@ func ListEntries(root string, relDir string) ([]ListEntry, error) {
 		if shouldIgnoreRelativePath(childPath) {
 			continue
 		}
+		if _, _, err := ResolveExistingUnderRoot(root, childPath); err != nil {
+			if errors.Is(err, fs.ErrPermission) || os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return nil, err
+		}
+		if !entry.IsDir() && !info.Mode().IsRegular() {
+			continue
 		}
 		out = append(out, ListEntry{
 			Path:    childPath,
@@ -81,7 +91,11 @@ func SearchText(root string, relDir string, query string, limit int) ([]TextHit,
 
 	hits := make([]TextHit, 0, limit)
 	err := walkMarkdownFiles(root, relDir, func(relPath string, _ fs.DirEntry) error {
-		file, err := os.Open(filepath.Join(root, filepath.FromSlash(relPath)))
+		absolute, _, err := ResolveExistingUnderRoot(root, relPath)
+		if err != nil {
+			return err
+		}
+		file, err := os.Open(absolute)
 		if err != nil {
 			return err
 		}
@@ -145,7 +159,11 @@ func FindBacklinks(root string, relDir string, targetPath string, limit int) ([]
 			return nil
 		}
 
-		file, err := os.Open(filepath.Join(root, filepath.FromSlash(relPath)))
+		absolute, _, err := ResolveExistingUnderRoot(root, relPath)
+		if err != nil {
+			return err
+		}
+		file, err := os.Open(absolute)
 		if err != nil {
 			return err
 		}
@@ -250,7 +268,7 @@ func WalkMarkdownPaths(root string, relDir string) ([]string, error) {
 }
 
 func ReadRelativeWithHash(root string, relPath string) ([]byte, string, string, error) {
-	absolute, normalized, err := resolveUnderRoot(root, relPath)
+	absolute, normalized, err := ResolveExistingUnderRoot(root, relPath)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -261,8 +279,36 @@ func ReadRelativeWithHash(root string, relPath string) ([]byte, string, string, 
 	return data, hash, normalized, nil
 }
 
+func WriteRelativeAtomic(root string, relPath string, data []byte, tempSuffix string) (string, string, error) {
+	absolute, normalized, err := ResolveWriteUnderRoot(root, relPath)
+	if err != nil {
+		return "", "", err
+	}
+	hash, err := WriteFileAtomic(absolute, data, tempSuffix)
+	if err != nil {
+		return "", "", err
+	}
+	return hash, normalized, nil
+}
+
+func StatRelative(root string, relPath string) (fs.FileInfo, string, error) {
+	absolute, normalized, err := ResolveExistingUnderRoot(root, relPath)
+	if err != nil {
+		return nil, "", err
+	}
+	info, err := os.Stat(absolute)
+	if err != nil {
+		return nil, "", err
+	}
+	return info, normalized, nil
+}
+
 func walkMarkdownFiles(root string, relDir string, visit func(relPath string, entry fs.DirEntry) error) error {
-	absolute, normalized, err := resolveUnderRoot(root, relDir)
+	absolute, normalized, err := ResolveExistingUnderRoot(root, relDir)
+	if err != nil {
+		return err
+	}
+	realRoot, err := canonicalRoot(root, false)
 	if err != nil {
 		return err
 	}
@@ -271,8 +317,21 @@ func walkMarkdownFiles(root string, relDir string, visit func(relPath string, en
 		if walkErr != nil {
 			return walkErr
 		}
+		realPath, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			if entry.Type()&fs.ModeSymlink != 0 {
+				return nil
+			}
+			return err
+		}
+		if !isPathUnderRoot(realRoot, filepath.Clean(realPath)) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 
-		relToRoot, err := filepath.Rel(root, path)
+		relToRoot, err := filepath.Rel(realRoot, path)
 		if err != nil {
 			return err
 		}
@@ -282,9 +341,15 @@ func walkMarkdownFiles(root string, relDir string, visit func(relPath string, en
 		}
 
 		if entry.IsDir() {
+			if entry.Type()&fs.ModeSymlink != 0 {
+				return filepath.SkipDir
+			}
 			if relToRoot != "" && shouldIgnoreRelativePath(relToRoot) {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
 		if shouldIgnoreRelativePath(relToRoot) {
@@ -297,18 +362,186 @@ func walkMarkdownFiles(root string, relDir string, visit func(relPath string, en
 	})
 }
 
-func resolveUnderRoot(root string, rel string) (string, string, error) {
+func ResolveExistingUnderRoot(root string, rel string) (string, string, error) {
+	absolute, normalized, err := resolveLexicalUnderRoot(root, rel)
+	if err != nil {
+		return "", "", err
+	}
+	if err := rejectUnsafeExistingParents(absolute); err != nil {
+		return "", "", err
+	}
+	realRoot, err := canonicalRoot(root, false)
+	if err != nil {
+		return "", "", err
+	}
+	realAbsolute, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", "", err
+	}
+	realAbsolute = filepath.Clean(realAbsolute)
+	if !isPathUnderRoot(realRoot, realAbsolute) {
+		return "", "", fs.ErrPermission
+	}
+	return realAbsolute, normalized, nil
+}
+
+func ResolveWriteUnderRoot(root string, rel string) (string, string, error) {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", "", err
+	}
+	absolute, normalized, err := resolveLexicalUnderRoot(root, rel)
+	if err != nil {
+		return "", "", err
+	}
+	realRoot, err := canonicalRoot(root, true)
+	if err != nil {
+		return "", "", err
+	}
+
+	if info, err := os.Lstat(absolute); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+		return "", "", fs.ErrPermission
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", "", err
+	}
+	if realAbsolute, err := filepath.EvalSymlinks(absolute); err == nil {
+		realAbsolute = filepath.Clean(realAbsolute)
+		if !isPathUnderRoot(realRoot, realAbsolute) {
+			return "", "", fs.ErrPermission
+		}
+		return absolute, normalized, nil
+	} else if !os.IsNotExist(err) {
+		return "", "", err
+	}
+
+	parent, err := nearestExistingParent(absolute)
+	if err != nil {
+		return "", "", err
+	}
+	realParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return "", "", err
+	}
+	realParent = filepath.Clean(realParent)
+	if !isPathUnderRoot(realRoot, realParent) {
+		return "", "", fs.ErrPermission
+	}
+	return absolute, normalized, nil
+}
+
+func resolveLexicalUnderRoot(root string, rel string) (string, string, error) {
 	normalized := normalizeRelativePath(rel)
 	if normalized == "." {
 		normalized = ""
 	}
-	absolute := filepath.Join(root, filepath.FromSlash(normalized))
-	cleanRoot := filepath.Clean(root)
+	cleanRoot, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return "", "", err
+	}
+	cleanRoot = filepath.Clean(cleanRoot)
+	absolute := filepath.Join(cleanRoot, filepath.FromSlash(normalized))
 	cleanAbsolute := filepath.Clean(absolute)
-	if cleanAbsolute != cleanRoot && !strings.HasPrefix(cleanAbsolute, cleanRoot+string(filepath.Separator)) {
+	if !isPathUnderRoot(cleanRoot, cleanAbsolute) {
 		return "", "", fs.ErrPermission
 	}
-	return absolute, normalized, nil
+	return cleanAbsolute, normalized, nil
+}
+
+func canonicalRoot(root string, create bool) (string, error) {
+	if create {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			return "", err
+		}
+	}
+	absolute, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return "", err
+	}
+	realRoot, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return filepath.Clean(absolute), nil
+		}
+		return "", err
+	}
+	return filepath.Clean(realRoot), nil
+}
+
+func nearestExistingParent(path string) (string, error) {
+	dir := filepath.Dir(filepath.Clean(path))
+	for {
+		info, err := os.Lstat(dir)
+		if err == nil {
+			if info.Mode()&fs.ModeSymlink == 0 && !info.IsDir() {
+				return "", fs.ErrPermission
+			}
+			return dir, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		next := filepath.Dir(dir)
+		if next == dir {
+			return "", os.ErrNotExist
+		}
+		dir = next
+	}
+}
+
+func rejectUnsafeExistingParents(path string) error {
+	dir := filepath.Dir(filepath.Clean(path))
+	parts := strings.Split(dir, string(filepath.Separator))
+	if filepath.IsAbs(dir) {
+		volume := filepath.VolumeName(dir)
+		current := volume + string(filepath.Separator)
+		rest := strings.TrimPrefix(dir, current)
+		if rest == "" {
+			return nil
+		}
+		parts = strings.Split(rest, string(filepath.Separator))
+		for _, part := range parts {
+			if part == "" {
+				continue
+			}
+			current = filepath.Join(current, part)
+			info, err := os.Lstat(current)
+			if os.IsNotExist(err) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if info.Mode()&fs.ModeSymlink == 0 && !info.IsDir() {
+				return fs.ErrPermission
+			}
+		}
+		return nil
+	}
+	current := ""
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&fs.ModeSymlink == 0 && !info.IsDir() {
+			return fs.ErrPermission
+		}
+	}
+	return nil
+}
+
+func isPathUnderRoot(root string, candidate string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))
 }
 
 func normalizeRelativePath(value string) string {

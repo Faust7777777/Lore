@@ -61,10 +61,10 @@ func TestEndToEndUsagePipelineSuccessAndFailureTurns(t *testing.T) {
 		responses: []openai.ChatCompletionResponse{
 			// Turn 1: clean final response. usage = 30/4.
 			{Content: `{"type":"final","message":"hello"}`, PromptTokens: 30, CompletionTokens: 4},
-			// Turn 2: malformed loop response. Tokens (50/8) are
+			// Turn 2: control-like loop response missing type. Tokens (50/8) are
 			// already billed by the provider so they must still
 			// reach the store even though Handle returns an error.
-			{Content: `definitely not json`, PromptTokens: 50, CompletionTokens: 8},
+			{Content: `{"tool":"vault_read","arguments":{"path":"03-画像/人物画像.md"}}`, PromptTokens: 50, CompletionTokens: 8},
 		},
 	}
 	agent := operatoragent.NewModelAgent(client, "openai-compatible", "fake-model")

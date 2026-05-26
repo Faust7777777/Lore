@@ -1,8 +1,12 @@
 package vault
 
 import (
+	"errors"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -15,6 +19,120 @@ func TestReadRelativeWithHashBlocksTraversal(t *testing.T) {
 
 	if _, _, _, err := ReadRelativeWithHash(root, "..\\outside.txt"); err == nil {
 		t.Fatal("ReadRelativeWithHash() error = nil, want permission failure")
+	}
+}
+
+func TestReadRelativeWithHashRejectsSymlinkFileOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "secret.md")
+	if err := os.WriteFile(outsideFile, []byte("outside secret"), 0o644); err != nil {
+		t.Fatalf("WriteFile(outsideFile) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "notes"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(notes) error = %v", err)
+	}
+	requireSymlink(t, outsideFile, filepath.Join(root, "notes", "evil.md"))
+
+	if _, _, _, err := ReadRelativeWithHash(root, "notes/evil.md"); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("ReadRelativeWithHash(symlink) error = %v, want fs.ErrPermission", err)
+	}
+}
+
+func TestWalkListSearchAndBacklinksSkipFileSymlinkOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outsideDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "target.md"), []byte("# Target"), 0o644); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+	outsideFile := filepath.Join(outsideDir, "leak.md")
+	if err := os.WriteFile(outsideFile, []byte("outside-needle [target](target.md)"), 0o644); err != nil {
+		t.Fatalf("WriteFile(outsideFile) error = %v", err)
+	}
+	requireSymlink(t, outsideFile, filepath.Join(root, "leak.md"))
+
+	entries, err := ListEntries(root, "")
+	if err != nil {
+		t.Fatalf("ListEntries() error = %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Path == "leak.md" {
+			t.Fatalf("ListEntries exposed external symlink entry: %+v", entries)
+		}
+	}
+
+	paths, err := WalkMarkdownPaths(root, "")
+	if err != nil {
+		t.Fatalf("WalkMarkdownPaths() error = %v", err)
+	}
+	for _, path := range paths {
+		if path == "leak.md" {
+			t.Fatalf("WalkMarkdownPaths exposed external symlink path: %v", paths)
+		}
+	}
+
+	hits, err := SearchText(root, "", "outside-needle", 10)
+	if err != nil {
+		t.Fatalf("SearchText() error = %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("SearchText() hits = %+v, want no external symlink hits", hits)
+	}
+
+	backlinks, err := FindBacklinks(root, "", "target.md", 10)
+	if err != nil {
+		t.Fatalf("FindBacklinks() error = %v", err)
+	}
+	if len(backlinks) != 0 {
+		t.Fatalf("FindBacklinks() hits = %+v, want no external symlink hits", backlinks)
+	}
+}
+
+func TestWalkListSearchAndBacklinksSkipDirectorySymlinkOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outsideDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "target.md"), []byte("# Target"), 0o644); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outsideDir, "nested.md"), []byte("outside-needle [target](target.md)"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nested) error = %v", err)
+	}
+	requireDirectoryLink(t, outsideDir, filepath.Join(root, "linked-dir"))
+
+	entries, err := ListEntries(root, "")
+	if err != nil {
+		t.Fatalf("ListEntries() error = %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Path == "linked-dir" {
+			t.Fatalf("ListEntries exposed external linked directory: %+v", entries)
+		}
+	}
+
+	paths, err := WalkMarkdownPaths(root, "")
+	if err != nil {
+		t.Fatalf("WalkMarkdownPaths() error = %v", err)
+	}
+	for _, path := range paths {
+		if path == "linked-dir/nested.md" {
+			t.Fatalf("WalkMarkdownPaths exposed external linked directory path: %v", paths)
+		}
+	}
+
+	hits, err := SearchText(root, "", "outside-needle", 10)
+	if err != nil {
+		t.Fatalf("SearchText() error = %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("SearchText() hits = %+v, want no external linked directory hits", hits)
+	}
+
+	backlinks, err := FindBacklinks(root, "", "target.md", 10)
+	if err != nil {
+		t.Fatalf("FindBacklinks() error = %v", err)
+	}
+	if len(backlinks) != 0 {
+		t.Fatalf("FindBacklinks() hits = %+v, want no external linked directory hits", backlinks)
 	}
 }
 
@@ -49,13 +167,13 @@ func TestFindBacklinksRecognisesMarkdownLinks(t *testing.T) {
 	}
 
 	files := map[string]string{
-		"basename-link.md":       "see [doc](refactor.md) for more",
-		"full-path-link.md":      "the writeup lives at [here](./notes/refactor.md)",
-		"deep/sub/relative.md":   "back to [the plan](../../notes/refactor.md#section)",
-		"angle-bracket.md":       "wrapped form: [w](<notes/refactor.md>)",
-		"wrong-ext.md":           "[other](refactor.txt) should NOT match",
-		"wiki-still-works.md":    "linking [[refactor]] via wiki syntax",
-		"wiki-with-pipe.md":      "linking [[refactor|aliased]] via wiki+pipe",
+		"basename-link.md":     "see [doc](refactor.md) for more",
+		"full-path-link.md":    "the writeup lives at [here](./notes/refactor.md)",
+		"deep/sub/relative.md": "back to [the plan](../../notes/refactor.md#section)",
+		"angle-bracket.md":     "wrapped form: [w](<notes/refactor.md>)",
+		"wrong-ext.md":         "[other](refactor.txt) should NOT match",
+		"wiki-still-works.md":  "linking [[refactor]] via wiki syntax",
+		"wiki-with-pipe.md":    "linking [[refactor|aliased]] via wiki+pipe",
 	}
 	for name, body := range files {
 		full := filepath.Join(root, filepath.FromSlash(name))
@@ -182,4 +300,27 @@ func TestSearchTextRespectsGlobalLimitAcrossFiles(t *testing.T) {
 	if len(hits) != 4 {
 		t.Fatalf("hits = %d, want 4 (limit cap)", len(hits))
 	}
+}
+
+func requireSymlink(t *testing.T, target string, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink creation unavailable in this environment: %v", err)
+	}
+}
+
+func requireDirectoryLink(t *testing.T, target string, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("cmd", "/c", "mklink", "/J", link, target)
+		if output, err := cmd.CombinedOutput(); err == nil {
+			return
+		} else {
+			t.Skipf("directory symlink/junction creation unavailable in this environment: %v: %s", err, string(output))
+		}
+	}
+	t.Skipf("directory symlink creation unavailable in this environment")
 }
