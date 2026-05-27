@@ -52,11 +52,13 @@ jobs:
           if (-not $env:LORE_LLM_BASE_URL -or -not $env:LORE_LLM_API_KEY -or -not $env:LORE_LLM_MODEL) {
               throw "Full release gate requires LORE_LLM_BASE_URL, LORE_LLM_API_KEY, and LORE_LLM_MODEL"
           }
-          $gateArgs = @("-Full")
-          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ github.event.inputs.e2e }}" -eq "true") {
-              $gateArgs += "-E2E"
+          $gateArgs = @{
+              Full = $true
+              AssertClean = $true
           }
-          $gateArgs += "-AssertClean"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ github.event.inputs.e2e }}" -eq "true") {
+              $gateArgs.E2E = $true
+          }
           .\scripts\release-gate.ps1 @gateArgs
 
       - name: Assert release gate leaves repo clean
