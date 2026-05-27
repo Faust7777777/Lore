@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"obsidian-harness/internal/adapter/codexjsonl"
 	"obsidian-harness/internal/mcp"
 	"obsidian-harness/internal/model"
 )
@@ -33,6 +34,25 @@ func TestRuntimeSmokeP0(t *testing.T) {
 	}
 	if result.Draft.ID == "" || result.Checkpoint.Path == "" || result.Report.Path == "" {
 		t.Fatalf("result = %+v, want populated draft/checkpoint/report", result)
+	}
+}
+
+func TestRuntimeDemoP0BFallsBackWhenCheckpointSummaryIsEmpty(t *testing.T) {
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	runtime.ProcessSinkSummarizer = emptyCheckpointSummarySummarizer{}
+
+	result, err := runtime.DemoP0B(time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("DemoP0B() error = %v", err)
+	}
+	if result.Checkpoint.State != model.CheckpointMaterialized {
+		t.Fatalf("checkpoint state = %s, want %s", result.Checkpoint.State, model.CheckpointMaterialized)
+	}
+	if !strings.Contains(result.Checkpoint.Content, "demo-week governance draft") {
+		t.Fatalf("checkpoint content missing deterministic fallback summary:\n%s", result.Checkpoint.Content)
 	}
 }
 
@@ -265,4 +285,17 @@ func decodeMCPFrames(t *testing.T, raw []byte) []map[string]any {
 		out = append(out, envelope)
 	}
 	return out
+}
+
+type emptyCheckpointSummarySummarizer struct{}
+
+func (emptyCheckpointSummarySummarizer) SummarizeCheckpoint(codexjsonl.WindowSummary) (string, string, error) {
+	return "", "", nil
+}
+
+func (emptyCheckpointSummarySummarizer) SummarizeDaily(agentID string, _ time.Time, checkpoints []model.CheckpointDoc) (string, string, error) {
+	if len(checkpoints) == 0 {
+		return agentID + " daily report", "- no checkpoints recorded", nil
+	}
+	return agentID + " daily report", "- checkpoint fallback was materialized", nil
 }

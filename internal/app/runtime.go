@@ -276,13 +276,20 @@ func (r *Runtime) DemoP0B(now time.Time) (DemoP0BResult, error) {
 	}
 	windowSummary := codexjsonl.WindowSummary{
 		Window:        window,
-		Content:       "- source: `demo`\n- transcript events: 2\n\n## User Inputs\n- inspect the latest managed progress\n\n## Agent Outputs\n- [commentary] prepared the next checkpoint",
-		RawTranscript: "{\"role\":\"user\",\"message\":\"inspect the latest managed progress\"}\n{\"role\":\"assistant\",\"phase\":\"commentary\",\"message\":\"prepared the next checkpoint\"}",
-		EventCount:    2,
+		Content:       "- source: `demo`\n- transcript events: 4\n\n## User Inputs\n- inspect the latest managed progress\n- apply the governed demo-week draft after review\n\n## Agent Outputs\n- [commentary] verified managed core docs are ready\n- [final] approved and applied the demo-week governance draft, then prepared the process-sink checkpoint",
+		RawTranscript: "{\"role\":\"user\",\"message\":\"inspect the latest managed progress\"}\n{\"role\":\"assistant\",\"phase\":\"commentary\",\"message\":\"verified managed core docs are ready\"}\n{\"role\":\"user\",\"message\":\"apply the governed demo-week draft after review\"}\n{\"role\":\"assistant\",\"phase\":\"final\",\"message\":\"approved and applied the demo-week governance draft, then prepared the process-sink checkpoint\"}",
+		EventCount:    4,
 	}
 	title, content, err := summarizer.SummarizeCheckpoint(windowSummary)
 	if err != nil {
 		return DemoP0BResult{}, err
+	}
+	if strings.TrimSpace(content) == "" && strings.TrimSpace(windowSummary.Content) != "" {
+		title = strings.TrimSpace(title)
+		if title == "" {
+			title = fmt.Sprintf("%s checkpoint %s-%s", window.AgentID, window.WindowStart.Format("15:04"), window.WindowEnd.Format("15:04"))
+		}
+		content = windowSummary.Content
 	}
 	checkpoint, err := r.Harness.IngestSessionWindow(
 		window,
