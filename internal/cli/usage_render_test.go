@@ -409,3 +409,91 @@ func TestRenderUsageReportAggregatesByModelAcrossDays(t *testing.T) {
 		t.Fatalf("merged models should sort by total tokens desc (deepseek < glm < kimi): ds=%d glm=%d kimi=%d\n%s", dsIdx, glmIdx, kimiIdx, out)
 	}
 }
+
+func TestRenderUsageReportNoUsageSaysNoneRecorded(t *testing.T) {
+	// runUsageCommand always passes one zero-valued summary per window
+	// day (SummarizeUsage returns a zero summary for an idle day), so
+	// the "nothing billed" branch fires on totalCalls == 0, not on an
+	// empty slice. It must print a clear "No usage recorded." line and
+	// suppress the DAY table / By purpose / Total rows rather than
+	// printing a wall of zeros an operator has to read past.
+	daily := []model.UsageSummary{
+		{Day: time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)},
+		{Day: time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)},
+	}
+	var buf bytes.Buffer
+	renderUsageReport(&buf, 2, daily)
+	out := buf.String()
+	if !strings.Contains(out, "No usage recorded.") {
+		t.Fatalf("idle window should report 'No usage recorded.':\n%s", out)
+	}
+	for _, unwanted := range []string{"By purpose:", "Total:"} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("idle window must not print %q (zero-row noise):\n%s", unwanted, out)
+		}
+	}
+}
+
+func TestEmitUsageJSONNoUsageEmitsZeroState(t *testing.T) {
+	// The --json surface is a scripting / TUI contract, and the first
+	// thing a consumer hits is an idle window before any usage accrues.
+	// It must still emit one valid JSON object: window_days set, totals
+	// all zero, a days array with one zeroed entry per window day in
+	// oldest-first order, and NO purpose_breakdown key (omitempty) so a
+	// consumer's "is a breakdown present" check reads false rather than
+	// tripping over a null or an empty object.
+	daily := []model.UsageSummary{
+		{Day: time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)},
+		{Day: time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)},
+	}
+	var buf bytes.Buffer
+	if err := emitUsageJSON(&buf, 2, daily); err != nil {
+		t.Fatalf("emitUsageJSON: %v", err)
+	}
+	out := strings.TrimSpace(buf.String())
+	if strings.Count(out, "\n") != 0 {
+		t.Fatalf("JSON should be a single line:\n%s", out)
+	}
+	// Absent, not null and not {} -- the omitempty contract.
+	if strings.Contains(out, "purpose_breakdown") {
+		t.Fatalf("idle window must omit purpose_breakdown:\n%s", out)
+	}
+	var got struct {
+		WindowDays int `json:"window_days"`
+		Totals     struct {
+			Calls            int `json:"calls"`
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"totals"`
+		Days []struct {
+			Day   string `json:"day"`
+			Calls int    `json:"calls"`
+		} `json:"days"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if got.WindowDays != 2 {
+		t.Fatalf("window_days = %d, want 2", got.WindowDays)
+	}
+	if got.Totals != (struct {
+		Calls            int `json:"calls"`
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	}{}) {
+		t.Fatalf("totals must be all zero on an idle window: %+v", got.Totals)
+	}
+	if len(got.Days) != 2 {
+		t.Fatalf("days must carry one entry per window day, got %d: %s", len(got.Days), out)
+	}
+	for _, d := range got.Days {
+		if d.Calls != 0 {
+			t.Fatalf("idle day %q should have 0 calls, got %d", d.Day, d.Calls)
+		}
+	}
+	if got.Days[0].Day != "2026-05-20" || got.Days[1].Day != "2026-05-21" {
+		t.Fatalf("days should preserve window dates oldest-first: %s", out)
+	}
+}
