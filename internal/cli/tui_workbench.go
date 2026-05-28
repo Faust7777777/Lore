@@ -24,6 +24,18 @@ type interactiveWorkbenchDriver struct {
 	shellEnabled bool
 }
 
+type llmConfigRuntime interface {
+	ResolveLLMConfig(purpose string) (config.ResolvedLLMConfig, error)
+}
+
+type operatorAgentModelBuilder interface {
+	BuildOperatorAgentForModel(profileName string, modelName string) (operatoragent.Agent, error)
+}
+
+type personaExtractorModelBuilder interface {
+	BuildPersonaExtractorForModel(profileName string, modelName string) (app.PersonaExtractorBinding, error)
+}
+
 func loadWorkbenchViewModel(version string, runtime console.Runtime, session *console.Session, agentID string, day time.Time, localExec bool, shellEnabled bool, lastOutput string) (tui.WorkbenchViewModel, error) {
 	managed, err := runtime.ManagedStatus()
 	if err != nil {
@@ -185,20 +197,10 @@ func (d interactiveWorkbenchDriver) SwitchModel(name string) ([]tui.ModelInfo, e
 	if d.session == nil {
 		return nil, fmt.Errorf("session is required")
 	}
-	client, err := openai.NewClient(openai.Config{
-		BaseURL: cfg.BaseURL,
-		APIKey:  cfg.APIKey,
-		Model:   name,
-		Timeout: cfg.Timeout,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create client: %w", err)
-	}
-	personaBinding, err := d.buildPersonaExtractorForSwitch(name)
+	agent, personaBinding, err := d.buildModelSwitchBindings(cfg.Profile, name, cfg)
 	if err != nil {
 		return nil, err
 	}
-	agent := operatoragent.NewModelAgent(client, modelPanelProvider(cfg.Provider, name), name)
 	d.session.DrainPersonaExtractions(consolePersonaDrainTimeout)
 	d.session.Agent = agent
 	if personaBinding != nil {
@@ -236,6 +238,16 @@ func (d interactiveWorkbenchDriver) TestModel(name string) error {
 }
 
 func (d interactiveWorkbenchDriver) resolveOperatorLLMConfig() (config.ResolvedLLMConfig, error) {
+	if resolver, ok := d.runtime.(llmConfigRuntime); ok && resolver != nil {
+		cfg, err := resolver.ResolveLLMConfig(config.LLMPurposeOperator)
+		if err != nil {
+			return cfg, fmt.Errorf("load config: %w", err)
+		}
+		if !cfg.Enabled {
+			return cfg, fmt.Errorf("LLM config not configured (set llm.active_profile in .lore/config.json or LORE_LLM_BASE_URL + LORE_LLM_API_KEY + LORE_LLM_MODEL)")
+		}
+		return cfg, nil
+	}
 	workDir := ""
 	if d.runtime != nil {
 		workDir = d.runtime.WorkDirPath()
@@ -250,6 +262,35 @@ func (d interactiveWorkbenchDriver) resolveOperatorLLMConfig() (config.ResolvedL
 	return cfg, nil
 }
 
+func (d interactiveWorkbenchDriver) buildModelSwitchBindings(profileName string, modelName string, cfg config.ResolvedLLMConfig) (operatoragent.Agent, *app.PersonaExtractorBinding, error) {
+	if builder, ok := d.runtime.(operatorAgentModelBuilder); ok && builder != nil {
+		agent, err := builder.BuildOperatorAgentForModel(profileName, modelName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("switch operator agent: %w", err)
+		}
+		personaBinding, err := d.buildPersonaExtractorForSwitch(profileName, modelName)
+		if err != nil {
+			return nil, nil, err
+		}
+		return agent, personaBinding, nil
+	}
+	client, err := openai.NewClient(openai.Config{
+		BaseURL: cfg.BaseURL,
+		APIKey:  cfg.APIKey,
+		Model:   modelName,
+		Timeout: cfg.Timeout,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("create client: %w", err)
+	}
+	personaBinding, err := d.buildPersonaExtractorForSwitch(profileName, modelName)
+	if err != nil {
+		return nil, nil, err
+	}
+	agent := operatoragent.NewModelAgent(client, modelPanelProvider(cfg.Provider, modelName), modelName)
+	return agent, personaBinding, nil
+}
+
 func operatorEnvConfig(cfg config.ResolvedLLMConfig) operatoragent.EnvConfig {
 	return operatoragent.EnvConfig{
 		BaseURL: cfg.BaseURL,
@@ -259,12 +300,12 @@ func operatorEnvConfig(cfg config.ResolvedLLMConfig) operatoragent.EnvConfig {
 	}
 }
 
-func (d interactiveWorkbenchDriver) buildPersonaExtractorForSwitch(modelName string) (*app.PersonaExtractorBinding, error) {
-	runtime, ok := d.runtime.(*app.Runtime)
-	if !ok || runtime == nil {
+func (d interactiveWorkbenchDriver) buildPersonaExtractorForSwitch(profileName string, modelName string) (*app.PersonaExtractorBinding, error) {
+	builder, ok := d.runtime.(personaExtractorModelBuilder)
+	if !ok || builder == nil {
 		return nil, nil
 	}
-	binding, err := runtime.BuildPersonaExtractorForOperatorModel(modelName)
+	binding, err := builder.BuildPersonaExtractorForModel(profileName, modelName)
 	if err != nil {
 		return nil, fmt.Errorf("switch persona extractor: %w", err)
 	}

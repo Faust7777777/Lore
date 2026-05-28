@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"obsidian-harness/internal/config"
+	"obsidian-harness/internal/config/configtest"
 	"obsidian-harness/internal/operatoragent"
 )
 
@@ -403,5 +404,117 @@ func TestOpenRuntimeUsesWorkspaceLLMProfileOverGenericEnv(t *testing.T) {
 	}
 	if len(runtime.LLMDiagnostics) == 0 || runtime.LLMDiagnostics[0].Source != config.LLMSourceWorkspace {
 		t.Fatalf("LLMDiagnostics = %+v, want workspace source", runtime.LLMDiagnostics)
+	}
+}
+
+func TestRuntimeLLMProfilePersistenceReloadsActiveProfile(t *testing.T) {
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	t.Setenv("KIMI_API_KEY", "kimi-secret")
+
+	runtime, err := OpenRuntimeWithConfigOptions(workDir, config.LoadOptions{
+		UserGlobalPath: filepath.Join(t.TempDir(), "absent-user-global.json"),
+	})
+	if err != nil {
+		t.Fatalf("OpenRuntimeWithConfigOptions() error = %v", err)
+	}
+	defer runtime.Close()
+
+	if err := runtime.UpsertLLMProfile("deepseek", config.LLMProfileConfig{
+		Provider:  "deepseek",
+		BaseURL:   server.URL,
+		Model:     "deepseek-chat",
+		APIKeyEnv: "DEEPSEEK_API_KEY",
+	}); err != nil {
+		t.Fatalf("UpsertLLMProfile(deepseek) error = %v", err)
+	}
+	if err := runtime.UpsertLLMProfile("kimi", config.LLMProfileConfig{
+		Provider:  "kimi",
+		BaseURL:   server.URL,
+		Model:     "kimi-k2",
+		APIKeyEnv: "KIMI_API_KEY",
+	}); err != nil {
+		t.Fatalf("UpsertLLMProfile(kimi) error = %v", err)
+	}
+	if err := runtime.SetActiveLLMProfile("kimi"); err != nil {
+		t.Fatalf("SetActiveLLMProfile(kimi) error = %v", err)
+	}
+
+	resolved, err := runtime.ResolveLLMConfig(config.LLMPurposeOperator)
+	if err != nil {
+		t.Fatalf("ResolveLLMConfig(operator) error = %v", err)
+	}
+	if resolved.Profile != "kimi" || resolved.Provider != "kimi" || resolved.Model != "kimi-k2" {
+		t.Fatalf("resolved profile = (%q,%q,%q), want (kimi,kimi,k2): %+v", resolved.Profile, resolved.Provider, resolved.Model, resolved)
+	}
+	if runtime.PersonaExtractProvider != "kimi" || runtime.PersonaExtractModel != "kimi-k2" {
+		t.Fatalf("runtime persona identity = (%q,%q), want (kimi,kimi-k2)", runtime.PersonaExtractProvider, runtime.PersonaExtractModel)
+	}
+	profiles, err := runtime.ListLLMProfiles()
+	if err != nil {
+		t.Fatalf("ListLLMProfiles() error = %v", err)
+	}
+	if got, want := len(profiles), 2; got != want {
+		t.Fatalf("len(profiles) = %d, want %d: %+v", got, want, profiles)
+	}
+	if profiles[0].Name != "deepseek" || profiles[0].Active {
+		t.Fatalf("profiles[0] = %+v, want inactive deepseek", profiles[0])
+	}
+	if profiles[1].Name != "kimi" || !profiles[1].Active {
+		t.Fatalf("profiles[1] = %+v, want active kimi", profiles[1])
+	}
+}
+
+func TestRuntimeBuildOperatorAndPersonaForModelUsesNamedProfile(t *testing.T) {
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	t.Setenv("KIMI_API_KEY", "kimi-secret")
+	writeWorkspaceLLMProfile(t, workDir, server.URL, "deepseek", "deepseek", "deepseek-chat", "DEEPSEEK_API_KEY")
+	if err := config.UpsertLLMProfile(workDir, "kimi", config.LLMProfileConfig{
+		Provider:  "kimi",
+		BaseURL:   server.URL,
+		Model:     "kimi-k2",
+		APIKeyEnv: "KIMI_API_KEY",
+	}); err != nil {
+		t.Fatalf("config.UpsertLLMProfile(kimi) error = %v", err)
+	}
+
+	runtime, err := OpenRuntimeWithConfigOptions(workDir, config.LoadOptions{
+		UserGlobalPath: filepath.Join(t.TempDir(), "absent-user-global.json"),
+	})
+	if err != nil {
+		t.Fatalf("OpenRuntimeWithConfigOptions() error = %v", err)
+	}
+	defer runtime.Close()
+
+	agent, err := runtime.BuildOperatorAgentForModel("kimi", "kimi-latest")
+	if err != nil {
+		t.Fatalf("BuildOperatorAgentForModel(kimi) error = %v", err)
+	}
+	current, ok := agent.(interface{ CurrentModel() string })
+	if !ok {
+		t.Fatalf("agent = %T, want CurrentModel", agent)
+	}
+	if got := current.CurrentModel(); got != "kimi-latest" {
+		t.Fatalf("agent CurrentModel() = %q, want kimi-latest", got)
+	}
+
+	binding, err := runtime.BuildPersonaExtractorForModel("kimi", "kimi-latest")
+	if err != nil {
+		t.Fatalf("BuildPersonaExtractorForModel(kimi) error = %v", err)
+	}
+	if binding.Extractor == nil {
+		t.Fatal("PersonaExtractor binding extractor nil")
+	}
+	if binding.Provider != "kimi" || binding.Model != "kimi-latest" || binding.BaseURL != server.URL {
+		t.Fatalf("persona binding = %+v, want kimi/kimi-latest/%s", binding, server.URL)
 	}
 }

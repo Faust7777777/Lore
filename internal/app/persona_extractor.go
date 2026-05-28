@@ -55,6 +55,15 @@ func attachPersonaExtractorUsageSink(extractor persona.PersonaCandidateExtractor
 // fire-and-forget persona extraction aligned without teaching the CLI how to
 // construct persona extractors or handle usage attribution.
 func (r *Runtime) BuildPersonaExtractorForOperatorModel(modelName string) (PersonaExtractorBinding, error) {
+	return r.BuildPersonaExtractorForModel("", modelName)
+}
+
+// BuildPersonaExtractorForModel mirrors BuildOperatorAgentForModel for
+// interactive /model switches: the optional profile selects the resolved
+// endpoint/provider/api_key_env, while modelName overrides only the session's
+// active model. The returned binding carries key-free identity metadata for
+// persona-extract logs.
+func (r *Runtime) BuildPersonaExtractorForModel(profileName string, modelName string) (PersonaExtractorBinding, error) {
 	modelName = strings.TrimSpace(modelName)
 	if modelName == "" {
 		return PersonaExtractorBinding{}, fmt.Errorf("persona extractor: model name is required")
@@ -62,12 +71,9 @@ func (r *Runtime) BuildPersonaExtractorForOperatorModel(modelName string) (Perso
 	if r == nil {
 		return PersonaExtractorBinding{}, fmt.Errorf("persona extractor: runtime is nil")
 	}
-	cfg, err := config.ResolveLLMConfigFromLoaded(r.Config, r.ConfigDiagnostics, config.LLMPurposeOperator)
+	cfg, err := r.resolveOperatorProfile(profileName)
 	if err != nil {
 		return PersonaExtractorBinding{}, err
-	}
-	if !cfg.Enabled {
-		return PersonaExtractorBinding{}, fmt.Errorf("persona extractor: operator LLM config is disabled")
 	}
 	cfg.Model = modelName
 	extractor, err := defaultPersonaExtractor(cfg, nil)

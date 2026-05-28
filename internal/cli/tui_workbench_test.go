@@ -409,6 +409,21 @@ func TestInteractiveWorkbenchSwitchModelUpdatesPersonaExtractor(t *testing.T) {
 	if got := session.PersonaExtractModelInfo.BaseURL; got != server.URL {
 		t.Fatalf("PersonaExtractModelInfo.BaseURL = %q, want %q", got, server.URL)
 	}
+
+	freshRuntime, err := app.OpenRuntimeWithConfigOptions(workDir, config.LoadOptions{
+		UserGlobalPath: filepath.Join(t.TempDir(), "absent-user-global.json"),
+	})
+	if err != nil {
+		t.Fatalf("fresh OpenRuntimeWithConfigOptions() error = %v", err)
+	}
+	defer freshRuntime.Close()
+	freshCfg, err := freshRuntime.ResolveLLMConfig(config.LLMPurposeOperator)
+	if err != nil {
+		t.Fatalf("fresh ResolveLLMConfig(operator) error = %v", err)
+	}
+	if got := freshCfg.Model; got != "deepseek-chat" {
+		t.Fatalf("fresh runtime model = %q, want workspace active profile model deepseek-chat; /model use must stay session-scoped", got)
+	}
 }
 
 func writeWorkbenchLLMConfig(t *testing.T, workDir string, baseURL string) {

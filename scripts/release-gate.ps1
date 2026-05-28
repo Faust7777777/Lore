@@ -153,12 +153,12 @@ try {
     Invoke-GoGate `
         -Label "LLM config resolver and workspace persistence guardrails" `
         -Package "./internal/config" `
-        -Run "Test(ResolveLLMConfig|UpsertLLMProfile|SetActiveLLMProfile|SaveWorkspaceConfig|LoadEditableConfig|LLMProfileFromPreset)"
+        -Run "Test(ResolveLLM(Config|ProfileConfig)|UpsertLLMProfile|SetActiveLLMProfile|SaveWorkspaceConfig|LoadEditableConfig|LLMProfileFromPreset)"
 
     Invoke-GoGate `
         -Label "runtime LLM profile wiring guardrails" `
         -Package "./internal/app" `
-        -Run "TestOpenRuntimeUsesWorkspaceLLMProfileOverGenericEnv$"
+        -Run "Test(OpenRuntimeUsesWorkspaceLLMProfileOverGenericEnv|RuntimeLLMProfilePersistenceReloadsActiveProfile|RuntimeBuildOperatorAndPersonaForModelUsesNamedProfile)$"
 
     Invoke-GoGate `
         -Label "interactive model panel LLM config guardrails" `

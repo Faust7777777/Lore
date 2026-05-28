@@ -75,6 +75,51 @@ func TestResolveLLMConfigUsesWorkspaceProfileOverEnv(t *testing.T) {
 	}
 }
 
+func TestResolveLLMProfileConfigUsesRequestedProfile(t *testing.T) {
+	clearLLMEnv(t)
+	workDir := t.TempDir()
+	workspacePath := filepath.Join(workDir, ".lore", "config.json")
+	if err := os.MkdirAll(filepath.Dir(workspacePath), 0o755); err != nil {
+		t.Fatalf("mkdir workspace config: %v", err)
+	}
+	if err := os.WriteFile(workspacePath, []byte(`{
+		"llm": {
+			"active_profile": "deepseek",
+			"profiles": {
+				"deepseek": {
+					"provider": "deepseek",
+					"base_url": "https://api.deepseek.com/v1",
+					"model": "deepseek-chat",
+					"api_key_env": "DEEPSEEK_API_KEY"
+				},
+				"kimi": {
+					"provider": "kimi",
+					"base_url": "https://api.kimi.example/v1",
+					"model": "kimi-k2",
+					"api_key_env": "KIMI_API_KEY"
+				}
+			}
+		}
+	}`), 0o600); err != nil {
+		t.Fatalf("write workspace config: %v", err)
+	}
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	t.Setenv("KIMI_API_KEY", "kimi-secret")
+
+	resolved, _, err := ResolveLLMProfileConfigWithOptions(workDir, LLMPurposeOperator, "kimi", LoadOptions{
+		UserGlobalPath: absentPath(t),
+	})
+	if err != nil {
+		t.Fatalf("ResolveLLMProfileConfigWithOptions(kimi) error = %v", err)
+	}
+	if resolved.Profile != "kimi" || resolved.Provider != "kimi" || resolved.Model != "kimi-k2" {
+		t.Fatalf("resolved = %+v, want requested kimi profile despite active deepseek", resolved)
+	}
+	if resolved.APIKey != "kimi-secret" || resolved.APIKeyEnv != "KIMI_API_KEY" {
+		t.Fatalf("resolved key/env = %q/%q, want kimi env", resolved.APIKey, resolved.APIKeyEnv)
+	}
+}
+
 func TestResolveLLMConfigFallsBackToEnvWhenNoProfile(t *testing.T) {
 	clearLLMEnv(t)
 	workDir := t.TempDir()

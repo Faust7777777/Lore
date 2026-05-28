@@ -84,9 +84,41 @@ func ResolveLLMConfigWithOptions(workDir string, purpose string, opts LoadOption
 func ResolveLLMConfigFromLoaded(cfg Config, diagnostics []LoadDiagnostic, purpose string) (ResolvedLLMConfig, error) {
 	purpose = normalizeLLMPurpose(purpose)
 	if hasConfiguredLLM(cfg) {
-		return resolveConfiguredLLM(cfg, diagnostics, purpose)
+		return resolveConfiguredLLMProfileValue(cfg, diagnostics, purpose, "")
 	}
 	return resolveEnvLLM(purpose)
+}
+
+func ResolveLLMProfileConfig(workDir string, purpose string, profileName string) (ResolvedLLMConfig, error) {
+	resolved, _, err := ResolveLLMProfileConfigWithOptions(workDir, purpose, profileName, LoadOptions{})
+	return resolved, err
+}
+
+func ResolveLLMProfileConfigWithOptions(workDir string, purpose string, profileName string, opts LoadOptions) (ResolvedLLMConfig, []LoadDiagnostic, error) {
+	cfg, diagnostics, err := LoadWithOptions(workDir, opts)
+	if err != nil {
+		return ResolvedLLMConfig{}, diagnostics, err
+	}
+	resolved, err := ResolveLLMProfileConfigFromLoaded(cfg, diagnostics, purpose, profileName)
+	return resolved, diagnostics, err
+}
+
+func ResolveLLMProfileConfigFromLoaded(cfg Config, diagnostics []LoadDiagnostic, purpose string, profileName string) (ResolvedLLMConfig, error) {
+	purpose = normalizeLLMPurpose(purpose)
+	profileName = strings.TrimSpace(profileName)
+	if profileName == "" {
+		return ResolveLLMConfigFromLoaded(cfg, diagnostics, purpose)
+	}
+	if !hasConfiguredLLM(cfg) {
+		resolved := ResolvedLLMConfig{
+			Enabled: true,
+			Purpose: purpose,
+			Source:  LLMSourceDefault,
+			Profile: profileName,
+		}
+		return resolved, fmt.Errorf("llm: profile %q not found; no configured profiles exist", profileName)
+	}
+	return resolveConfiguredLLMProfileValue(cfg, diagnostics, purpose, profileName)
 }
 
 func normalizeLLMPurpose(purpose string) string {
@@ -101,8 +133,8 @@ func hasConfiguredLLM(cfg Config) bool {
 	return strings.TrimSpace(cfg.LLM.ActiveProfile) != "" || len(cfg.LLM.Profiles) > 0
 }
 
-func resolveConfiguredLLM(cfg Config, diagnostics []LoadDiagnostic, purpose string) (ResolvedLLMConfig, error) {
-	profileName, profile, err := selectLLMProfile(cfg.LLM)
+func resolveConfiguredLLMProfileValue(cfg Config, diagnostics []LoadDiagnostic, purpose string, requestedProfile string) (ResolvedLLMConfig, error) {
+	profileName, profile, err := selectLLMProfile(cfg.LLM, requestedProfile)
 	resolved := ResolvedLLMConfig{
 		Enabled:   true,
 		Purpose:   purpose,
@@ -138,8 +170,16 @@ func resolveConfiguredLLM(cfg Config, diagnostics []LoadDiagnostic, purpose stri
 	return resolved, nil
 }
 
-func selectLLMProfile(llm LLMConfig) (string, LLMProfileConfig, error) {
+func selectLLMProfile(llm LLMConfig, requestedProfile string) (string, LLMProfileConfig, error) {
 	profiles := llm.Profiles
+	requestedProfile = strings.TrimSpace(requestedProfile)
+	if requestedProfile != "" {
+		profile, ok := profiles[requestedProfile]
+		if !ok {
+			return requestedProfile, LLMProfileConfig{}, fmt.Errorf("llm: profile %q not found", requestedProfile)
+		}
+		return requestedProfile, profile, nil
+	}
 	active := strings.TrimSpace(llm.ActiveProfile)
 	if len(profiles) == 0 {
 		return active, LLMProfileConfig{}, fmt.Errorf("llm: active_profile %q has no profiles", active)

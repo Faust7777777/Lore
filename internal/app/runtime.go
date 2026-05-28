@@ -38,6 +38,7 @@ const personaExtractTimeoutEnv = "LORE_LLM_PERSONA_EXTRACT_TIMEOUT"
 type Runtime struct {
 	Config                   config.Config
 	ConfigDiagnostics        []config.LoadDiagnostic
+	configLoadOptions        config.LoadOptions
 	LLMDiagnostics           []config.LLMDiagnostic
 	OperatorAgent            operatoragent.Agent
 	Harness                  *orchestrator.Harness
@@ -131,6 +132,7 @@ func OpenRuntimeWithConfigOptions(workDir string, opts config.LoadOptions) (*Run
 	runtime := &Runtime{
 		Config:                   cfg,
 		ConfigDiagnostics:        diagnostics,
+		configLoadOptions:        opts,
 		LLMDiagnostics:           llmRuntime.diagnostics,
 		OperatorAgent:            llmRuntime.operatorAgent,
 		Harness:                  h,
