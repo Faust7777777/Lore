@@ -219,7 +219,7 @@ func TestListPersonaExtractErrorsEmptyLogReturnsZeroEntries(t *testing.T) {
 }
 
 func TestParsePersonaExtractLogLineKeepsMalformedRaw(t *testing.T) {
-	got := parsePersonaExtractLogLine("this is not a tab-delimited log line")
+	got := ParsePersonaExtractLogLine("this is not a tab-delimited log line")
 	if got.Parsed {
 		t.Fatalf("parsed = true for garbage line; want false")
 	}
@@ -228,8 +228,61 @@ func TestParsePersonaExtractLogLineKeepsMalformedRaw(t *testing.T) {
 	}
 }
 
+func TestParsePersonaExtractLogLineHandlesModelOnlyTail(t *testing.T) {
+	// Asymmetric column: model present, base_url absent (resolved
+	// profile populated PersonaExtractModelInfo.Model but not BaseURL).
+	// Parser must still surface Model and leave BaseURL empty.
+	got := ParsePersonaExtractLogLine("2026-05-22T10:00:00Z\tstage=store\tsession=lore-1\terror=\"disk full\"\tmodel=gpt-5.4")
+	if !got.Parsed {
+		t.Fatal("Parsed = false; want true")
+	}
+	if got.Model != "gpt-5.4" {
+		t.Fatalf("Model = %q, want gpt-5.4", got.Model)
+	}
+	if got.BaseURL != "" {
+		t.Fatalf("BaseURL = %q, want empty (column omitted)", got.BaseURL)
+	}
+}
+
+func TestParsePersonaExtractLogLineRoundTripsModelTagColumns(t *testing.T) {
+	// Round-trip the full B-line model-consistency contract via a
+	// manually-constructed line in the writer's exact format (see
+	// internal/console/session.go logPersonaExtractError). Format drift
+	// on the writer side would show up here as a parse mismatch.
+	const (
+		ts       = "2026-05-26T12:34:56.789012345Z"
+		stage    = "extract"
+		session  = "lore-roundtrip"
+		errMsg   = "upstream timeout"
+		modelTag = "deepseek-chat"
+		baseURL  = "https://api.deepseek.com/v1"
+	)
+	line := ts + "\tstage=" + stage + "\tsession=" + session +
+		"\terror=\"" + errMsg + "\"" +
+		"\tmodel=" + modelTag +
+		"\tbase_url=\"" + baseURL + "\""
+
+	got := ParsePersonaExtractLogLine(line)
+	if !got.Parsed {
+		t.Fatalf("Parsed = false; line = %q", line)
+	}
+	if got.Stage != stage || got.Session != session || got.Error != errMsg {
+		t.Fatalf("legacy 4-column fields drifted: %+v", got)
+	}
+	if got.Model != modelTag || got.BaseURL != baseURL {
+		t.Fatalf("model-tag columns drifted: %+v", got)
+	}
+	wantTS, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		t.Fatalf("seed timestamp: %v", err)
+	}
+	if !got.Timestamp.Equal(wantTS) {
+		t.Fatalf("Timestamp = %v, want %v", got.Timestamp, wantTS)
+	}
+}
+
 func TestParsePersonaExtractLogLineLegacyFourColumnStaysParsed(t *testing.T) {
-	got := parsePersonaExtractLogLine("2026-05-22T10:00:00Z\tstage=extract\tsession=legacy\terror=\"boom\"")
+	got := ParsePersonaExtractLogLine("2026-05-22T10:00:00Z\tstage=extract\tsession=legacy\terror=\"boom\"")
 	if !got.Parsed {
 		t.Fatalf("legacy 4-column line should be parsed; got %+v", got)
 	}

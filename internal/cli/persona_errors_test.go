@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -463,110 +462,13 @@ func TestRunPersonaErrorsJSONEndToEnd(t *testing.T) {
 	}
 }
 
-// TestParsePersonaLogLineRoundTripsModelTagColumns pins the B-line
-// model-consistency contract: a line written by the Session log writer
-// using the documented format (session.go logPersonaExtractError, with
-// PersonaExtractModelInfo populated) is parsed back into a
-// personaLogEntry that exposes the model and base_url columns
-// distinctly from the legacy four-column fields. Format drift on the
-// writer side would surface here as a parse mismatch rather than a
-// silent data-loss bug in the operator-facing `lore persona errors`
-// surface.
-func TestParsePersonaLogLineRoundTripsModelTagColumns(t *testing.T) {
-	const (
-		ts       = "2026-05-26T12:34:56.789012345Z"
-		stage    = "extract"
-		session  = "lore-roundtrip"
-		errMsg   = "upstream timeout"
-		modelTag = "deepseek-chat"
-		baseURL  = "https://api.deepseek.com/v1"
-	)
-	// Mirror session.go logPersonaExtractError verbatim: error and
-	// base_url are formatted via %q, model is plain. Format pinned by
-	// internal/console/session.go's fmt.Fprintf at the time of writing
-	// (see PersonaExtractModelInfo doc comment for the contract).
-	line := fmt.Sprintf("%s\tstage=%s\tsession=%s\terror=%q\tmodel=%s\tbase_url=%q",
-		ts, stage, session, errMsg, modelTag, baseURL)
-
-	got := parsePersonaLogLine(line)
-	if !got.parsed {
-		t.Fatalf("parsed = false; line = %q", line)
-	}
-	if got.stage != stage {
-		t.Fatalf("stage = %q, want %q", got.stage, stage)
-	}
-	if got.session != session {
-		t.Fatalf("session = %q, want %q", got.session, session)
-	}
-	if got.errMsg != errMsg {
-		t.Fatalf("errMsg = %q, want %q (unquoteSafe should strip %%q wrapping)", got.errMsg, errMsg)
-	}
-	if got.model != modelTag {
-		t.Fatalf("model = %q, want %q (plain, no %%q wrapping)", got.model, modelTag)
-	}
-	if got.baseURL != baseURL {
-		t.Fatalf("baseURL = %q, want %q (unquoteSafe should strip %%q wrapping)", got.baseURL, baseURL)
-	}
-	wantTS, err := time.Parse(time.RFC3339Nano, ts)
-	if err != nil {
-		t.Fatalf("seed timestamp: %v", err)
-	}
-	if !got.ts.Equal(wantTS) {
-		t.Fatalf("ts = %v, want %v", got.ts, wantTS)
-	}
-	if got.raw != line {
-		t.Fatalf("raw preserved incorrectly:\n got: %q\nwant: %q", got.raw, line)
-	}
-}
-
-// TestParsePersonaLogLineParsesLegacyFourColumnFormat protects the
-// pre-B-line readers: lines written before PersonaExtractModelInfo was
-// added carry only four columns. They must keep parsing as parsed=true
-// with empty model / baseURL so older workdir logs continue to render
-// cleanly under the new schema.
-func TestParsePersonaLogLineParsesLegacyFourColumnFormat(t *testing.T) {
-	const line = "2026-05-22T10:00:00Z\tstage=extract\tsession=lore-legacy\terror=\"upstream provider unavailable\""
-
-	got := parsePersonaLogLine(line)
-	if !got.parsed {
-		t.Fatalf("parsed = false for legacy 4-column line; want true")
-	}
-	if got.stage != "extract" {
-		t.Fatalf("stage = %q, want extract", got.stage)
-	}
-	if got.session != "lore-legacy" {
-		t.Fatalf("session = %q, want lore-legacy", got.session)
-	}
-	if got.errMsg != "upstream provider unavailable" {
-		t.Fatalf("errMsg = %q, want unquoted form", got.errMsg)
-	}
-	if got.model != "" {
-		t.Fatalf("model = %q, want empty for legacy line", got.model)
-	}
-	if got.baseURL != "" {
-		t.Fatalf("baseURL = %q, want empty for legacy line", got.baseURL)
-	}
-}
-
-// TestParsePersonaLogLineHandlesModelOnlyTail covers the asymmetric
-// case where the writer captured a model identity but no base_url
-// (e.g. resolved profile populated PersonaExtractModelInfo.Model but
-// the base URL was elided). The parser must still surface the model
-// field and leave baseURL empty.
-func TestParsePersonaLogLineHandlesModelOnlyTail(t *testing.T) {
-	const line = "2026-05-22T10:00:00Z\tstage=store\tsession=lore-1\terror=\"disk full\"\tmodel=gpt-5.4"
-
-	got := parsePersonaLogLine(line)
-	if !got.parsed {
-		t.Fatal("parsed = false; want true")
-	}
-	if got.model != "gpt-5.4" {
-		t.Fatalf("model = %q, want gpt-5.4", got.model)
-	}
-	if got.baseURL != "" {
-		t.Fatalf("baseURL = %q, want empty (column omitted)", got.baseURL)
-	}
-}
+// Note: the round-trip, legacy 4-column, and model-only-tail parser
+// tests live in internal/app/persona_log_test.go now that the parsing
+// helper itself lives in the app layer (see
+// TestListPersonaExtractErrorsParsesModelTagColumns,
+// TestParsePersonaExtractLogLineLegacyFourColumnStaysParsed, and
+// TestParsePersonaExtractLogLineHandlesModelOnlyTail). The cli still
+// owns the JSON / human rendering tests below.
 
 // TestEmitPersonaExtractErrorsJSONIncludesModelAndBaseURL covers the
 // downstream JSON surface: when the log carries model-tag columns,

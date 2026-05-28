@@ -44,17 +44,26 @@ type PersonaErrorsFilter struct {
 
 // PersonaExtractErrorsResult bundles the filtered entry slice with
 // the metadata operators need to render dashboards: log path,
-// existence flag, and the raw (pre-filter) entry count. Consumers
-// can build either tail-style text rendering or JSON shape from
-// this without re-reading the file.
+// existence flag, and entry counts at both stages of the filter
+// pipeline. Consumers can build either tail-style text rendering
+// or JSON shape from this without re-reading the file.
+//
+// Count semantics:
+//   - TotalEntries: raw line count before any filter (all parsed +
+//     malformed lines).
+//   - FilteredCount: count after stage/since filter, before Tail.
+//     Equal to TotalEntries when neither stage nor since is set.
+//   - len(Entries): count after Tail truncation. Equal to FilteredCount
+//     when Tail is zero or FilteredCount <= Tail.
 type PersonaExtractErrorsResult struct {
-	LogPath      string
-	LogExists    bool
-	TotalEntries int
-	Entries      []PersonaExtractErrorEntry
+	LogPath       string
+	LogExists     bool
+	TotalEntries  int
+	FilteredCount int
+	Entries       []PersonaExtractErrorEntry
 }
 
-// ListPersonaExtractErrors reads <StateDir>/logs/persona-extract.log,
+// ReadPersonaExtractErrors loads the persona-extract log at logPath,
 // parses each line, applies the filter, and returns the matching
 // entries plus enough metadata for the consumer to render a
 // dashboard. A missing file is NOT an error: LogExists=false with an
@@ -71,11 +80,12 @@ type PersonaExtractErrorsResult struct {
 //
 // TotalEntries reflects the raw line count before any filter is
 // applied so dashboards can show "X of Y entries shown".
-func (r *Runtime) ListPersonaExtractErrors(filter PersonaErrorsFilter) (PersonaExtractErrorsResult, error) {
-	if r == nil {
-		return PersonaExtractErrorsResult{}, fmt.Errorf("app: runtime is not initialized")
-	}
-	logPath := r.PersonaExtractLogPath()
+//
+// This is the package-level entry point so CLI tests (and any caller
+// that already knows the log path) can read without opening a runtime.
+// Runtime.ListPersonaExtractErrors is the convenience wrapper that
+// derives the path from the runtime's StateDir.
+func ReadPersonaExtractErrors(logPath string, filter PersonaErrorsFilter) (PersonaExtractErrorsResult, error) {
 	result := PersonaExtractErrorsResult{LogPath: logPath, Entries: []PersonaExtractErrorEntry{}}
 
 	all, exists, err := readPersonaLogFile(logPath)
@@ -109,11 +119,22 @@ func (r *Runtime) ListPersonaExtractErrors(filter PersonaErrorsFilter) (PersonaE
 		}
 		filtered = append(filtered, entry)
 	}
+	result.FilteredCount = len(filtered)
 	if filter.Tail > 0 && len(filtered) > filter.Tail {
 		filtered = filtered[len(filtered)-filter.Tail:]
 	}
 	result.Entries = filtered
 	return result, nil
+}
+
+// ListPersonaExtractErrors is the Runtime-bound convenience wrapper
+// over ReadPersonaExtractErrors. TUI / runtime-aware consumers call
+// this so the log path is derived from the runtime's StateDir.
+func (r *Runtime) ListPersonaExtractErrors(filter PersonaErrorsFilter) (PersonaExtractErrorsResult, error) {
+	if r == nil {
+		return PersonaExtractErrorsResult{}, fmt.Errorf("app: runtime is not initialized")
+	}
+	return ReadPersonaExtractErrors(r.PersonaExtractLogPath(), filter)
 }
 
 // readPersonaLogFile loads logPath and returns one parsed entry per
@@ -134,17 +155,20 @@ func readPersonaLogFile(logPath string) (entries []PersonaExtractErrorEntry, exi
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
-		entries = append(entries, parsePersonaExtractLogLine(raw))
+		entries = append(entries, ParsePersonaExtractLogLine(raw))
 	}
 	return entries, true, nil
 }
 
-// parsePersonaExtractLogLine decodes one TSV record. The format
+// ParsePersonaExtractLogLine decodes one TSV record. The format
 // contract is documented on PersonaExtractErrorEntry and pinned by
 // tests in both internal/console (writer) and internal/cli
 // (round-trip). Legacy four-column lines (no model/base_url tail)
 // parse with empty Model / BaseURL.
-func parsePersonaExtractLogLine(raw string) PersonaExtractErrorEntry {
+//
+// Exported so CLI / TUI tests that need to round-trip a single line
+// without setting up a runtime can call it directly.
+func ParsePersonaExtractLogLine(raw string) PersonaExtractErrorEntry {
 	fields := strings.Split(raw, "\t")
 	if len(fields) < 4 {
 		return PersonaExtractErrorEntry{Raw: raw}

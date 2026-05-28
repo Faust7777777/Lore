@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"obsidian-harness/internal/app"
 	"obsidian-harness/internal/config/configtest"
@@ -17,8 +17,16 @@ func TestRenderPersonaSummaryEmptyWorkdir(t *testing.T) {
 	// candidate row is "0", the log section reports the missing file
 	// as a friendly placeholder rather than a stat error. This is
 	// the most common state of the cookbook's Step 1.
+	view := app.PersonaSummaryView{
+		Workdir: "/work/abs",
+		LogPath: "/work/abs/state/logs/persona-extract.log",
+		ExtractLog: app.PersonaExtractLogSummary{
+			Exists:  false,
+			ByStage: map[string]int{},
+		},
+	}
 	var buf bytes.Buffer
-	renderPersonaSummary(&buf, "/work/abs", "/work/abs/state/logs/persona-extract.log", 0, 0, 0, 0)
+	renderPersonaSummary(&buf, view)
 	out := buf.String()
 	for _, want := range []string{
 		"Persona Memory Summary",
@@ -35,25 +43,34 @@ func TestRenderPersonaSummaryEmptyWorkdir(t *testing.T) {
 }
 
 func TestRenderPersonaSummaryAggregatesLogStages(t *testing.T) {
-	// Seed a log file with 4 entries across 3 stages plus one
-	// malformed line. The summary should show total=5, three named
-	// buckets sorted alphabetically, the malformed bucket separately,
-	// and the latest RFC3339Nano entry as the freshness anchor.
-	dir := t.TempDir()
-	logPath := filepath.Join(dir, "persona-extract.log")
-	lines := []string{
-		"2026-05-22T10:00:00Z\tstage=extract\tsession=s1\terror=\"e1\"",
-		"2026-05-22T10:05:00Z\tstage=extract\tsession=s2\terror=\"e2\"",
-		"2026-05-22T10:10:00Z\tstage=store\tsession=s3\terror=\"disk full\"",
-		"2026-05-22T11:00:00Z\tstage=parse_warning\tsession=s4\terror=\"low confidence\"",
-		"this-line-is-malformed",
+	// Synthesize a view with 5 log entries across 3 named stages
+	// plus the malformed bucket. The summary should show total=5,
+	// the four buckets sorted alphabetically, and the latest
+	// RFC3339Nano timestamp as the freshness anchor.
+	latest, _ := time.Parse(time.RFC3339Nano, "2026-05-22T11:00:00Z")
+	view := app.PersonaSummaryView{
+		Workdir: "/work/sample",
+		LogPath: "/work/sample/state/logs/persona-extract.log",
+		Candidates: app.PersonaCandidateCounts{
+			Open:          3,
+			DraftedLinked: 2,
+			DraftedOrphan: 1,
+			Dismissed:     4,
+		},
+		ExtractLog: app.PersonaExtractLogSummary{
+			Exists:       true,
+			TotalEntries: 5,
+			ByStage: map[string]int{
+				"extract":       2,
+				"store":         1,
+				"parse_warning": 1,
+				"(malformed)":   1,
+			},
+			LastEntry: latest,
+		},
 	}
-	if err := os.WriteFile(logPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-		t.Fatalf("write log fixture: %v", err)
-	}
-
 	var buf bytes.Buffer
-	renderPersonaSummary(&buf, dir, logPath, 3, 2, 1, 4)
+	renderPersonaSummary(&buf, view)
 	out := buf.String()
 	for _, want := range []string{
 		"open         3",
@@ -78,14 +95,19 @@ func TestRenderPersonaSummaryEmptyLogFile(t *testing.T) {
 	// summary should distinguish "(empty)" from "(no log file yet)"
 	// because the former signals extraction is running but never
 	// failed in this workdir.
-	dir := t.TempDir()
-	logPath := filepath.Join(dir, "persona-extract.log")
-	if err := os.WriteFile(logPath, []byte(""), 0o644); err != nil {
-		t.Fatalf("write empty log: %v", err)
+	view := app.PersonaSummaryView{
+		Workdir: "/work/sample",
+		LogPath: "/work/sample/state/logs/persona-extract.log",
+		Candidates: app.PersonaCandidateCounts{
+			Open: 1,
+		},
+		ExtractLog: app.PersonaExtractLogSummary{
+			Exists:  true,
+			ByStage: map[string]int{},
+		},
 	}
-
 	var buf bytes.Buffer
-	renderPersonaSummary(&buf, dir, logPath, 1, 0, 0, 0)
+	renderPersonaSummary(&buf, view)
 	out := buf.String()
 	if !strings.Contains(out, "(empty)") {
 		t.Fatalf("output should mark empty log distinctly:\n%s", out)

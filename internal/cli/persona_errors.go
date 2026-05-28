@@ -5,8 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -73,86 +71,6 @@ func parsePersonaErrorsFlags(args []string, stderr io.Writer) (workDir string, t
 	return
 }
 
-// personaLogEntry is the parsed shape of a single persona-extract.log
-// line. Lines that fail to parse (malformed, truncated) are still
-// retained with parsed=false so the operator sees the raw line; the
-// stage/since filters skip them rather than crashing.
-//
-// session and error are extracted up-front from the third and fourth
-// tab-delimited fields so JSON emit does not have to re-split raw.
-// error is unquoted via unquoteSafe because session.go's
-// logPersonaExtractError formats it as %q.
-//
-// model and baseURL are optional fifth/sixth columns introduced by
-// the B-line model-consistency slice. Absent on legacy lines (those
-// stay parsed=true with empty values); the JSON emitter omits empty
-// strings via the omitempty tag below.
-type personaLogEntry struct {
-	raw     string
-	ts      time.Time
-	stage   string
-	session string
-	errMsg  string
-	model   string
-	baseURL string
-	parsed  bool
-}
-
-func parsePersonaLogLine(raw string) personaLogEntry {
-	fields := strings.Split(raw, "\t")
-	if len(fields) < 4 {
-		return personaLogEntry{raw: raw}
-	}
-	ts, err := time.Parse(time.RFC3339Nano, fields[0])
-	if err != nil {
-		return personaLogEntry{raw: raw}
-	}
-	if !strings.HasPrefix(fields[1], "stage=") {
-		return personaLogEntry{raw: raw, ts: ts}
-	}
-	entry := personaLogEntry{
-		raw:     raw,
-		ts:      ts,
-		stage:   strings.TrimPrefix(fields[1], "stage="),
-		session: strings.TrimPrefix(fields[2], "session="),
-		errMsg:  unquoteSafe(strings.TrimPrefix(fields[3], "error=")),
-		parsed:  true,
-	}
-	for _, extra := range fields[4:] {
-		switch {
-		case strings.HasPrefix(extra, "model="):
-			entry.model = strings.TrimPrefix(extra, "model=")
-		case strings.HasPrefix(extra, "base_url="):
-			entry.baseURL = unquoteSafe(strings.TrimPrefix(extra, "base_url="))
-		}
-	}
-	return entry
-}
-
-// readPersonaLogEntries loads logPath and returns one parsed entry per
-// non-blank line. The boolean indicates whether the file existed --
-// callers (summary / errors / JSON variants) all want to distinguish
-// "no file yet" from "read error" but render that signal differently,
-// so the helper surfaces both rather than coercing a missing file
-// into an empty slice. Trailing newline is trimmed before splitting
-// so the empty tail line does not produce a malformed entry.
-func readPersonaLogEntries(logPath string) (entries []personaLogEntry, exists bool, err error) {
-	data, err := os.ReadFile(logPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, false, nil
-		}
-		return nil, false, err
-	}
-	for _, raw := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-		if strings.TrimSpace(raw) == "" {
-			continue
-		}
-		entries = append(entries, parsePersonaLogLine(raw))
-	}
-	return entries, true, nil
-}
-
 // emitPersonaExtractErrorsJSON is the --json counterpart of
 // renderPersonaExtractErrors. Filter semantics (stage, since, tail)
 // are identical; the difference is the output shape:
@@ -198,6 +116,14 @@ func emitPersonaExtractErrorsJSON(stdout, stderr io.Writer, logPath string, tail
 		Entries []entryOut `json:"entries"`
 	}
 
+	result, err := app.ReadPersonaExtractErrors(logPath, app.PersonaErrorsFilter{
+		Tail: tail, Stage: stageFilter, Since: since, Now: now,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "persona errors: read log: %v\n", err)
+		return 1
+	}
+
 	out := payload{
 		LogPath: logPath,
 		Filter: filterOut{
@@ -205,62 +131,21 @@ func emitPersonaExtractErrorsJSON(stdout, stderr io.Writer, logPath string, tail
 			Stage:        stageFilter,
 			SinceSeconds: int64(since.Seconds()),
 		},
-		Entries: []entryOut{},
+		Summary: summaryOut{
+			TotalEntries: result.TotalEntries,
+			Shown:        len(result.Entries),
+		},
+		Entries: make([]entryOut, 0, len(result.Entries)),
 	}
-
-	all, _, err := readPersonaLogEntries(logPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "persona errors: read log: %v\n", err)
-		return 1
-	}
-	if all == nil {
-		// File missing or empty: emit the empty-payload skeleton so
-		// the JSON shape stays uniform and downstream consumers can
-		// branch on summary.total_entries == 0 rather than special-
-		// casing a different top-level shape.
-		encoded, mErr := json.Marshal(out)
-		if mErr != nil {
-			fmt.Fprintf(stderr, "persona errors: emit json: %v\n", mErr)
-			return 1
-		}
-		_, _ = stdout.Write(encoded)
-		_, _ = fmt.Fprintln(stdout)
-		return 0
-	}
-
-	var cutoff time.Time
-	if since > 0 {
-		cutoff = now.Add(-since)
-	}
-
-	filtered := make([]personaLogEntry, 0, len(all))
-	for _, e := range all {
-		if stageFilter != "" && (!e.parsed || e.stage != stageFilter) {
-			continue
-		}
-		if since > 0 {
-			if e.ts.IsZero() || e.ts.Before(cutoff) {
-				continue
-			}
-		}
-		filtered = append(filtered, e)
-	}
-	shown := filtered
-	if tail > 0 && len(filtered) > tail {
-		shown = filtered[len(filtered)-tail:]
-	}
-
-	out.Summary.TotalEntries = len(all)
-	out.Summary.Shown = len(shown)
-	for _, e := range shown {
-		entry := entryOut{Raw: e.raw}
-		if e.parsed {
-			entry.Timestamp = e.ts.UTC().Format(time.RFC3339Nano)
-			entry.Stage = e.stage
-			entry.Session = e.session
-			entry.Error = e.errMsg
-			entry.Model = e.model
-			entry.BaseURL = e.baseURL
+	for _, e := range result.Entries {
+		entry := entryOut{Raw: e.Raw}
+		if e.Parsed {
+			entry.Timestamp = e.Timestamp.UTC().Format(time.RFC3339Nano)
+			entry.Stage = e.Stage
+			entry.Session = e.Session
+			entry.Error = e.Error
+			entry.Model = e.Model
+			entry.BaseURL = e.BaseURL
 		}
 		out.Entries = append(out.Entries, entry)
 	}
@@ -275,19 +160,6 @@ func emitPersonaExtractErrorsJSON(stdout, stderr io.Writer, logPath string, tail
 	return 0
 }
 
-// unquoteSafe applies strconv.Unquote when the input is a quoted
-// string, otherwise returns the input verbatim. Used because the
-// log writer formats errors as %q which produces a quoted string,
-// and JSON consumers want the unquoted value.
-func unquoteSafe(s string) string {
-	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-		if unquoted, err := strconv.Unquote(s); err == nil {
-			return unquoted
-		}
-	}
-	return s
-}
-
 // renderPersonaExtractErrors reads the persona-extract.log file at
 // logPath, applies the requested filters, and prints a tail-style
 // report to stdout. now is parameter-injected so tests can pin a
@@ -299,39 +171,18 @@ func renderPersonaExtractErrors(stdout, stderr io.Writer, logPath string, tail i
 		fmt.Fprintln(stdout, "=========================")
 		fmt.Fprintf(stdout, "Source: %s\n", logPath)
 	}
-	all, exists, err := readPersonaLogEntries(logPath)
+	result, err := app.ReadPersonaExtractErrors(logPath, app.PersonaErrorsFilter{
+		Tail: tail, Stage: stageFilter, Since: since, Now: now,
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "persona errors: read log: %v\n", err)
 		return 1
 	}
-	if !exists {
+	if !result.LogExists {
 		header()
 		fmt.Fprintln(stdout)
 		fmt.Fprintln(stdout, "No log file yet. Either extraction has not produced any failures in this workdir, or the runtime has not been opened here.")
 		return 0
-	}
-
-	var cutoff time.Time
-	if since > 0 {
-		cutoff = now.Add(-since)
-	}
-
-	filtered := make([]personaLogEntry, 0, len(all))
-	for _, e := range all {
-		if stageFilter != "" && (!e.parsed || e.stage != stageFilter) {
-			continue
-		}
-		if since > 0 {
-			if e.ts.IsZero() || e.ts.Before(cutoff) {
-				continue
-			}
-		}
-		filtered = append(filtered, e)
-	}
-
-	shown := filtered
-	if tail > 0 && len(filtered) > tail {
-		shown = filtered[len(filtered)-tail:]
 	}
 
 	header()
@@ -350,19 +201,20 @@ func renderPersonaExtractErrors(stdout, stderr io.Writer, logPath string, tail i
 	}
 	fmt.Fprintln(stdout)
 
-	if len(shown) == 0 {
+	if len(result.Entries) == 0 {
 		fmt.Fprintln(stdout, "No matching entries.")
 		return 0
 	}
 
-	for _, e := range shown {
-		fmt.Fprintln(stdout, e.raw)
+	for _, e := range result.Entries {
+		fmt.Fprintln(stdout, e.Raw)
 	}
 	fmt.Fprintln(stdout)
-	if len(filtered) != len(all) {
-		fmt.Fprintf(stdout, "%d of %d entries shown (filtered from %d total).\n", len(shown), len(filtered), len(all))
+	if result.FilteredCount != result.TotalEntries {
+		fmt.Fprintf(stdout, "%d of %d entries shown (filtered from %d total).\n",
+			len(result.Entries), result.FilteredCount, result.TotalEntries)
 	} else {
-		fmt.Fprintf(stdout, "%d of %d entries shown.\n", len(shown), len(all))
+		fmt.Fprintf(stdout, "%d of %d entries shown.\n", len(result.Entries), result.TotalEntries)
 	}
 	return 0
 }
