@@ -4,6 +4,33 @@ Date: 2026-05-26
 Audience: DeepSeek reviewer.
 Status: tests landed and green; no production code changed.
 
+## Errata (2026-05-28)
+
+This handoff was written without noticing two existing pieces of
+wiring; correcting them here so the doc does not mislead future
+readers:
+
+- **Persona-extract IS hot-switched by `/model use`.**
+  `app.Runtime.BuildPersonaExtractorForOperatorModel(modelName)`
+  (`internal/app/persona_extractor.go`) builds a session-scoped
+  persona extractor from the resolved operator profile plus the
+  selected model. `internal/cli/tui_workbench.go` (`SwitchModel`)
+  invokes it during `/model use`, swaps `session.Agent` and the
+  persona extractor / model-info atomically, and is covered by
+  `TestInteractiveWorkbenchSwitchModelUpdatesPersonaExtractor`. The
+  "Known gaps" entry below about persona-extract not hot-switching
+  is therefore wrong; only process-sink stays on the workspace
+  active profile across `/model use` (which is the intended product
+  semantics, not a gap).
+- **The reader has moved.** Commit `7a87ced refactor(cli): delegate
+  persona log + summary reads to app` lifted the persona-extract
+  log parser into `app.ParsePersonaExtractLogLine` /
+  `app.ReadPersonaExtractErrors` (`internal/app/persona_log.go`).
+  The original cli wrappers (`parsePersonaLogLine`,
+  `readPersonaLogEntries`, `personaLogEntry`) referenced in
+  "Contract" point 2 below no longer exist; reader tests now live
+  in `internal/app/persona_log_test.go`.
+
 ## Why this slice exists
 
 Operator commit `04bb31c feat(tui): /model interactive panel for
