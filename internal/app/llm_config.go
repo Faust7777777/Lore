@@ -75,6 +75,53 @@ func (r *Runtime) ResolveLLMConfig(purpose string) (config.ResolvedLLMConfig, er
 	return config.ResolveLLMConfigFromLoaded(r.Config, r.ConfigDiagnostics, purpose)
 }
 
+// LLMIdentity is the key-free projection of a resolved per-purpose LLM
+// config that the TUI (and other read-only surfaces) can render
+// without ever holding the API key value. Mirrors
+// config.ResolvedLLMConfig minus the APIKey field; the surrounding
+// APIKeyEnv / APIKeyRef name strings are safe to display because they
+// identify WHERE the secret lives, not what it is. BaseURL flows
+// through SanitizeLLMBaseURL so URL-embedded credentials, if any, do
+// not leak into the dashboard.
+type LLMIdentity struct {
+	Purpose   string
+	Enabled   bool
+	Source    config.LLMConfigSource
+	Profile   string
+	Provider  string
+	BaseURL   string
+	Model     string
+	Timeout   time.Duration
+	APIKeyEnv string
+	APIKeyRef string
+}
+
+// LLMIdentity returns the safe display projection for a resolved
+// per-purpose LLM config. Use this from TUI / dashboard surfaces;
+// reach for ResolveLLMConfig only when the caller actually needs the
+// APIKey to build an LLM client. Errors propagate verbatim from
+// ResolveLLMConfig so the caller can distinguish "purpose not
+// configured" (returned identity has Enabled=false) from "config
+// resolution failed" (error returned).
+func (r *Runtime) LLMIdentity(purpose string) (LLMIdentity, error) {
+	cfg, err := r.ResolveLLMConfig(purpose)
+	if err != nil {
+		return LLMIdentity{}, err
+	}
+	return LLMIdentity{
+		Purpose:   cfg.Purpose,
+		Enabled:   cfg.Enabled,
+		Source:    cfg.Source,
+		Profile:   cfg.Profile,
+		Provider:  cfg.Provider,
+		BaseURL:   config.SanitizeLLMBaseURL(cfg.BaseURL),
+		Model:     cfg.Model,
+		Timeout:   cfg.Timeout,
+		APIKeyEnv: cfg.APIKeyEnv,
+		APIKeyRef: cfg.APIKeyRef,
+	}, nil
+}
+
 func (r *Runtime) ListLLMProfiles() ([]LLMProfileView, error) {
 	if r == nil {
 		return nil, fmt.Errorf("runtime is nil")
@@ -93,7 +140,7 @@ func (r *Runtime) ListLLMProfiles() ([]LLMProfileView, error) {
 			Name:      name,
 			Active:    name == active,
 			Provider:  strings.TrimSpace(profile.Provider),
-			BaseURL:   strings.TrimSpace(profile.BaseURL),
+			BaseURL:   config.SanitizeLLMBaseURL(profile.BaseURL),
 			Model:     strings.TrimSpace(profile.Model),
 			Timeout:   profile.Timeout,
 			APIKeyEnv: strings.TrimSpace(profile.APIKeyEnv),
@@ -189,7 +236,7 @@ func (r *Runtime) reloadLLMConfig() error {
 	r.personaExtractorErr = personaErr
 	r.PersonaExtractProvider = personaExtractIdentity(personaCfg, personaErr, llmProvider)
 	r.PersonaExtractModel = personaExtractIdentity(personaCfg, personaErr, func(c config.ResolvedLLMConfig) string { return c.Model })
-	r.PersonaExtractBaseURL = personaExtractIdentity(personaCfg, personaErr, func(c config.ResolvedLLMConfig) string { return c.BaseURL })
+	r.PersonaExtractBaseURL = personaExtractIdentity(personaCfg, personaErr, func(c config.ResolvedLLMConfig) string { return config.SanitizeLLMBaseURL(c.BaseURL) })
 	return nil
 }
 

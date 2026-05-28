@@ -100,10 +100,21 @@ handoff had it backwards. See
 `docs/handoff-b-line-task44-model-tag-tests-2026-05-26.md` for the
 correction.
 
-For TUI display: call `runtime.ResolveLLMConfig(purpose)` per purpose
-to show what model each subsystem is using. The accessor lives at
-`internal/app/llm_config.go` and was added by A-line commit
-`443b3bd feat(runtime): expose llm profile boundary for tui`.
+For TUI display: call `runtime.LLMIdentity(purpose)` per purpose to
+show what model each subsystem is using. The returned `LLMIdentity`
+is **key-free** by construction — it carries provider / model /
+base_url / source / profile and the `api_key_env` / `api_key_ref`
+NAMES (never the secret value), so the whole struct is safe to
+render directly. BaseURL is sanitised through
+`config.SanitizeLLMBaseURL` so URL-embedded credentials, if any,
+do not leak.
+
+`runtime.ResolveLLMConfig(purpose)` still exists for internal
+callers that need the API key (e.g., to rebuild an LLM client),
+but should never reach TUI / dashboard surfaces. The A-line commit
+`443b3bd feat(runtime): expose llm profile boundary for tui` added
+`ResolveLLMConfig`; the key-free `LLMIdentity` view landed
+separately in the post-slice fix-up.
 
 ## Verification
 
