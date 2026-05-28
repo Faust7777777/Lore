@@ -398,3 +398,53 @@ func TestNormalizeForSubstringCollapsesAndLowercases(t *testing.T) {
 		t.Fatalf("normalizeForSubstring = %q, want %q", got, want)
 	}
 }
+
+func TestExtractJSONObjectToleratesProviderOutputVariants(t *testing.T) {
+	// extractJSONObject is the lenience layer that lets the extractor
+	// survive provider output quirks: bare JSON, ```json / ``` code
+	// fences, and a JSON object embedded in surrounding prose must all
+	// yield the object; empty or object-free responses must error so the
+	// caller loses the candidates (tokens already billed) rather than
+	// decoding garbage. Only the bare-valid path was exercised via
+	// Extract; the fence and prose branches were not.
+	object := `{"candidates":[]}`
+	okCases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"bare valid json", object, object},
+		{"json code fence", "```json\n" + object + "\n```", object},
+		{"bare code fence", "```\n" + object + "\n```", object},
+		{"prose around object", "Sure, here you go:\n" + object + "\nHope that helps!", object},
+		{"surrounding whitespace", "  \n" + object + "\t ", object},
+	}
+	for _, tc := range okCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := extractJSONObject(tc.in)
+			if err != nil {
+				t.Fatalf("extractJSONObject(%q) error = %v, want nil", tc.in, err)
+			}
+			if got != tc.want {
+				t.Fatalf("extractJSONObject(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+
+	errCases := []struct {
+		name string
+		in   string
+	}{
+		{"empty", ""},
+		{"whitespace only", "   \n\t"},
+		{"no json object", "I could not find anything worth recording."},
+		{"braces but invalid json", "{ this is not: valid json }"},
+	}
+	for _, tc := range errCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := extractJSONObject(tc.in); err == nil {
+				t.Fatalf("extractJSONObject(%q) error = nil, want an error", tc.in)
+			}
+		})
+	}
+}
