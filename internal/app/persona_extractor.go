@@ -87,7 +87,7 @@ func (r *Runtime) BuildPersonaExtractorForModel(profileName string, modelName st
 		Extractor: extractor,
 		Provider:  llmProvider(cfg),
 		Model:     modelName,
-		BaseURL:   cfg.BaseURL,
+		BaseURL:   config.SanitizeLLMBaseURL(cfg.BaseURL),
 	}, nil
 }
 

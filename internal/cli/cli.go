@@ -699,7 +699,7 @@ func sessionLogMeta(runtime *app.Runtime, startedAt time.Time) sessionlog.Meta {
 	if err == nil || llmCfg.Enabled {
 		meta.Provider = strings.TrimSpace(llmCfg.Provider)
 		meta.Model = strings.TrimSpace(llmCfg.Model)
-		meta.BaseURL = strings.TrimSpace(llmCfg.BaseURL)
+		meta.BaseURL = config.SanitizeLLMBaseURL(llmCfg.BaseURL)
 		meta.Profile = strings.TrimSpace(llmCfg.Profile)
 		meta.Source = strings.TrimSpace(string(llmCfg.Source))
 	}

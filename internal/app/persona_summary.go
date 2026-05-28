@@ -35,9 +35,10 @@ type PersonaCandidateCounts struct {
 // PersonaExtractLogSummary aggregates the persona-extract.log file
 // for dashboard rendering. ByStage carries stage -> count for every
 // stage seen in the log; malformed lines are bucketed under the key
-// "(malformed)" so the operator notices schema drift. LastEntry is
-// the most recent successfully parsed timestamp, or zero when no
-// parsed entries exist.
+// "malformed" so JSON consumers keep a stable machine-facing key.
+// Human renderers may display it as "(malformed)" so the operator
+// notices schema drift. LastEntry is the most recent successfully
+// parsed timestamp, or zero when no parsed entries exist.
 type PersonaExtractLogSummary struct {
 	Exists       bool
 	TotalEntries int
@@ -95,7 +96,7 @@ func (r *Runtime) PersonaSummary() (PersonaSummaryView, error) {
 				latest = e.Timestamp
 			}
 		} else {
-			view.ExtractLog.ByStage["(malformed)"]++
+			view.ExtractLog.ByStage["malformed"]++
 		}
 	}
 	view.ExtractLog.LastEntry = latest

@@ -160,10 +160,11 @@ func (d interactiveWorkbenchDriver) DiscoverModels() ([]tui.ModelInfo, error) {
 		if current == "" {
 			current = strings.TrimSpace(cfg.Model)
 		}
+		displayBaseURL := config.SanitizeLLMBaseURL(cfg.BaseURL)
 		return []tui.ModelInfo{{
 			Name:       current,
 			Provider:   modelPanelProvider(cfg.Provider, current),
-			BaseURL:    cfg.BaseURL,
+			BaseURL:    displayBaseURL,
 			Source:     string(cfg.Source),
 			KeyStatus:  keyStatus(cfg.APIKey),
 			TestStatus: "discovery failed: " + err.Error(),
@@ -172,11 +173,12 @@ func (d interactiveWorkbenchDriver) DiscoverModels() ([]tui.ModelInfo, error) {
 	}
 	current := modelLabel(d.session)
 	result := make([]tui.ModelInfo, 0, len(catalog.Models))
+	displayBaseURL := config.SanitizeLLMBaseURL(cfg.BaseURL)
 	for _, m := range catalog.Models {
 		result = append(result, tui.ModelInfo{
 			Name:      m,
 			Provider:  modelPanelProvider(cfg.Provider, m),
-			BaseURL:   cfg.BaseURL,
+			BaseURL:   displayBaseURL,
 			Source:    string(cfg.Source),
 			KeyStatus: keyStatus(cfg.APIKey),
 			Current:   m == current,

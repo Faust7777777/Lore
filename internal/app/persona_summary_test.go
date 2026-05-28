@@ -82,8 +82,8 @@ func TestPersonaSummarySplitsDraftedLinkedAndOrphan(t *testing.T) {
 func TestPersonaSummaryBucketsExtractLogByStage(t *testing.T) {
 	// Log carries entries across all three legitimate stages plus a
 	// malformed line. ByStage must include the three legitimate
-	// stages and a "(malformed)" bucket so the dashboard surfaces
-	// schema-drift signals without dropping data silently.
+	// stages and the machine-facing "malformed" bucket so JSON
+	// consumers keep the documented stable key.
 	rt := seedPersonaLogFile(t, []string{
 		"2026-05-28T09:00:00Z\tstage=extract\tsession=s1\terror=\"e\"",
 		"2026-05-28T09:01:00Z\tstage=extract\tsession=s2\terror=\"e\"",
@@ -111,8 +111,8 @@ func TestPersonaSummaryBucketsExtractLogByStage(t *testing.T) {
 	if got.ExtractLog.ByStage["parse_warning"] != 1 {
 		t.Fatalf("ByStage[parse_warning] = %d, want 1", got.ExtractLog.ByStage["parse_warning"])
 	}
-	if got.ExtractLog.ByStage["(malformed)"] != 1 {
-		t.Fatalf("ByStage[(malformed)] = %d, want 1", got.ExtractLog.ByStage["(malformed)"])
+	if got.ExtractLog.ByStage["malformed"] != 1 {
+		t.Fatalf("ByStage[malformed] = %d, want 1", got.ExtractLog.ByStage["malformed"])
 	}
 	wantLast, _ := time.Parse(time.RFC3339Nano, "2026-05-28T09:03:00Z")
 	if !got.ExtractLog.LastEntry.Equal(wantLast) {

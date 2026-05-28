@@ -189,7 +189,7 @@ func renderPersonaSummary(stdout io.Writer, view app.PersonaSummaryView) {
 		}
 		sort.Strings(stages)
 		for _, s := range stages {
-			fmt.Fprintf(stdout, "    %-16s %d\n", s, view.ExtractLog.ByStage[s])
+			fmt.Fprintf(stdout, "    %-16s %d\n", personaSummaryStageLabel(s), view.ExtractLog.ByStage[s])
 		}
 	}
 	if !view.ExtractLog.LastEntry.IsZero() {
@@ -197,4 +197,11 @@ func renderPersonaSummary(stdout io.Writer, view app.PersonaSummaryView) {
 	} else {
 		fmt.Fprintln(stdout, "  last entry: —")
 	}
+}
+
+func personaSummaryStageLabel(stage string) string {
+	if stage == "malformed" || stage == "(malformed)" {
+		return "(malformed)"
+	}
+	return stage
 }

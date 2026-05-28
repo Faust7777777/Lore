@@ -178,3 +178,35 @@ func TestResolveLLMConfigReportsDisabledDefault(t *testing.T) {
 		t.Fatalf("resolved = %+v, want disabled default", resolved)
 	}
 }
+
+func TestSanitizeLLMBaseURLRemovesCredentialBearingParts(t *testing.T) {
+	got := SanitizeLLMBaseURL("https://user:pass@example.test/v1?api_key=sk-test#token-fragment")
+	if got != "https://example.test/v1" {
+		t.Fatalf("SanitizeLLMBaseURL() = %q, want https://example.test/v1", got)
+	}
+}
+
+func TestResolvedLLMConfigDiagnosticSanitizesBaseURL(t *testing.T) {
+	diag := ResolvedLLMConfig{
+		Enabled:   true,
+		Purpose:   LLMPurposeOperator,
+		Source:    LLMSourceWorkspace,
+		Profile:   "danger",
+		Provider:  "openai-compatible",
+		BaseURL:   "https://user:pass@example.test/v1?token=sk-test",
+		Model:     "model",
+		APIKey:    "real-key-value",
+		APIKeyEnv: "MODEL_API_KEY",
+	}.Diagnostic(nil)
+	if diag.BaseURL != "https://example.test/v1" {
+		t.Fatalf("Diagnostic BaseURL = %q, want sanitized URL", diag.BaseURL)
+	}
+	if diag.KeyStatus != "present" {
+		t.Fatalf("Diagnostic KeyStatus = %q, want present", diag.KeyStatus)
+	}
+	for _, banned := range []string{"real-key-value", "user", "pass", "token", "sk-test"} {
+		if strings.Contains(diag.BaseURL, banned) {
+			t.Fatalf("Diagnostic BaseURL leaked %q: %+v", banned, diag)
+		}
+	}
+}

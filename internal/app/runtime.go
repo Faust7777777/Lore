@@ -146,7 +146,7 @@ func OpenRuntimeWithConfigOptions(workDir string, opts config.LoadOptions) (*Run
 		PersonaExtractTimeout:    parsePersonaExtractTimeoutEnv(),
 		PersonaExtractProvider:   personaExtractIdentity(personaCfg, personaErr, llmProvider),
 		PersonaExtractModel:      personaExtractIdentity(personaCfg, personaErr, func(c config.ResolvedLLMConfig) string { return c.Model }),
-		PersonaExtractBaseURL:    personaExtractIdentity(personaCfg, personaErr, func(c config.ResolvedLLMConfig) string { return c.BaseURL }),
+		PersonaExtractBaseURL:    personaExtractIdentity(personaCfg, personaErr, func(c config.ResolvedLLMConfig) string { return config.SanitizeLLMBaseURL(c.BaseURL) }),
 	}
 	// Second-phase wiring: route summarizer cost records into the
 	// runtime's usage store. The sink is a no-op for non-model-backed

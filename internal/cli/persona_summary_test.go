@@ -64,7 +64,7 @@ func TestRenderPersonaSummaryAggregatesLogStages(t *testing.T) {
 				"extract":       2,
 				"store":         1,
 				"parse_warning": 1,
-				"(malformed)":   1,
+				"malformed":     1,
 			},
 			LastEntry: latest,
 		},
@@ -348,6 +348,7 @@ func TestRunPersonaSummaryJSONWithLogEntries(t *testing.T) {
 		"2026-05-23T01:00:00Z\tstage=extract\tsession=s1\terror=\"timeout\"",
 		"2026-05-23T02:00:00Z\tstage=parse_warning\tsession=s2\terror=\"low confidence\"",
 		"2026-05-23T02:30:00Z\tstage=parse_warning\tsession=s3\terror=\"empty evidence\"",
+		"this is not a parseable persona extract log line",
 	}
 	if err := os.WriteFile(logPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatalf("write log fixture: %v", err)
@@ -372,14 +373,20 @@ func TestRunPersonaSummaryJSONWithLogEntries(t *testing.T) {
 	if !got.ExtractLog.Exists {
 		t.Fatalf("extract_log.exists should be true with seeded log; got %+v", got.ExtractLog)
 	}
-	if got.ExtractLog.TotalEntries != 3 {
-		t.Fatalf("total_entries = %d, want 3", got.ExtractLog.TotalEntries)
+	if got.ExtractLog.TotalEntries != 4 {
+		t.Fatalf("total_entries = %d, want 4", got.ExtractLog.TotalEntries)
 	}
 	if got.ExtractLog.ByStage["extract"] != 1 {
 		t.Fatalf("by_stage.extract = %d, want 1", got.ExtractLog.ByStage["extract"])
 	}
 	if got.ExtractLog.ByStage["parse_warning"] != 2 {
 		t.Fatalf("by_stage.parse_warning = %d, want 2", got.ExtractLog.ByStage["parse_warning"])
+	}
+	if got.ExtractLog.ByStage["malformed"] != 1 {
+		t.Fatalf("by_stage.malformed = %d, want 1", got.ExtractLog.ByStage["malformed"])
+	}
+	if got.ExtractLog.ByStage["(malformed)"] != 0 {
+		t.Fatalf("by_stage[(malformed)] = %d, want 0; JSON key must remain malformed", got.ExtractLog.ByStage["(malformed)"])
 	}
 	if got.ExtractLog.LastEntry != "2026-05-23T02:30:00Z" {
 		t.Fatalf("last_entry = %q, want 2026-05-23T02:30:00Z", got.ExtractLog.LastEntry)

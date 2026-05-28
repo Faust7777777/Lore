@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -59,7 +60,7 @@ func (cfg ResolvedLLMConfig) Diagnostic(err error) LLMDiagnostic {
 		Source:    cfg.Source,
 		Profile:   cfg.Profile,
 		Provider:  cfg.Provider,
-		BaseURL:   cfg.BaseURL,
+		BaseURL:   SanitizeLLMBaseURL(cfg.BaseURL),
 		Model:     cfg.Model,
 		Timeout:   cfg.Timeout,
 		APIKeyEnv: cfg.APIKeyEnv,
@@ -80,6 +81,59 @@ func llmKeyStatus(cfg ResolvedLLMConfig, err error) string {
 		return "missing"
 	}
 	return ""
+}
+
+func SanitizeLLMBaseURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		if looksCredentialBearing(raw) {
+			return "[redacted base_url]"
+		}
+		return raw
+	}
+	changed := false
+	if parsed.User != nil {
+		parsed.User = nil
+		changed = true
+	}
+	if parsed.RawQuery != "" {
+		parsed.RawQuery = ""
+		changed = true
+	}
+	if parsed.Fragment != "" {
+		parsed.Fragment = ""
+		changed = true
+	}
+	if !changed {
+		return raw
+	}
+	return parsed.String()
+}
+
+func looksCredentialBearing(value string) bool {
+	lower := strings.ToLower(value)
+	for _, marker := range []string{
+		"authorization",
+		"bearer ",
+		"api key",
+		"api_key",
+		"apikey",
+		"access_token",
+		"token",
+		"secret",
+		"password",
+		"passwd",
+		"sk-",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func ResolveLLMConfig(workDir string, purpose string) (ResolvedLLMConfig, error) {

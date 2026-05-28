@@ -153,7 +153,7 @@ try {
     Invoke-GoGate `
         -Label "LLM config resolver and workspace persistence guardrails" `
         -Package "./internal/config" `
-        -Run "Test(ResolveLLM(Config|ProfileConfig)|UpsertLLMProfile|SetActiveLLMProfile|SaveWorkspaceConfig|LoadEditableConfig|LLMProfileFromPreset)"
+        -Run "Test(ResolveLLM(Config|ProfileConfig)|UpsertLLMProfile|SetActiveLLMProfile|SaveWorkspaceConfig|LoadEditableConfig|LLMProfileFromPreset|SanitizeLLMBaseURLRemovesCredentialBearingParts|ResolvedLLMConfigDiagnosticSanitizesBaseURL)"
 
     Invoke-GoGate `
         -Label "runtime LLM profile wiring guardrails" `
@@ -163,7 +163,17 @@ try {
     Invoke-GoGate `
         -Label "interactive model panel LLM config guardrails" `
         -Package "./internal/cli" `
-        -Run "Test(RenderLLMConfigDiagnostics(OmitsSecretsAndShowsSource|ShowsErrorsAndDisabled|RedactsCredentialBearingErrors)|InteractiveWorkbench(ModelPanelUsesWorkspaceLLMProfileOverEnv|ModelDiscoveryFallbackUsesConfiguredModelAndError|SwitchModelUpdatesPersonaExtractor))$"
+        -Run "Test(RenderLLMConfigDiagnostics(OmitsSecretsAndShowsSource|ShowsErrorsAndDisabled|RedactsCredentialBearingErrors|KeepsMissingEnvVarName)|SessionLogMetaSanitizesLLMBaseURL|InteractiveWorkbench(ModelPanelUsesWorkspaceLLMProfileOverEnv|ModelDiscoveryFallbackUsesConfiguredModelAndError|SwitchModelUpdatesPersonaExtractor))$"
+
+    Invoke-GoGate `
+        -Label "persona summary dashboard and JSON guardrails" `
+        -Package "./internal/app" `
+        -Run "TestPersonaSummary(BucketsExtractLogByStage|ReflectsFullStateSeededByFixtureHelpers)$"
+
+    Invoke-GoGate `
+        -Label "persona summary CLI JSON guardrails" `
+        -Package "./internal/cli" `
+        -Run "Test(RenderPersonaSummaryAggregatesLogStages|RunPersonaSummaryJSONWithLogEntries)$"
 
     Invoke-GoGate `
         -Label "vault symlink and traversal guardrails" `

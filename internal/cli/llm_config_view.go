@@ -67,7 +67,17 @@ func safeDiagnosticError(err error) string {
 	}
 	msg := err.Error()
 	lower := strings.ToLower(msg)
-	if strings.Contains(lower, "authorization") || strings.Contains(lower, "bearer ") {
+	if strings.Contains(lower, " is not set") && !strings.Contains(lower, "authorization") &&
+		!strings.Contains(lower, "bearer ") && !strings.Contains(lower, "sk-") {
+		return msg
+	}
+	if strings.Contains(lower, "authorization") || strings.Contains(lower, "bearer ") ||
+		strings.Contains(lower, "api key") || strings.Contains(lower, "api_key=") ||
+		strings.Contains(lower, "api_key:") || strings.Contains(lower, "api-key") ||
+		strings.Contains(lower, "apikey") || strings.Contains(lower, "access_token") ||
+		strings.Contains(lower, "token") || strings.Contains(lower, "secret") ||
+		strings.Contains(lower, "password") || strings.Contains(lower, "passwd") ||
+		strings.Contains(lower, "sk-") {
 		return "[redacted credential-bearing error]"
 	}
 	return msg
