@@ -9,10 +9,16 @@ subitem is staged here as text for the CI-file owner to add (see below) —
 not applied directly because `scripts/release-gate.ps1` is currently dirty
 with A-line / TUI WIP and CI is outside the B-line boundary.
 
-Follow-up (2026-05-29): commit `01fbf00 feat(cli): show hidden-model token
-total in usage report tail` refines the human report's truncation line so
-it also discloses the summed tokens of the dropped models (see "Human
-output" below). Model/store/JSON contract unchanged.
+Follow-ups (2026-05-29):
+- `01fbf00 feat(cli): show hidden-model token total in usage report tail`
+  — the human report's truncation line now also discloses the summed
+  tokens of the dropped models (see "Human output" below).
+- `752eada test(cli): guard cross-day by_model usage aggregation` — adds
+  a two-day test that locks the by_model cross-window merge (one model
+  billed on both days must sum; a day-unique model must still appear)
+  that the human report and TUI dashboard both rely on. No prod change.
+
+Model / store / JSON contract unchanged.
 
 ## TL;DR
 
@@ -126,8 +132,9 @@ go test ./internal/cli/ -run "Usage" -v
 ```
 
 All green at slice close. New tests: 4 store contract tests (across
-memory/json/sqlite via the existing `usageBackends` table) + 3 cli
-tests (human model detail, top-5 cap, JSON by_model).
+memory/json/sqlite via the existing `usageBackends` table) + 4 cli
+tests (human model detail, top-5 cap incl. hidden-tail token sum, JSON
+by_model, cross-day by_model aggregation).
 
 ## Boundaries honored
 
