@@ -443,6 +443,14 @@ func TestRunConsoleOnceWritesSessionTranscript(t *testing.T) {
 					t.Fatalf("transcript missing %q: %s", want, text)
 				}
 			}
+			for _, want := range []string{`"provider":"openai-compatible"`, `"model":"gpt-5.4"`, `"base_url":"`, `"source":"env"`} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("transcript missing safe model metadata %q: %s", want, text)
+				}
+			}
+			if strings.Contains(text, "secret") || strings.Contains(text, "api_key") || strings.Contains(text, "Authorization") || strings.Contains(text, "Bearer ") {
+				t.Fatalf("transcript leaked credential material: %s", text)
+			}
 		}
 	}
 	if !foundTranscript {

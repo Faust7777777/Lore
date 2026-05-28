@@ -17,7 +17,16 @@ import (
 func TestRecorderWritesIndexAndRestoresSnapshot(t *testing.T) {
 	root := t.TempDir()
 	started := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
-	recorder, err := Start(root, Meta{SessionID: "lore-test", AgentID: "lore", Model: "gpt-5.4", StartedAt: started})
+	recorder, err := Start(root, Meta{
+		SessionID: "lore-test",
+		AgentID:   "lore",
+		Provider:  "deepseek",
+		Model:     "deepseek-chat",
+		BaseURL:   "https://api.deepseek.com/v1",
+		Profile:   "deepseek",
+		Source:    "workspace",
+		StartedAt: started,
+	})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -38,8 +47,14 @@ func TestRecorderWritesIndexAndRestoresSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if snapshot.Meta.SessionID != "lore-test" || snapshot.Meta.Model != "gpt-5.4" {
+	if snapshot.Meta.SessionID != "lore-test" || snapshot.Meta.Model != "deepseek-chat" {
 		t.Fatalf("snapshot.Meta = %+v", snapshot.Meta)
+	}
+	if snapshot.Meta.Provider != "deepseek" || snapshot.Meta.BaseURL != "https://api.deepseek.com/v1" || snapshot.Meta.Profile != "deepseek" || snapshot.Meta.Source != "workspace" {
+		t.Fatalf("snapshot model metadata = %+v, want provider/base_url/profile/source", snapshot.Meta)
+	}
+	if snapshot.Summary.Provider != "deepseek" || snapshot.Summary.BaseURL != "https://api.deepseek.com/v1" || snapshot.Summary.Profile != "deepseek" || snapshot.Summary.Source != "workspace" {
+		t.Fatalf("summary model metadata = %+v, want provider/base_url/profile/source", snapshot.Summary)
 	}
 	if len(snapshot.History) != 2 || snapshot.History[0].Role != "user" || snapshot.History[1].Role != "assistant" {
 		t.Fatalf("snapshot.History = %+v", snapshot.History)

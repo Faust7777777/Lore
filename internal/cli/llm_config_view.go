@@ -27,7 +27,10 @@ func renderLLMConfigDiagnostics(diagnostics []config.LLMDiagnostic) string {
 			if diag.Profile != "" {
 				fmt.Fprintf(&builder, " profile=%s", diag.Profile)
 			}
-			fmt.Fprintf(&builder, " err=%s\n", diag.Err.Error())
+			if diag.KeyStatus != "" {
+				fmt.Fprintf(&builder, " key=%s", diag.KeyStatus)
+			}
+			fmt.Fprintf(&builder, " err=%s\n", safeDiagnosticError(diag.Err))
 			continue
 		}
 		if !diag.Enabled {
@@ -47,10 +50,25 @@ func renderLLMConfigDiagnostics(diagnostics []config.LLMDiagnostic) string {
 		if diag.APIKeyRef != "" {
 			fmt.Fprintf(&builder, " api_key_ref=%s", diag.APIKeyRef)
 		}
+		if diag.KeyStatus != "" {
+			fmt.Fprintf(&builder, " key=%s", diag.KeyStatus)
+		}
 		if diag.Timeout > 0 {
 			fmt.Fprintf(&builder, " timeout=%s", diag.Timeout)
 		}
 		builder.WriteString("\n")
 	}
 	return builder.String()
+}
+
+func safeDiagnosticError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "authorization") || strings.Contains(lower, "bearer ") {
+		return "[redacted credential-bearing error]"
+	}
+	return msg
 }

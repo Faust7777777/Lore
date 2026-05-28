@@ -29,7 +29,11 @@ const (
 type Meta struct {
 	SessionID string    `json:"session_id"`
 	AgentID   string    `json:"agent_id,omitempty"`
+	Provider  string    `json:"provider,omitempty"`
 	Model     string    `json:"model,omitempty"`
+	BaseURL   string    `json:"base_url,omitempty"`
+	Profile   string    `json:"profile,omitempty"`
+	Source    string    `json:"source,omitempty"`
 	WorkDir   string    `json:"workdir,omitempty"`
 	VaultRoot string    `json:"vault_root,omitempty"`
 	StartedAt time.Time `json:"started_at"`
@@ -42,6 +46,9 @@ type Event struct {
 	SessionID   string                         `json:"session_id,omitempty"`
 	AgentID     string                         `json:"agent_id,omitempty"`
 	Model       string                         `json:"model,omitempty"`
+	BaseURL     string                         `json:"base_url,omitempty"`
+	Profile     string                         `json:"profile,omitempty"`
+	Source      string                         `json:"source,omitempty"`
 	WorkDir     string                         `json:"workdir,omitempty"`
 	VaultRoot   string                         `json:"vault_root,omitempty"`
 	Text        string                         `json:"text,omitempty"`
@@ -78,6 +85,10 @@ type Summary struct {
 	Title     string    `json:"title"`
 	TurnCount int       `json:"turn_count"`
 	Model     string    `json:"model,omitempty"`
+	Provider  string    `json:"provider,omitempty"`
+	BaseURL   string    `json:"base_url,omitempty"`
+	Profile   string    `json:"profile,omitempty"`
+	Source    string    `json:"source,omitempty"`
 	AgentID   string    `json:"agent_id,omitempty"`
 }
 

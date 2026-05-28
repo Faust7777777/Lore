@@ -70,7 +70,11 @@ func StartWithLimits(rootDir string, meta Meta, limits Limits) (*Recorder, error
 		Timestamp: meta.StartedAt,
 		SessionID: meta.SessionID,
 		AgentID:   meta.AgentID,
+		Provider:  meta.Provider,
 		Model:     meta.Model,
+		BaseURL:   meta.BaseURL,
+		Profile:   meta.Profile,
+		Source:    meta.Source,
 		WorkDir:   meta.WorkDir,
 		VaultRoot: meta.VaultRoot,
 	}); err != nil {
@@ -353,10 +357,14 @@ func applyEvent(snapshot *Snapshot, summary *Summary, pendingUser *string, event
 	}
 	switch event.Type {
 	case EventSessionMeta:
-		snapshot.Meta = Meta{SessionID: event.SessionID, AgentID: event.AgentID, Model: event.Model, WorkDir: event.WorkDir, VaultRoot: event.VaultRoot, StartedAt: event.Timestamp}
+		snapshot.Meta = Meta{SessionID: event.SessionID, AgentID: event.AgentID, Provider: event.Provider, Model: event.Model, BaseURL: event.BaseURL, Profile: event.Profile, Source: event.Source, WorkDir: event.WorkDir, VaultRoot: event.VaultRoot, StartedAt: event.Timestamp}
 		summary.ID = event.SessionID
 		summary.AgentID = event.AgentID
+		summary.Provider = event.Provider
 		summary.Model = event.Model
+		summary.BaseURL = event.BaseURL
+		summary.Profile = event.Profile
+		summary.Source = event.Source
 		summary.StartedAt = event.Timestamp
 		if summary.Path == "" {
 			summary.Path = filepath.ToSlash(event.SessionID + ".jsonl")
@@ -459,7 +467,7 @@ func NewSessionID(now time.Time) string {
 }
 
 func summaryFromMeta(meta Meta, relPath string, updatedAt time.Time) Summary {
-	return Summary{ID: meta.SessionID, Path: relPath, StartedAt: meta.StartedAt, UpdatedAt: updatedAt, Title: meta.SessionID, Model: meta.Model, AgentID: meta.AgentID}
+	return Summary{ID: meta.SessionID, Path: relPath, StartedAt: meta.StartedAt, UpdatedAt: updatedAt, Title: meta.SessionID, Model: meta.Model, Provider: meta.Provider, BaseURL: meta.BaseURL, Profile: meta.Profile, Source: meta.Source, AgentID: meta.AgentID}
 }
 
 func snapshotHasPendingUser(snapshot Snapshot) bool {

@@ -48,6 +48,7 @@ type LLMDiagnostic struct {
 	Timeout   time.Duration
 	APIKeyEnv string
 	APIKeyRef string
+	KeyStatus string
 	Err       error
 }
 
@@ -63,8 +64,22 @@ func (cfg ResolvedLLMConfig) Diagnostic(err error) LLMDiagnostic {
 		Timeout:   cfg.Timeout,
 		APIKeyEnv: cfg.APIKeyEnv,
 		APIKeyRef: cfg.APIKeyRef,
+		KeyStatus: llmKeyStatus(cfg, err),
 		Err:       err,
 	}
+}
+
+func llmKeyStatus(cfg ResolvedLLMConfig, err error) string {
+	if !cfg.Enabled {
+		return ""
+	}
+	if strings.TrimSpace(cfg.APIKey) != "" {
+		return "present"
+	}
+	if strings.TrimSpace(cfg.APIKeyEnv) != "" || strings.TrimSpace(cfg.APIKeyRef) != "" || err != nil {
+		return "missing"
+	}
+	return ""
 }
 
 func ResolveLLMConfig(workDir string, purpose string) (ResolvedLLMConfig, error) {

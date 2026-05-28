@@ -677,18 +677,36 @@ func configureSessionRecorder(session *console.Session, runtime *app.Runtime, re
 	}
 
 	now := time.Now()
-	recorder, err := sessionlog.Start(root, sessionlog.Meta{
-		AgentID:   "lore",
-		Model:     strings.TrimSpace(os.Getenv("LORE_MODEL")),
-		WorkDir:   runtime.Config.Paths.WorkDir,
-		VaultRoot: runtime.Config.Paths.VaultRoot,
-		StartedAt: now,
-	})
+	recorder, err := sessionlog.Start(root, sessionLogMeta(runtime, now))
 	if err != nil {
 		return err
 	}
 	session.Recorder = recorder
 	return nil
+}
+
+func sessionLogMeta(runtime *app.Runtime, startedAt time.Time) sessionlog.Meta {
+	meta := sessionlog.Meta{
+		AgentID:   "lore",
+		StartedAt: startedAt,
+	}
+	if runtime == nil {
+		return meta
+	}
+	meta.WorkDir = runtime.Config.Paths.WorkDir
+	meta.VaultRoot = runtime.Config.Paths.VaultRoot
+	llmCfg, err := runtime.ResolveLLMConfig(config.LLMPurposeOperator)
+	if err == nil || llmCfg.Enabled {
+		meta.Provider = strings.TrimSpace(llmCfg.Provider)
+		meta.Model = strings.TrimSpace(llmCfg.Model)
+		meta.BaseURL = strings.TrimSpace(llmCfg.BaseURL)
+		meta.Profile = strings.TrimSpace(llmCfg.Profile)
+		meta.Source = strings.TrimSpace(string(llmCfg.Source))
+	}
+	if meta.Model == "" {
+		meta.Model = strings.TrimSpace(os.Getenv("LORE_MODEL"))
+	}
+	return meta
 }
 
 func closeSessionRecorder(session *console.Session, reason string) {

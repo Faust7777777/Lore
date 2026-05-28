@@ -163,7 +163,7 @@ try {
     Invoke-GoGate `
         -Label "interactive model panel LLM config guardrails" `
         -Package "./internal/cli" `
-        -Run "TestInteractiveWorkbench(ModelPanelUsesWorkspaceLLMProfileOverEnv|ModelDiscoveryFallbackUsesConfiguredModelAndError|SwitchModelUpdatesPersonaExtractor)$"
+        -Run "Test(RenderLLMConfigDiagnostics(OmitsSecretsAndShowsSource|ShowsErrorsAndDisabled|RedactsCredentialBearingErrors)|InteractiveWorkbench(ModelPanelUsesWorkspaceLLMProfileOverEnv|ModelDiscoveryFallbackUsesConfiguredModelAndError|SwitchModelUpdatesPersonaExtractor))$"
 
     Invoke-GoGate `
         -Label "vault symlink and traversal guardrails" `
@@ -183,7 +183,7 @@ try {
     Invoke-GoGate `
         -Label "CLI smoke and daemon command guardrails" `
         -Package "./cmd/obsidian-harness" `
-        -Run "TestRun(SmokeP0|SmokeP0FullIncludesGovernedNoteIntake|TUIOnceShowsResolveReadFinalTaskVisibility|DaemonOnceTriggersDraftAfterStablePlanChange|DaemonOnceSyncsCodexJSONLWhenConfigured|DaemonOnceMissingCodexJSONLRemainsNonFatal)$"
+        -Run "TestRun(SmokeP0|SmokeP0FullIncludesGovernedNoteIntake|TUIOnceShowsResolveReadFinalTaskVisibility|DaemonOnceTriggersDraftAfterStablePlanChange|DaemonOnceSyncsCodexJSONLWhenConfigured|DaemonOnceMissingCodexJSONLRemainsNonFatal|ConsoleOnceWritesSessionTranscript)$"
 
     Invoke-GoGate `
         -Label "preferred lore CLI wrapper guardrails" `
