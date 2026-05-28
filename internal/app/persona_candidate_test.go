@@ -58,6 +58,64 @@ func openTestRuntime(t *testing.T) *Runtime {
 	return runtime
 }
 
+// seedDraftedPersonaCandidate promotes a freshly-seeded Open
+// candidate through CreatePersonaDraftFromCandidate so the result is
+// (State=Drafted, DraftID populated, linked draft in PendingReview).
+// Returns (candidateID, draftID). Use this when a test needs a
+// linked-but-not-yet-reviewed candidate, e.g. to exercise the
+// "Retry disabled while review is pending" branch.
+func seedDraftedPersonaCandidate(t *testing.T, runtime *Runtime, field, value, evidence string) (string, string) {
+	t.Helper()
+	candidateID := seedPersonaCandidate(t, runtime, field, value, evidence)
+	_, result, err := runtime.CreatePersonaDraftFromCandidate(candidateID, time.Date(2026, 5, 28, 11, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("seedDrafted CreatePersonaDraftFromCandidate: %v", err)
+	}
+	return candidateID, result.DraftID
+}
+
+// seedPartialOrphanPersonaCandidate forces a candidate into the
+// partial-orphan scar shape (State=Drafted, DraftID=""). This is the
+// state RecoverPersonaCandidateLink and ForceDismissPartialPersonaCandidate
+// exist to mend; seeding it directly through the store lets tests
+// drive the recover commands without first staging a real
+// LinkCandidateDraft failure.
+func seedPartialOrphanPersonaCandidate(t *testing.T, runtime *Runtime, field, value, evidence string) string {
+	t.Helper()
+	candidateID := seedPersonaCandidate(t, runtime, field, value, evidence)
+	if _, err := runtime.Store.PersonaCandidates().ClaimCandidateForDraft(candidateID, time.Date(2026, 5, 28, 11, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("seedPartialOrphan ClaimCandidateForDraft: %v", err)
+	}
+	return candidateID
+}
+
+// seedRejectedLinkedPersonaCandidate seeds an Open candidate, promotes
+// it via the normal flow, then rejects the resulting draft so the
+// candidate sits in (State=Drafted, DraftID=<rejected draft>). Use
+// this to exercise the RetryRejectedPersonaDraft success path or the
+// PersonaCandidateActions.CanRetry=true branch.
+func seedRejectedLinkedPersonaCandidate(t *testing.T, runtime *Runtime, field, value, evidence string) (string, string) {
+	t.Helper()
+	candidateID, draftID := seedDraftedPersonaCandidate(t, runtime, field, value, evidence)
+	if _, err := runtime.RejectDraft(draftID); err != nil {
+		t.Fatalf("seedRejectedLinked RejectDraft: %v", err)
+	}
+	return candidateID, draftID
+}
+
+// seedDismissedPersonaCandidate seeds an Open candidate and then
+// dismisses it via DismissPersonaCandidate so the result is
+// (State=Dismissed). Convenience wrapper for tests that need to
+// verify dismissed-bucket behaviour.
+func seedDismissedPersonaCandidate(t *testing.T, runtime *Runtime, field, value, evidence string) string {
+	t.Helper()
+	candidateID := seedPersonaCandidate(t, runtime, field, value, evidence)
+	if _, err := runtime.DismissPersonaCandidate(candidateID, time.Date(2026, 5, 28, 11, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("seedDismissed DismissPersonaCandidate: %v", err)
+	}
+	return candidateID
+}
+
 func TestCreatePersonaDraftFromCandidateCreatesPendingDraftAndTransitionsState(t *testing.T) {
 	runtime := openTestRuntime(t)
 	candidateID := seedPersonaCandidate(t, runtime, "major", "economics", "I major in economics")

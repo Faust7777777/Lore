@@ -1,6 +1,7 @@
 package app
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -116,6 +117,52 @@ func TestPersonaSummaryBucketsExtractLogByStage(t *testing.T) {
 	wantLast, _ := time.Parse(time.RFC3339Nano, "2026-05-28T09:03:00Z")
 	if !got.ExtractLog.LastEntry.Equal(wantLast) {
 		t.Fatalf("LastEntry = %v, want %v (most recent parsed timestamp)", got.ExtractLog.LastEntry, wantLast)
+	}
+}
+
+func TestPersonaSummaryReflectsFullStateSeededByFixtureHelpers(t *testing.T) {
+	// End-to-end demonstration that the app-level seed helpers
+	// (seedPersonaCandidate / seedDraftedPersonaCandidate /
+	// seedPartialOrphanPersonaCandidate / seedRejectedLinkedPersonaCandidate /
+	// seedDismissedPersonaCandidate) can materialize a complete
+	// persona-review dashboard state in a single test body. Acts as
+	// both regression coverage for PersonaSummary and a usage example
+	// for future TUI tests that need a populated workdir.
+	rt := openTestRuntime(t)
+	seedPersonaCandidate(t, rt, "major", "economics", "I study economics")
+	seedDraftedPersonaCandidate(t, rt, "city", "beijing", "I live in beijing")
+	seedPartialOrphanPersonaCandidate(t, rt, "year", "2026", "I'm in 2026")
+	seedRejectedLinkedPersonaCandidate(t, rt, "team", "growth", "I'm on the growth team")
+	seedDismissedPersonaCandidate(t, rt, "hobby", "chess", "I play chess")
+
+	// Seed one log entry too so the dashboard's ExtractLog section
+	// shows non-zero TotalEntries -- matches what a real workdir
+	// with at least one mining failure would look like.
+	logPath := rt.PersonaExtractLogPath()
+	if err := os.WriteFile(logPath, []byte("2026-05-28T09:00:00Z\tstage=extract\tsession=demo\terror=\"timeout\"\n"), 0o644); err != nil {
+		t.Fatalf("seed log entry: %v", err)
+	}
+
+	got, err := rt.PersonaSummary()
+	if err != nil {
+		t.Fatalf("PersonaSummary: %v", err)
+	}
+	if got.Candidates.Open != 1 {
+		t.Fatalf("Open = %d, want 1 (single un-promoted seed)", got.Candidates.Open)
+	}
+	// Drafted bucket aggregates: the pending-review linked, the
+	// rejected-linked (still State=Drafted), and the partial-orphan.
+	if got.Candidates.DraftedLinked != 2 {
+		t.Fatalf("DraftedLinked = %d, want 2 (pending + rejected, both have DraftID)", got.Candidates.DraftedLinked)
+	}
+	if got.Candidates.DraftedOrphan != 1 {
+		t.Fatalf("DraftedOrphan = %d, want 1 (partial scar)", got.Candidates.DraftedOrphan)
+	}
+	if got.Candidates.Dismissed != 1 {
+		t.Fatalf("Dismissed = %d, want 1", got.Candidates.Dismissed)
+	}
+	if got.ExtractLog.TotalEntries != 1 || got.ExtractLog.ByStage["extract"] != 1 {
+		t.Fatalf("ExtractLog should show one extract-stage failure; got %+v", got.ExtractLog)
 	}
 }
 
