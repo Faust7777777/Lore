@@ -33,6 +33,11 @@ Follow-ups (2026-05-29):
   Provider/Model but not `Purpose`, unlike the persona extractor test;
   now all three billers (chat / persona / process-sink) are symmetrically
   guarded so a dropped label can't silently misbucket spend as `chat`.
+- `5356db6 feat(cli): roll up total spend per model across purposes` —
+  adds the top-level `By model (all purposes):` rollup (see Human output);
+  `renderUsageModelDetail` gained an `indent` param so the rollup and the
+  per-purpose detail share one capped renderer. Human-only; JSON shape
+  unchanged.
 
 Model / store contract unchanged. JSON shape unchanged (the `7c30189`
 share is human-report-only).
@@ -108,12 +113,17 @@ than just how many models. Each `By purpose` row also ends with its
 token-weighted share of the window (e.g. `= 750 tokens (75%)`, commit
 `7c30189`) so cost concentration reads at a glance; the percent rounds
 to nearest and is divide-by-zero-safe when the window total is zero (a
-zero-token call still counts toward Calls). The DAY table and Total
-line are unchanged so an operator who only wants totals still reads
-them at a glance. The `--json` surface is untouched: it already emits
-the uncapped `by_model` map and carries no percent field (consumers
-compute their own), so scripting consumers never saw the cap, the tail
-summary, or the share.
+zero-token call still counts toward Calls). When the window spans more
+than one purpose, a top-level `By model (all purposes):` rollup (commit
+`5356db6`) folds every purpose's `by_model` into one provider/model
+total — answering "which provider ate my budget" without summing across
+blocks — reusing the same top-5 + tail-token cap; it is suppressed for a
+single purpose to avoid duplicating that purpose's own detail. The DAY
+table and Total line are unchanged so an operator who only wants totals
+still reads them at a glance. The `--json` surface is untouched: it
+already emits the uncapped `by_model` map and carries no percent field
+(consumers compute their own), so scripting consumers never saw the cap,
+the tail summary, the share, or the rollup.
 
 ## TUI cost-dashboard wiring
 
@@ -155,11 +165,12 @@ go test ./internal/cli/ -run "Usage" -v
 ```
 
 All green at slice close. New tests: 4 store contract tests (across
-memory/json/sqlite via the existing `usageBackends` table) + 8 cli
+memory/json/sqlite via the existing `usageBackends` table) + 10 cli
 tests (human model detail, top-5 cap incl. hidden-tail token sum, JSON
 by_model, cross-day by_model aggregation, two idle-window guards [human
-"No usage recorded." + `--json` zero-state], and two purpose token-share
-guards [normal percent + zero-token divide guard]).
+"No usage recorded." + `--json` zero-state], two purpose token-share
+guards [normal percent + zero-token divide guard], and two cross-purpose
+rollup guards [multi-purpose totals + single-purpose suppression]).
 
 ## Boundaries honored
 
