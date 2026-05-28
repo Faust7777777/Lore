@@ -65,7 +65,7 @@ Example workspace override:
       "deepseek": {
         "provider": "deepseek",
         "base_url": "https://api.deepseek.com/v1",
-        "model": "deepseek-chat",
+        "model": "deepseek-v4-pro",
         "timeout": 30000000000,
         "api_key_env": "DEEPSEEK_API_KEY"
       }
@@ -83,6 +83,7 @@ Limitations:
 
 - Duration fields (e.g. `vault.debounce_window`, `process_sink.checkpoint_every`) currently must be expressed as nanoseconds in JSON (for example `500000000` for 500ms). String forms such as `"500ms"` are not yet supported.
 - LLM profile API keys are never stored in config. Set `llm.profiles.<name>.api_key_env` to an environment variable name; `api_key_ref` is reserved for future OS credential-store support.
+- Built-in model profile presets are available for TUI-backed configuration flows: `deepseek` (`deepseek-v4-pro`), `deepseek-fast` (`deepseek-v4-flash`), and `openai-compatible` (custom base/model/key env). DeepSeek presets use official full model names; short names such as `v4-pro` are rejected by the provider.
 - `paths.work_dir` is derived from the runtime invocation; setting it from a layer file is allowed but unusual.
 
 Run `lore status [workdir]` to see which layer files were loaded, missing, or errored, and which model profile/source each runtime purpose uses.

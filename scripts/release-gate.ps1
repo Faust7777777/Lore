@@ -153,7 +153,7 @@ try {
     Invoke-GoGate `
         -Label "LLM config resolver and workspace persistence guardrails" `
         -Package "./internal/config" `
-        -Run "Test(ResolveLLMConfig|UpsertLLMProfile|SetActiveLLMProfile|SaveWorkspaceConfig|LoadEditableConfig)"
+        -Run "Test(ResolveLLMConfig|UpsertLLMProfile|SetActiveLLMProfile|SaveWorkspaceConfig|LoadEditableConfig|LLMProfileFromPreset)"
 
     Invoke-GoGate `
         -Label "runtime LLM profile wiring guardrails" `
