@@ -497,3 +497,59 @@ func TestEmitUsageJSONNoUsageEmitsZeroState(t *testing.T) {
 		t.Fatalf("days should preserve window dates oldest-first: %s", out)
 	}
 }
+
+func TestRenderUsageReportShowsPurposeSharePercent(t *testing.T) {
+	// A cost report should answer "where did the spend go" at a glance,
+	// so each By-purpose line carries its share of the window's total
+	// tokens (purpose tokens / total tokens, rounded to nearest int).
+	// JSON is intentionally left without a percent field -- machine
+	// consumers divide for themselves; the percent is a human-readability
+	// aid only.
+	day := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+	daily := []model.UsageSummary{
+		{
+			Day:              day,
+			Calls:            4,
+			PromptTokens:     700,
+			CompletionTokens: 300,
+			TotalTokens:      1000,
+			PurposeBreakdown: map[string]model.UsagePurposeStats{
+				model.UsagePurposeChat:        {Calls: 3, PromptTokens: 500, CompletionTokens: 250}, // 750 -> 75%
+				model.UsagePurposeProcessSink: {Calls: 1, PromptTokens: 200, CompletionTokens: 50},  // 250 -> 25%
+			},
+		},
+	}
+	var buf bytes.Buffer
+	renderUsageReport(&buf, 1, daily)
+	out := buf.String()
+	for _, want := range []string{
+		"= 750 tokens (75%)",
+		"= 250 tokens (25%)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("purpose line missing token-share %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderUsageReportPurposeShareZeroTokensNoPanic(t *testing.T) {
+	// A call billed with zero tokens still counts toward Calls, so the
+	// By-purpose block renders (totalCalls > 0) while total tokens == 0.
+	// The share math must not divide by zero; it reports (0%).
+	day := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+	daily := []model.UsageSummary{
+		{
+			Day:   day,
+			Calls: 1,
+			PurposeBreakdown: map[string]model.UsagePurposeStats{
+				model.UsagePurposeChat: {Calls: 1},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	renderUsageReport(&buf, 1, daily) // must not panic
+	out := buf.String()
+	if !strings.Contains(out, "= 0 tokens (0%)") {
+		t.Fatalf("zero-token purpose should render '(0%%)':\n%s", out)
+	}
+}

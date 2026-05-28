@@ -1087,6 +1087,11 @@ func renderUsageReport(stdout io.Writer, days int, daily []model.UsageSummary) {
 	// answers "what did today cost overall".
 	purposeTotals := aggregateUsageBreakdown(daily)
 	if len(purposeTotals) > 0 {
+		// Token-weighted share per purpose uses the window total. A call
+		// billed with zero tokens still counts toward Calls, so this
+		// block can run with windowTokens == 0 -- the per-row math
+		// guards against the divide.
+		windowTokens := totalPrompt + totalCompletion
 		purposes := make([]string, 0, len(purposeTotals))
 		for purpose := range purposeTotals {
 			purposes = append(purposes, purpose)
@@ -1100,14 +1105,20 @@ func renderUsageReport(stdout io.Writer, days int, daily []model.UsageSummary) {
 				label = "unspecified"
 			}
 			stats := purposeTotals[purpose]
+			purposeTokens := stats.TotalTokens()
+			sharePct := 0
+			if windowTokens > 0 {
+				sharePct = (purposeTokens*100 + windowTokens/2) / windowTokens
+			}
 			fmt.Fprintf(
 				stdout,
-				"  %-16s %d calls / %d prompt + %d completion = %d tokens\n",
+				"  %-16s %d calls / %d prompt + %d completion = %d tokens (%d%%)\n",
 				label,
 				stats.Calls,
 				stats.PromptTokens,
 				stats.CompletionTokens,
-				stats.TotalTokens(),
+				purposeTokens,
+				sharePct,
 			)
 			// B-next: per-model detail under each purpose, capped at the
 			// top 5 by total tokens so the default report stays bounded
