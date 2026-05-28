@@ -17,6 +17,12 @@ Follow-ups (2026-05-29):
   a two-day test that locks the by_model cross-window merge (one model
   billed on both days must sum; a day-unique model must still appear)
   that the human report and TUI dashboard both rely on. No prod change.
+- `b491d45 test(cli): guard usage idle-window output on both surfaces` —
+  locks the no-usage path (fires on `totalCalls == 0`, since the command
+  always passes one zero summary per window day): the human report says
+  "No usage recorded." with no table/Total rows, and `--json` emits a
+  valid zero-state object with `purpose_breakdown` omitted (not null /
+  `{}`) so an idle-day poll never breaks a consumer. No prod change.
 
 Model / store / JSON contract unchanged.
 
@@ -132,9 +138,10 @@ go test ./internal/cli/ -run "Usage" -v
 ```
 
 All green at slice close. New tests: 4 store contract tests (across
-memory/json/sqlite via the existing `usageBackends` table) + 4 cli
+memory/json/sqlite via the existing `usageBackends` table) + 6 cli
 tests (human model detail, top-5 cap incl. hidden-tail token sum, JSON
-by_model, cross-day by_model aggregation).
+by_model, cross-day by_model aggregation, and two idle-window guards:
+human "No usage recorded." + `--json` zero-state).
 
 ## Boundaries honored
 
