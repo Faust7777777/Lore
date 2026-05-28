@@ -9,6 +9,11 @@ subitem is staged here as text for the CI-file owner to add (see below) —
 not applied directly because `scripts/release-gate.ps1` is currently dirty
 with A-line / TUI WIP and CI is outside the B-line boundary.
 
+Follow-up (2026-05-29): commit `01fbf00 feat(cli): show hidden-model token
+total in usage report tail` refines the human report's truncation line so
+it also discloses the summed tokens of the dropped models (see "Human
+output" below). Model/store/JSON contract unchanged.
+
 ## TL;DR
 
 `lore usage` and the TUI cost dashboard can now answer "chat /
@@ -73,9 +78,13 @@ per-purpose breakdown gained a nested `by_model` map keyed
 
 Default `lore usage` adds indented per-model lines under each "By
 purpose" row, sorted by total tokens descending, capped at the top 5
-with a `... N more model(s)` line beyond that. The DAY table and Total
-line are unchanged so an operator who only wants totals still reads
-them at a glance.
+with a `... N more model(s), T tokens` line beyond that — `T` is the
+summed `TotalTokens()` of the hidden tail (commit `01fbf00`), so a
+truncated report still discloses how much spend it folds away rather
+than just how many models. The DAY table and Total line are unchanged
+so an operator who only wants totals still reads them at a glance. The
+`--json` surface is untouched: it already emits the uncapped `by_model`
+map, so scripting consumers never saw the cap or the tail summary.
 
 ## TUI cost-dashboard wiring
 
@@ -135,4 +144,6 @@ tests (human model detail, top-5 cap, JSON by_model).
   commit).
 - If `by_model` cardinality ever grows unbounded (many models per
   workday), consider a store-side cap; today the maps stay small (a few
-  models per purpose per day) so no cap is needed yet.
+  models per purpose per day) so no cap is needed yet. The human report
+  already bounds its own output (top 5 + a tail-token summary line), so
+  this would only be about store/JSON memory, not display noise.
