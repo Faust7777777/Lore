@@ -334,3 +334,78 @@ func TestRenderUsageReportAggregatesAcrossDays(t *testing.T) {
 		t.Fatalf("aggregated persona_extract line missing:\n%s", out)
 	}
 }
+
+func TestRenderUsageReportAggregatesByModelAcrossDays(t *testing.T) {
+	// The per-model detail under a purpose is aggregated across the
+	// whole window, not just shown per day: aggregateUsageBreakdown
+	// merges each day's ByModel map. The human report and the TUI cost
+	// dashboard both read those summed numbers, so a merge that
+	// overwrote instead of summing would silently undercount spend with
+	// nothing to catch it -- the other by_model tests are all single
+	// day. This guards the cross-day merge: a model billed on both days
+	// must sum, and a model seen on only one day must still appear.
+	day1 := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	day2 := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+	daily := []model.UsageSummary{
+		{
+			Day:              day1,
+			Calls:            2,
+			PromptTokens:     110,
+			CompletionTokens: 45,
+			TotalTokens:      155,
+			PurposeBreakdown: map[string]model.UsagePurposeStats{
+				model.UsagePurposeChat: {
+					Calls: 2, PromptTokens: 110, CompletionTokens: 45,
+					ByModel: map[string]model.UsagePurposeStats{
+						"deepseek/deepseek-v4-pro": {Calls: 1, PromptTokens: 100, CompletionTokens: 40},
+						"kimi/kimi-k2":             {Calls: 1, PromptTokens: 10, CompletionTokens: 5},
+					},
+				},
+			},
+		},
+		{
+			Day:              day2,
+			Calls:            3,
+			PromptTokens:     230,
+			CompletionTokens: 70,
+			TotalTokens:      300,
+			PurposeBreakdown: map[string]model.UsagePurposeStats{
+				model.UsagePurposeChat: {
+					Calls: 3, PromptTokens: 230, CompletionTokens: 70,
+					ByModel: map[string]model.UsagePurposeStats{
+						// Same model as day1 -> must sum to 3 calls / 300 / 100.
+						"deepseek/deepseek-v4-pro": {Calls: 2, PromptTokens: 200, CompletionTokens: 60},
+						// Only seen on day2 -> must still appear.
+						"zhipu/glm-4.5": {Calls: 1, PromptTokens: 30, CompletionTokens: 10},
+					},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	renderUsageReport(&buf, 2, daily)
+	out := buf.String()
+	for _, want := range []string{
+		// deepseek merged across both days: 1+2 calls, 100+200 prompt, 40+60 completion.
+		"deepseek/deepseek-v4-pro",
+		"3 calls / 300 prompt + 100 completion = 400 tokens",
+		// kimi only on day1.
+		"kimi/kimi-k2",
+		"1 calls / 10 prompt + 5 completion = 15 tokens",
+		// glm only on day2.
+		"zhipu/glm-4.5",
+		"1 calls / 30 prompt + 10 completion = 40 tokens",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("aggregated by_model output missing %q:\n%s", want, out)
+		}
+	}
+	// Ordering is by merged total tokens desc: deepseek 400 > glm 40 > kimi 15.
+	dsIdx := strings.Index(out, "deepseek/deepseek-v4-pro")
+	glmIdx := strings.Index(out, "zhipu/glm-4.5")
+	kimiIdx := strings.Index(out, "kimi/kimi-k2")
+	if !(dsIdx < glmIdx && glmIdx < kimiIdx) {
+		t.Fatalf("merged models should sort by total tokens desc (deepseek < glm < kimi): ds=%d glm=%d kimi=%d\n%s", dsIdx, glmIdx, kimiIdx, out)
+	}
+}
