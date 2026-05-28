@@ -68,6 +68,13 @@ func TestModelProcessSinkSummarizerCheckpointEmitsUsageWithWindowIdentifiers(t *
 	if rec.Provider != "test" || rec.Model != "test-model" {
 		t.Fatalf("provider/model = %q/%q", rec.Provider, rec.Model)
 	}
+	// Purpose must be stamped: a dropped/empty Purpose silently folds
+	// process-sink spend into the chat bucket (empty -> chat), so the
+	// cost report would misattribute it with no other signal. The
+	// persona extractor test guards this symmetrically.
+	if rec.Purpose != model.UsagePurposeProcessSink {
+		t.Fatalf("Purpose = %q, want %q", rec.Purpose, model.UsagePurposeProcessSink)
+	}
 	if rec.AgentID != "codex" || rec.SessionID != "sess-1" {
 		t.Fatalf("agent/session = %q/%q, want codex/sess-1", rec.AgentID, rec.SessionID)
 	}
