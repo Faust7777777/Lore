@@ -151,9 +151,9 @@ try {
         -Run "Test(LiveMCPToolContractV1Snapshot|SDKFacingToolContractSnapshot|MCPV1ExposesOnlyReadAndProposalTools|ExternalMCPDoesNotExposeDirectWrites)$"
 
     Invoke-GoGate `
-        -Label "LLM config resolver guardrails" `
+        -Label "LLM config resolver and workspace persistence guardrails" `
         -Package "./internal/config" `
-        -Run "TestResolveLLMConfig"
+        -Run "Test(ResolveLLMConfig|UpsertLLMProfile|SetActiveLLMProfile|SaveWorkspaceConfig|LoadEditableConfig)"
 
     Invoke-GoGate `
         -Label "runtime LLM profile wiring guardrails" `

@@ -62,17 +62,17 @@ type UsageConfig struct {
 }
 
 type LLMConfig struct {
-	ActiveProfile string                      `json:"active_profile"`
-	Profiles      map[string]LLMProfileConfig `json:"profiles"`
+	ActiveProfile string                      `json:"active_profile,omitempty"`
+	Profiles      map[string]LLMProfileConfig `json:"profiles,omitempty"`
 }
 
 type LLMProfileConfig struct {
-	Provider  string        `json:"provider"`
-	BaseURL   string        `json:"base_url"`
-	Model     string        `json:"model"`
-	Timeout   time.Duration `json:"timeout"`
-	APIKeyEnv string        `json:"api_key_env"`
-	APIKeyRef string        `json:"api_key_ref"`
+	Provider  string        `json:"provider,omitempty"`
+	BaseURL   string        `json:"base_url,omitempty"`
+	Model     string        `json:"model,omitempty"`
+	Timeout   time.Duration `json:"timeout,omitempty"`
+	APIKeyEnv string        `json:"api_key_env,omitempty"`
+	APIKeyRef string        `json:"api_key_ref,omitempty"`
 }
 
 type BootstrapConfig struct {
