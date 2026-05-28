@@ -553,3 +553,90 @@ func TestRenderUsageReportPurposeShareZeroTokensNoPanic(t *testing.T) {
 		t.Fatalf("zero-token purpose should render '(0%%)':\n%s", out)
 	}
 }
+
+func TestRenderUsageReportShowsCrossPurposeModelTotals(t *testing.T) {
+	// With more than one purpose, the report adds a top-level
+	// "By model (all purposes):" rollup so an operator can see total
+	// spend per model regardless of what it was used for -- the primary
+	// "which provider eats my budget" question, which the per-purpose
+	// nesting otherwise forces them to sum by hand. A model billed under
+	// two purposes must sum across them.
+	day := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+	daily := []model.UsageSummary{
+		{
+			Day:              day,
+			Calls:            4,
+			PromptTokens:     330,
+			CompletionTokens: 110,
+			TotalTokens:      440,
+			PurposeBreakdown: map[string]model.UsagePurposeStats{
+				model.UsagePurposeChat: {
+					Calls: 3, PromptTokens: 230, CompletionTokens: 90,
+					ByModel: map[string]model.UsagePurposeStats{
+						"deepseek/deepseek-v4-pro": {Calls: 2, PromptTokens: 200, CompletionTokens: 80},
+						"kimi/kimi-k2":             {Calls: 1, PromptTokens: 30, CompletionTokens: 10},
+					},
+				},
+				model.UsagePurposePersonaExtract: {
+					Calls: 1, PromptTokens: 100, CompletionTokens: 20,
+					ByModel: map[string]model.UsagePurposeStats{
+						"deepseek/deepseek-v4-pro": {Calls: 1, PromptTokens: 100, CompletionTokens: 20},
+					},
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	renderUsageReport(&buf, 1, daily)
+	out := buf.String()
+
+	if !strings.Contains(out, "By model (all purposes):") {
+		t.Fatalf("multi-purpose report should add a cross-purpose model rollup:\n%s", out)
+	}
+	// The rollup must come after the per-purpose block.
+	if strings.Index(out, "By model (all purposes):") < strings.Index(out, "By purpose:") {
+		t.Fatalf("cross-purpose rollup should follow the By purpose block:\n%s", out)
+	}
+	block := out[strings.Index(out, "By model (all purposes):"):]
+	// deepseek summed across chat (280) + persona (120) = 400 tokens.
+	if !strings.Contains(block, "3 calls / 300 prompt + 100 completion = 400 tokens") {
+		t.Fatalf("cross-purpose deepseek total should sum across purposes to 400 tokens:\n%s", block)
+	}
+	if !strings.Contains(block, "kimi/kimi-k2") {
+		t.Fatalf("cross-purpose rollup should still include single-purpose models:\n%s", block)
+	}
+	// Sorted by combined total tokens desc: deepseek 400 > kimi 40.
+	if strings.Index(block, "deepseek/deepseek-v4-pro") > strings.Index(block, "kimi/kimi-k2") {
+		t.Fatalf("rollup should sort by combined total tokens desc:\n%s", block)
+	}
+}
+
+func TestRenderUsageReportHidesCrossPurposeBlockForSinglePurpose(t *testing.T) {
+	// With a single purpose the cross-purpose rollup would duplicate
+	// that purpose's own per-model detail line for line, so it is
+	// suppressed as noise.
+	day := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+	daily := []model.UsageSummary{
+		{
+			Day:              day,
+			Calls:            2,
+			PromptTokens:     180,
+			CompletionTokens: 70,
+			TotalTokens:      250,
+			PurposeBreakdown: map[string]model.UsagePurposeStats{
+				model.UsagePurposeChat: {
+					Calls: 2, PromptTokens: 180, CompletionTokens: 70,
+					ByModel: map[string]model.UsagePurposeStats{
+						"deepseek/deepseek-v4-pro": {Calls: 2, PromptTokens: 180, CompletionTokens: 70},
+					},
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	renderUsageReport(&buf, 1, daily)
+	out := buf.String()
+	if strings.Contains(out, "By model (all purposes):") {
+		t.Fatalf("single-purpose report must not add the redundant cross-purpose rollup:\n%s", out)
+	}
+}

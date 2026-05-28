@@ -1124,7 +1124,19 @@ func renderUsageReport(stdout io.Writer, days int, daily []model.UsageSummary) {
 			// top 5 by total tokens so the default report stays bounded
 			// (a busy day can touch many models after hot-switches). The
 			// JSON surface carries the uncapped map for scripting.
-			renderUsageModelDetail(stdout, stats.ByModel)
+			renderUsageModelDetail(stdout, stats.ByModel, "    ")
+		}
+	}
+
+	// With more than one purpose, roll up total spend per model across
+	// all purposes ("which provider ate my budget regardless of what it
+	// was used for"). With a single purpose this would duplicate that
+	// purpose's own per-model detail line for line, so it is suppressed.
+	if len(purposeTotals) > 1 {
+		if modelTotals := aggregateModelTotals(purposeTotals); len(modelTotals) > 0 {
+			fmt.Fprintln(stdout)
+			fmt.Fprintln(stdout, "By model (all purposes):")
+			renderUsageModelDetail(stdout, modelTotals, "  ")
 		}
 	}
 
@@ -1136,13 +1148,14 @@ func renderUsageReport(stdout io.Writer, days int, daily []model.UsageSummary) {
 	)
 }
 
-// usageModelDetailLimit caps how many per-model lines the human report
-// prints under a single purpose. Beyond this a "... N more model(s), T
-// tokens" summary line keeps the report bounded while still disclosing
-// both that more models exist and how much spend they account for.
+// usageModelDetailLimit caps how many per-model lines a model list in
+// the human report prints (a purpose's detail, or the cross-purpose
+// rollup). Beyond this a "... N more model(s), T tokens" summary line
+// keeps the report bounded while still disclosing both that more models
+// exist and how much spend they account for.
 const usageModelDetailLimit = 5
 
-func renderUsageModelDetail(stdout io.Writer, byModel map[string]model.UsagePurposeStats) {
+func renderUsageModelDetail(stdout io.Writer, byModel map[string]model.UsagePurposeStats, indent string) {
 	if len(byModel) == 0 {
 		return
 	}
@@ -1155,7 +1168,8 @@ func renderUsageModelDetail(stdout io.Writer, byModel map[string]model.UsagePurp
 		m := byModel[key]
 		fmt.Fprintf(
 			stdout,
-			"    %-24s %d calls / %d prompt + %d completion = %d tokens\n",
+			"%s%-24s %d calls / %d prompt + %d completion = %d tokens\n",
+			indent,
 			key,
 			m.Calls,
 			m.PromptTokens,
@@ -1172,8 +1186,27 @@ func renderUsageModelDetail(stdout io.Writer, byModel map[string]model.UsagePurp
 		for _, key := range keys[len(shown):] {
 			tailTokens += byModel[key].TotalTokens()
 		}
-		fmt.Fprintf(stdout, "    ... %d more model(s), %d tokens\n", remaining, tailTokens)
+		fmt.Fprintf(stdout, "%s... %d more model(s), %d tokens\n", indent, remaining, tailTokens)
 	}
+}
+
+// aggregateModelTotals folds every purpose's ByModel sub-bucket into a
+// single provider/model -> stats map, so the report can show total spend
+// per model across all purposes ("which provider ate my budget"). Used
+// only for the human "By model (all purposes):" rollup; JSON consumers
+// fold the per-purpose by_model maps themselves.
+func aggregateModelTotals(purposeTotals map[string]model.UsagePurposeStats) map[string]model.UsagePurposeStats {
+	totals := map[string]model.UsagePurposeStats{}
+	for _, stats := range purposeTotals {
+		for modelKey, leaf := range stats.ByModel {
+			m := totals[modelKey]
+			m.Calls += leaf.Calls
+			m.PromptTokens += leaf.PromptTokens
+			m.CompletionTokens += leaf.CompletionTokens
+			totals[modelKey] = m
+		}
+	}
+	return totals
 }
 
 // usageStatsJSON is the leaf shape shared by the JSON report's totals,
