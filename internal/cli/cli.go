@@ -1126,9 +1126,9 @@ func renderUsageReport(stdout io.Writer, days int, daily []model.UsageSummary) {
 }
 
 // usageModelDetailLimit caps how many per-model lines the human report
-// prints under a single purpose. Beyond this a "... N more models"
-// summary line keeps the report bounded without hiding that more
-// models exist.
+// prints under a single purpose. Beyond this a "... N more model(s), T
+// tokens" summary line keeps the report bounded while still disclosing
+// both that more models exist and how much spend they account for.
 const usageModelDetailLimit = 5
 
 func renderUsageModelDetail(stdout io.Writer, byModel map[string]model.UsagePurposeStats) {
@@ -1153,7 +1153,15 @@ func renderUsageModelDetail(stdout io.Writer, byModel map[string]model.UsagePurp
 		)
 	}
 	if remaining := len(keys) - len(shown); remaining > 0 {
-		fmt.Fprintf(stdout, "    ... %d more model(s)\n", remaining)
+		// Sum the hidden tail so the truncated view still discloses how
+		// much spend it folds away; the bare count can't tell an
+		// operator whether the dropped models are noise or a material
+		// slice of the bill without dropping to the JSON form.
+		var tailTokens int
+		for _, key := range keys[len(shown):] {
+			tailTokens += byModel[key].TotalTokens()
+		}
+		fmt.Fprintf(stdout, "    ... %d more model(s), %d tokens\n", remaining, tailTokens)
 	}
 }
 

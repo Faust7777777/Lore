@@ -175,7 +175,9 @@ func TestRenderUsageReportShowsModelDetailUnderPurpose(t *testing.T) {
 func TestRenderUsageReportCapsModelDetailAtTopFive(t *testing.T) {
 	// A purpose touching more than five models (plausible after a day
 	// of hot-switching) prints only the top five by tokens plus a
-	// "... N more model(s)" line so the report stays bounded.
+	// "... N more model(s), T tokens" line so the report stays bounded
+	// while still disclosing how much spend the truncated tail folds
+	// away -- the count alone can't tell noise from a material slice.
 	byModel := map[string]model.UsagePurposeStats{}
 	for i := 0; i < 8; i++ {
 		// Descending token weight so ordering is deterministic and the
@@ -200,8 +202,9 @@ func TestRenderUsageReportCapsModelDetailAtTopFive(t *testing.T) {
 	var buf bytes.Buffer
 	renderUsageReport(&buf, 1, daily)
 	out := buf.String()
-	if !strings.Contains(out, "... 3 more model(s)") {
-		t.Fatalf("expected a '... 3 more model(s)' summary line for 8 models capped at 5:\n%s", out)
+	// Hidden tail = model-5/6/7 at 75+70+65 = 210 tokens (completion is 0).
+	if !strings.Contains(out, "... 3 more model(s), 210 tokens") {
+		t.Fatalf("expected a '... 3 more model(s), 210 tokens' summary line for 8 models capped at 5:\n%s", out)
 	}
 	// model-0 (largest) shown; model-7 (smallest) dropped.
 	if !strings.Contains(out, "prov/model-0") {
