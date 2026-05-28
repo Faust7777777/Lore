@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -939,7 +940,7 @@ func runFindingsCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func runUsageCommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	workDir, days, err := parseUsageFlags(args, stderr)
+	workDir, days, asJSON, err := parseUsageFlags(args, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -966,28 +967,81 @@ func runUsageCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		daily = append(daily, summary)
 	}
+	if asJSON {
+		if err := emitUsageJSON(stdout, days, daily); err != nil {
+			fmt.Fprintf(stderr, "usage: emit json: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	renderUsageReport(stdout, days, daily)
 	return 0
 }
 
-func parseUsageFlags(args []string, stderr io.Writer) (string, int, error) {
+func parseUsageFlags(args []string, stderr io.Writer) (string, int, bool, error) {
 	flags := flag.NewFlagSet("usage", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	days := flags.Int("days", 1, "number of trailing days to summarize (>=1)")
+	asJSON := flags.Bool("json", false, "emit the report as a single-line JSON object (includes per-purpose by_model breakdown)")
 	if err := flags.Parse(args); err != nil {
-		return "", 0, err
+		return "", 0, false, err
 	}
 	if *days < 1 {
-		return "", 0, fmt.Errorf("usage: --days must be >= 1")
+		return "", 0, false, fmt.Errorf("usage: --days must be >= 1")
 	}
 	// Allow positional [workdir] after flags so both `lore usage ./dir`
 	// and `lore usage --days 7 ./dir` work, matching the style of
 	// `lore status [workdir]`.
 	resolved, err := resolveWorkDir(flags.Args())
 	if err != nil {
-		return "", 0, err
+		return "", 0, false, err
 	}
-	return resolved, *days, nil
+	return resolved, *days, *asJSON, nil
+}
+
+// aggregateUsageBreakdown merges the per-day PurposeBreakdown maps into
+// one window-level map, summing both the purpose-level stats and their
+// nested ByModel sub-buckets. Shared by the human report and the JSON
+// emitter so the two surfaces never disagree on the rolled-up numbers.
+func aggregateUsageBreakdown(daily []model.UsageSummary) map[string]model.UsagePurposeStats {
+	agg := map[string]model.UsagePurposeStats{}
+	for _, summary := range daily {
+		for purpose, stats := range summary.PurposeBreakdown {
+			cur := agg[purpose]
+			cur.Calls += stats.Calls
+			cur.PromptTokens += stats.PromptTokens
+			cur.CompletionTokens += stats.CompletionTokens
+			for modelKey, leaf := range stats.ByModel {
+				if cur.ByModel == nil {
+					cur.ByModel = map[string]model.UsagePurposeStats{}
+				}
+				m := cur.ByModel[modelKey]
+				m.Calls += leaf.Calls
+				m.PromptTokens += leaf.PromptTokens
+				m.CompletionTokens += leaf.CompletionTokens
+				cur.ByModel[modelKey] = m
+			}
+			agg[purpose] = cur
+		}
+	}
+	return agg
+}
+
+// sortedModelKeys orders a ByModel map by total tokens descending,
+// breaking ties on the key ascending so the output is deterministic.
+func sortedModelKeys(byModel map[string]model.UsagePurposeStats) []string {
+	keys := make([]string, 0, len(byModel))
+	for k := range byModel {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		ti, tj := byModel[keys[i]].TotalTokens(), byModel[keys[j]].TotalTokens()
+		if ti != tj {
+			return ti > tj
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
 }
 
 func renderUsageReport(stdout io.Writer, days int, daily []model.UsageSummary) {
@@ -1031,16 +1085,7 @@ func renderUsageReport(stdout io.Writer, days int, daily []model.UsageSummary) {
 	// printing breakdown rows under every DAY row would crowd the
 	// table; the daily DAY/CALLS/PROMPT/COMPLETION/TOTAL line still
 	// answers "what did today cost overall".
-	purposeTotals := map[string]model.UsagePurposeStats{}
-	for _, summary := range daily {
-		for purpose, stats := range summary.PurposeBreakdown {
-			agg := purposeTotals[purpose]
-			agg.Calls += stats.Calls
-			agg.PromptTokens += stats.PromptTokens
-			agg.CompletionTokens += stats.CompletionTokens
-			purposeTotals[purpose] = agg
-		}
-	}
+	purposeTotals := aggregateUsageBreakdown(daily)
 	if len(purposeTotals) > 0 {
 		purposes := make([]string, 0, len(purposeTotals))
 		for purpose := range purposeTotals {
@@ -1064,6 +1109,11 @@ func renderUsageReport(stdout io.Writer, days int, daily []model.UsageSummary) {
 				stats.CompletionTokens,
 				stats.TotalTokens(),
 			)
+			// B-next: per-model detail under each purpose, capped at the
+			// top 5 by total tokens so the default report stays bounded
+			// (a busy day can touch many models after hot-switches). The
+			// JSON surface carries the uncapped map for scripting.
+			renderUsageModelDetail(stdout, stats.ByModel)
 		}
 	}
 
@@ -1073,6 +1123,125 @@ func renderUsageReport(stdout io.Writer, days int, daily []model.UsageSummary) {
 		"Total: %d calls / %d prompt + %d completion = %d tokens\n",
 		totalCalls, totalPrompt, totalCompletion, totalPrompt+totalCompletion,
 	)
+}
+
+// usageModelDetailLimit caps how many per-model lines the human report
+// prints under a single purpose. Beyond this a "... N more models"
+// summary line keeps the report bounded without hiding that more
+// models exist.
+const usageModelDetailLimit = 5
+
+func renderUsageModelDetail(stdout io.Writer, byModel map[string]model.UsagePurposeStats) {
+	if len(byModel) == 0 {
+		return
+	}
+	keys := sortedModelKeys(byModel)
+	shown := keys
+	if len(shown) > usageModelDetailLimit {
+		shown = shown[:usageModelDetailLimit]
+	}
+	for _, key := range shown {
+		m := byModel[key]
+		fmt.Fprintf(
+			stdout,
+			"    %-24s %d calls / %d prompt + %d completion = %d tokens\n",
+			key,
+			m.Calls,
+			m.PromptTokens,
+			m.CompletionTokens,
+			m.TotalTokens(),
+		)
+	}
+	if remaining := len(keys) - len(shown); remaining > 0 {
+		fmt.Fprintf(stdout, "    ... %d more model(s)\n", remaining)
+	}
+}
+
+// usageStatsJSON is the leaf shape shared by the JSON report's totals,
+// per-purpose stats, and per-model stats. TotalTokens is materialized
+// (not omitempty) so consumers always get the convenience field.
+type usageStatsJSON struct {
+	Calls            int `json:"calls"`
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+type usagePurposeJSON struct {
+	usageStatsJSON
+	ByModel map[string]usageStatsJSON `json:"by_model,omitempty"`
+}
+
+type usageDayJSON struct {
+	Day string `json:"day"`
+	usageStatsJSON
+}
+
+type usageReportJSON struct {
+	WindowDays       int                         `json:"window_days"`
+	Totals           usageStatsJSON              `json:"totals"`
+	PurposeBreakdown map[string]usagePurposeJSON `json:"purpose_breakdown,omitempty"`
+	Days             []usageDayJSON              `json:"days"`
+}
+
+func statsToJSON(s model.UsagePurposeStats) usageStatsJSON {
+	return usageStatsJSON{
+		Calls:            s.Calls,
+		PromptTokens:     s.PromptTokens,
+		CompletionTokens: s.CompletionTokens,
+		TotalTokens:      s.TotalTokens(),
+	}
+}
+
+// emitUsageJSON writes the usage report as a single-line JSON object.
+// purpose_breakdown is aggregated across the window (mirrors the human
+// "By purpose" block) and carries the full, uncapped by_model map so
+// scripting / TUI consumers can drive a cost dashboard. The days array
+// preserves the per-day top-line for time-series rendering.
+func emitUsageJSON(stdout io.Writer, days int, daily []model.UsageSummary) error {
+	out := usageReportJSON{
+		WindowDays: days,
+		Days:       make([]usageDayJSON, 0, len(daily)),
+	}
+	for _, summary := range daily {
+		out.Totals.Calls += summary.Calls
+		out.Totals.PromptTokens += summary.PromptTokens
+		out.Totals.CompletionTokens += summary.CompletionTokens
+		out.Days = append(out.Days, usageDayJSON{
+			Day: summary.Day.Format("2006-01-02"),
+			usageStatsJSON: usageStatsJSON{
+				Calls:            summary.Calls,
+				PromptTokens:     summary.PromptTokens,
+				CompletionTokens: summary.CompletionTokens,
+				TotalTokens:      summary.TotalTokens,
+			},
+		})
+	}
+	out.Totals.TotalTokens = out.Totals.PromptTokens + out.Totals.CompletionTokens
+
+	if agg := aggregateUsageBreakdown(daily); len(agg) > 0 {
+		out.PurposeBreakdown = make(map[string]usagePurposeJSON, len(agg))
+		for purpose, stats := range agg {
+			pj := usagePurposeJSON{usageStatsJSON: statsToJSON(stats)}
+			if len(stats.ByModel) > 0 {
+				pj.ByModel = make(map[string]usageStatsJSON, len(stats.ByModel))
+				for modelKey, leaf := range stats.ByModel {
+					pj.ByModel[modelKey] = statsToJSON(leaf)
+				}
+			}
+			out.PurposeBreakdown[purpose] = pj
+		}
+	}
+
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return err
+	}
+	if _, err := stdout.Write(encoded); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout)
+	return err
 }
 
 func renderTodayUsageTail(summary model.UsageSummary) string {

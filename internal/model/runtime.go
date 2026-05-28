@@ -55,12 +55,12 @@ type UsageSummary struct {
 	// PurposeBreakdown disaggregates the day's calls and tokens by
 	// UsagePurpose so `lore usage` can show operators what fraction
 	// of cost went to chat vs persona_extract vs process_sink. Keyed
-	// by the Purpose string ("chat", "persona_extract", etc.); empty
-	// or absent Purpose collapses to the empty-string bucket.
-	// Stores populate this in SummarizeUsage from the same scan that
-	// fills Calls/PromptTokens/CompletionTokens; pre-B-P11 records
-	// (no Purpose field) deserialize as Purpose="" and land in the
-	// empty bucket so legacy data still surfaces.
+	// by the Purpose string ("chat", "persona_extract", etc.).
+	// Records with an empty/absent Purpose (pre-B-P11 rows that never
+	// carried the field) fold into the "chat" bucket: historically the
+	// operator agent was the only biller, so an unlabeled call is a
+	// chat call. Stores populate this in SummarizeUsage from the same
+	// scan that fills Calls/PromptTokens/CompletionTokens.
 	PurposeBreakdown map[string]UsagePurposeStats `json:"purpose_breakdown,omitempty"`
 }
 
@@ -68,10 +68,19 @@ type UsageSummary struct {
 // UsageSummary.PurposeBreakdown map. Sum of all bucket Calls equals
 // the parent UsageSummary.Calls, same for tokens, so a caller can
 // reconcile the breakdown against the top-line totals.
+//
+// ByModel further disaggregates a purpose bucket by the provider/model
+// that billed each call, keyed "provider/model" (e.g.
+// "deepseek/deepseek-v4-pro"). Records missing both provider and model
+// fold into the "unknown" key; a record missing only one part uses
+// "unknown" for that part. The map is omitted from JSON when empty so
+// the inner (leaf) entries -- which never recurse -- stay compact.
+// Sum of a purpose's ByModel Calls equals that purpose's Calls.
 type UsagePurposeStats struct {
-	Calls            int `json:"calls"`
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
+	Calls            int                          `json:"calls"`
+	PromptTokens     int                          `json:"prompt_tokens"`
+	CompletionTokens int                          `json:"completion_tokens"`
+	ByModel          map[string]UsagePurposeStats `json:"by_model,omitempty"`
 }
 
 // TotalTokens is a convenience accessor on the bucket; equivalent to

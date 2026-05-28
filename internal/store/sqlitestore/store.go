@@ -543,22 +543,20 @@ func (s *Store) SummarizeUsage(day time.Time) (model.UsageSummary, error) {
 		summary.Calls++
 		summary.PromptTokens += prompt
 		summary.CompletionTokens += completion
-		purpose := ""
+		purpose, provider, modelName := "", "", ""
 		if payload != "" {
 			if rec, jsonErr := unmarshalPayload[model.UsageRecord](payload); jsonErr == nil {
 				purpose = rec.Purpose
+				provider = rec.Provider
+				modelName = rec.Model
 			}
 			// Unmarshal failure (corrupt row, schema drift) silently
-			// folds into the empty-purpose bucket; the top-line
-			// Calls/Tokens still increment from the SQL columns so
-			// the report stays consistent even if a record cannot be
-			// decoded.
+			// folds into the chat purpose + unknown model buckets via
+			// the helper's fallbacks; the top-line Calls/Tokens still
+			// increment from the SQL columns so the report stays
+			// consistent even if a record cannot be decoded.
 		}
-		stats := breakdown[purpose]
-		stats.Calls++
-		stats.PromptTokens += prompt
-		stats.CompletionTokens += completion
-		breakdown[purpose] = stats
+		store.AccumulateUsageBreakdown(breakdown, purpose, provider, modelName, prompt, completion)
 	}
 	if err := rows.Err(); err != nil {
 		return model.UsageSummary{}, err
