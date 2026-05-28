@@ -1,6 +1,7 @@
 package drafts
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -130,5 +131,108 @@ func TestValidateTransitionCoversAllDraftTerminalStates(t *testing.T) {
 		if err := ValidateTransition(transition.from, transition.to); err == nil {
 			t.Fatalf("ValidateTransition(%q, %q) error = nil, want invalid transition", transition.from, transition.to)
 		}
+	}
+}
+
+func TestNewRejectsMissingRequiredFields(t *testing.T) {
+	// New is the creation boundary; each required field guards a later
+	// stage (a missing Target.BaseVersion breaks optimistic concurrency
+	// at Apply; a missing Target.Path has nowhere to write). Take a valid
+	// base set, blank one field at a time, and require the matching
+	// sentinel error.
+	now := time.Date(2026, 4, 22, 21, 0, 0, 0, time.UTC)
+	base := Params{
+		ID:        "draft-100",
+		Kind:      KindProgressUpdate,
+		Source:    SourceOperator,
+		Target:    Target{Path: "0-x/y.md", Class: model.DocClassProgressIndex, BaseVersion: "v1"},
+		Summary:   "valid summary",
+		CreatedAt: now,
+	}
+	if _, err := New(base); err != nil {
+		t.Fatalf("base params should be valid, got %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		mutate  func(p *Params)
+		wantErr error
+	}{
+		{"blank id", func(p *Params) { p.ID = "  " }, ErrDraftIDRequired},
+		{"empty kind", func(p *Params) { p.Kind = "" }, ErrDraftKindRequired},
+		{"empty source", func(p *Params) { p.Source = "" }, ErrDraftSourceRequired},
+		{"blank summary", func(p *Params) { p.Summary = "   " }, ErrDraftSummaryRequired},
+		{"empty target path", func(p *Params) { p.Target.Path = "" }, ErrTargetPathRequired},
+		{"empty base version", func(p *Params) { p.Target.BaseVersion = "" }, ErrTargetBaseVersionMissing},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := base
+			tc.mutate(&p)
+			if _, err := New(p); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("New() error = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestDraftRejectsInvalidTransitionsAndMissingActors(t *testing.T) {
+	// Method-level lifecycle guards, distinct from the pure CanTransition
+	// table: the transition methods must reject being called from the
+	// wrong state and must require a named actor, and a rejected guard
+	// must leave the state untouched -- otherwise a persona change could
+	// be approved/applied without review or attribution.
+	now := time.Date(2026, 4, 22, 21, 0, 0, 0, time.UTC)
+	newDraft := func() *Draft {
+		d, err := New(Params{
+			ID: "draft-200", Kind: KindPersonaUpdate, Source: SourceOperator,
+			Target:  Target{Path: "0-x/persona.md", Class: model.DocClassSystemDoc, BaseVersion: "v1"},
+			Summary: "valid", CreatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		return d
+	}
+
+	// Approve before SubmitForReview: wrong state.
+	if err := newDraft().Approve("reviewer", "", now); err == nil {
+		t.Fatal("Approve() from draft state error = nil, want invalid transition")
+	}
+
+	// SubmitForReview twice: the second call is from review state, not draft.
+	d := newDraft()
+	if err := d.SubmitForReview(now); err != nil {
+		t.Fatalf("first SubmitForReview() error = %v", err)
+	}
+	if err := d.SubmitForReview(now); err == nil {
+		t.Fatal("second SubmitForReview() error = nil, want invalid transition from review state")
+	}
+
+	// Approve with a blank reviewer must fail and leave state in review.
+	d = newDraft()
+	if err := d.SubmitForReview(now); err != nil {
+		t.Fatalf("SubmitForReview() error = %v", err)
+	}
+	if err := d.Approve("   ", "comment", now); err == nil {
+		t.Fatal("Approve() with blank reviewer error = nil, want reviewer-required")
+	}
+	if d.State != StateReview {
+		t.Fatalf("State = %q after failed approve, want still %q", d.State, StateReview)
+	}
+
+	// Apply with a blank applier must fail and leave state approved.
+	d = newDraft()
+	if err := d.SubmitForReview(now); err != nil {
+		t.Fatalf("SubmitForReview() error = %v", err)
+	}
+	if err := d.Approve("reviewer", "ok", now); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	if err := d.Apply("  ", now); err == nil {
+		t.Fatal("Apply() with blank applier error = nil, want applier-required")
+	}
+	if d.State != StateApproved {
+		t.Fatalf("State = %q after failed apply, want still %q", d.State, StateApproved)
 	}
 }
