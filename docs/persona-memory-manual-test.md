@@ -10,6 +10,16 @@ When this cookbook and the pipeline overview at
 `docs/persona-memory-pipeline.md` disagree, trust the pipeline
 overview (it is the contract anchor) and update this cookbook.
 
+## Surface stance
+
+This cookbook drives the CLI surface (`lore persona …`). That is the
+current manual review path AND the long-term automation / scripting
+/ debug surface. A TUI persona-review panel is in flight on top of
+the backend DTOs shipped in 2026-05-28
+(`docs/handoff-b-line-tui-backend-2026-05-28.md`); once the panel
+lands, real-time review moves there and this cookbook becomes the
+fallback path for headless / scripted runs.
+
 ## Flag ordering
 
 All `lore persona candidates` subcommands accept flags either before

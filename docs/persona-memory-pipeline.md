@@ -11,6 +11,20 @@ from `git log`.
 When `git log` and this document disagree, trust `git log` and update
 this document.
 
+## Operator surface stance
+
+`lore persona …` CLI is the available manual surface today and stays
+supported as the automation / scripting / debug surface going
+forward. The primary interactive review path is moving to TUI; the
+backend pieces the TUI panel will call (action-availability helper,
+view DTO with embedded actions, lifted log / summary readers,
+fixture helpers) shipped in the 2026-05-28 slice. See
+`docs/handoff-b-line-tui-backend-2026-05-28.md` for the surface map
+and the in-flight TUI panel design.
+
+The cookbook at `docs/persona-memory-manual-test.md` still describes
+the CLI surface; until the TUI panel ships, that is the manual path.
+
 ## Purpose
 
 Mine durable personal facts ("I major in economics", "I review
