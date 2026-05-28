@@ -27,6 +27,12 @@ Follow-ups (2026-05-29):
   report` — each `By purpose` row now ends with its token-weighted share
   (e.g. `(75%)`), rounded to nearest and divide-by-zero-safe. Human-only;
   the JSON shape is unchanged.
+- `5f5d017 test(app): assert process-sink usage stamps Purpose` —
+  data-quality foundation: the report's buckets are only correct if
+  billers stamp `Purpose`. The process-sink usage test checked
+  Provider/Model but not `Purpose`, unlike the persona extractor test;
+  now all three billers (chat / persona / process-sink) are symmetrically
+  guarded so a dropped label can't silently misbucket spend as `chat`.
 
 Model / store contract unchanged. JSON shape unchanged (the `7c30189`
 share is human-report-only).
