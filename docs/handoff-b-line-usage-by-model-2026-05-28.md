@@ -23,8 +23,13 @@ Follow-ups (2026-05-29):
   "No usage recorded." with no table/Total rows, and `--json` emits a
   valid zero-state object with `purpose_breakdown` omitted (not null /
   `{}`) so an idle-day poll never breaks a consumer. No prod change.
+- `7c30189 feat(cli): show each purpose's share of total tokens in usage
+  report` — each `By purpose` row now ends with its token-weighted share
+  (e.g. `(75%)`), rounded to nearest and divide-by-zero-safe. Human-only;
+  the JSON shape is unchanged.
 
-Model / store / JSON contract unchanged.
+Model / store contract unchanged. JSON shape unchanged (the `7c30189`
+share is human-report-only).
 
 ## TL;DR
 
@@ -93,10 +98,16 @@ purpose" row, sorted by total tokens descending, capped at the top 5
 with a `... N more model(s), T tokens` line beyond that — `T` is the
 summed `TotalTokens()` of the hidden tail (commit `01fbf00`), so a
 truncated report still discloses how much spend it folds away rather
-than just how many models. The DAY table and Total line are unchanged
-so an operator who only wants totals still reads them at a glance. The
-`--json` surface is untouched: it already emits the uncapped `by_model`
-map, so scripting consumers never saw the cap or the tail summary.
+than just how many models. Each `By purpose` row also ends with its
+token-weighted share of the window (e.g. `= 750 tokens (75%)`, commit
+`7c30189`) so cost concentration reads at a glance; the percent rounds
+to nearest and is divide-by-zero-safe when the window total is zero (a
+zero-token call still counts toward Calls). The DAY table and Total
+line are unchanged so an operator who only wants totals still reads
+them at a glance. The `--json` surface is untouched: it already emits
+the uncapped `by_model` map and carries no percent field (consumers
+compute their own), so scripting consumers never saw the cap, the tail
+summary, or the share.
 
 ## TUI cost-dashboard wiring
 
@@ -138,10 +149,11 @@ go test ./internal/cli/ -run "Usage" -v
 ```
 
 All green at slice close. New tests: 4 store contract tests (across
-memory/json/sqlite via the existing `usageBackends` table) + 6 cli
+memory/json/sqlite via the existing `usageBackends` table) + 8 cli
 tests (human model detail, top-5 cap incl. hidden-tail token sum, JSON
-by_model, cross-day by_model aggregation, and two idle-window guards:
-human "No usage recorded." + `--json` zero-state).
+by_model, cross-day by_model aggregation, two idle-window guards [human
+"No usage recorded." + `--json` zero-state], and two purpose token-share
+guards [normal percent + zero-token divide guard]).
 
 ## Boundaries honored
 
