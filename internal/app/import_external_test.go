@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"obsidian-harness/internal/adapter/codexjsonl"
 	"obsidian-harness/internal/model"
 )
 
@@ -72,5 +73,44 @@ func TestRuntimeImportExternalTranscriptJSONLRequiresInput(t *testing.T) {
 	_, err = runtime.ImportExternalTranscriptJSONL(ImportExternalTranscriptJSONLParams{}, time.Date(2026, 4, 22, 23, 30, 0, 0, time.Local))
 	if err == nil || !strings.Contains(err.Error(), "empty input path") {
 		t.Fatalf("ImportExternalTranscriptJSONL() error = %v, want empty input path", err)
+	}
+}
+
+func TestApplyExternalTranscriptIdentityOverridePrecedenceAndNormalization(t *testing.T) {
+	// applyExternalTranscriptIdentity overrides the loaded transcript
+	// identity with non-blank params, skips blank ones (keeping the
+	// loaded value), then runs FinalizeTranscript. The end-to-end import
+	// test only exercises the blank-param path; the override-when-set
+	// branch was the 60% gap. The observable contract a regression could
+	// silently break -- misattributing an imported session -- is
+	// asymmetric: AgentID is normalized (lowercased + charset-filtered by
+	// sanitizeAgentID) while SessionID is taken verbatim (only trimmed).
+	// Pin both branches of both fields.
+
+	// Non-blank params win; AgentID is lowercased, SessionID kept as-is.
+	set := codexjsonl.Transcript{AgentID: "loaded", SessionID: "loaded-sess"}
+	applyExternalTranscriptIdentity(&set, ImportExternalTranscriptJSONLParams{
+		AgentID:   "  Cursor-IDE  ",
+		SessionID: "  S-42  ",
+	})
+	if set.AgentID != "cursor-ide" {
+		t.Fatalf("AgentID = %q, want sanitized lowercase %q", set.AgentID, "cursor-ide")
+	}
+	if set.SessionID != "S-42" {
+		t.Fatalf("SessionID = %q, want trimmed-but-verbatim %q", set.SessionID, "S-42")
+	}
+
+	// Blank/whitespace params are skipped: the loaded identity is kept
+	// (AgentID still normalized by FinalizeTranscript).
+	kept := codexjsonl.Transcript{AgentID: "Keep-Agent", SessionID: "keep-sess"}
+	applyExternalTranscriptIdentity(&kept, ImportExternalTranscriptJSONLParams{
+		AgentID:   "   ",
+		SessionID: "",
+	})
+	if kept.AgentID != "keep-agent" {
+		t.Fatalf("blank AgentID param should keep the loaded value, got %q", kept.AgentID)
+	}
+	if kept.SessionID != "keep-sess" {
+		t.Fatalf("blank SessionID param should keep the loaded value, got %q", kept.SessionID)
 	}
 }
