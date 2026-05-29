@@ -1745,3 +1745,60 @@ func TestUpsertProgressIndexRowReplacesSameDocInsteadOfDuplicating(t *testing.T)
 		t.Fatalf("second upsert should update the row to the new timestamp:\n%s", out)
 	}
 }
+
+func TestDraftReviewActionsRejectNonPendingDraft(t *testing.T) {
+	// ApproveDraft / RejectDraft / RequestDraftRevision are review-queue
+	// actions: each must refuse a draft that is not pending review, with
+	// the ErrDraftNotReady sentinel the CLI surfaces. The happy paths are
+	// covered elsewhere; the wrong-state precheck and the GetDraft-error
+	// branch were the untested 33%.
+	cfg := config.Default(t.TempDir())
+	st := memory.New()
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	at := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+	// Seed a draft already past review (Approved); review actions must reject it.
+	draft := model.Draft{
+		ID:    "draft-not-pending",
+		Kind:  model.DraftKindMarkdownNoteWrite,
+		State: model.DraftApproved,
+		Target: model.DocumentRef{
+			Path:        "03-notes/x.md",
+			Class:       model.DocClassNote,
+			BaseVersion: model.DraftBaseVersionNewFile,
+		},
+		Title:           "seed",
+		Summary:         "fixture",
+		ProposedContent: "{}",
+		CreatedAt:       at,
+		UpdatedAt:       at,
+	}
+	if err := st.Drafts().SaveDraft(draft); err != nil {
+		t.Fatalf("SaveDraft() error = %v", err)
+	}
+
+	actions := []struct {
+		name string
+		call func(string, time.Time) (model.Draft, error)
+	}{
+		{"approve", h.ApproveDraft},
+		{"reject", h.RejectDraft},
+		{"request_revision", h.RequestDraftRevision},
+	}
+	for _, a := range actions {
+		t.Run(a.name, func(t *testing.T) {
+			if _, err := a.call(draft.ID, at.Add(time.Minute)); !errors.Is(err, ErrDraftNotReady) {
+				t.Fatalf("%s on an approved draft = %v, want ErrDraftNotReady", a.name, err)
+			}
+		})
+	}
+
+	// A review action on a missing draft surfaces the store error (the
+	// GetDraft-error branch), not ErrDraftNotReady.
+	if _, err := h.ApproveDraft("does-not-exist", at); err == nil {
+		t.Fatal("ApproveDraft on a missing id = nil, want a store error")
+	}
+}
