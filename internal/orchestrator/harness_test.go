@@ -1802,3 +1802,52 @@ func TestDraftReviewActionsRejectNonPendingDraft(t *testing.T) {
 		t.Fatal("ApproveDraft on a missing id = nil, want a store error")
 	}
 }
+
+func TestSupersedeDraftValidatesInputAndKind(t *testing.T) {
+	// SupersedeDraft is the mutate-in-place review action: it requires
+	// both proposed_content and reason, and only applies to markdown-note
+	// drafts. Guards the early validation branches (the happy path is
+	// covered; these error returns were the gap).
+	cfg := config.Default(t.TempDir())
+	st := memory.New()
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	at := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+
+	// Missing content or reason: rejected before any store lookup.
+	for _, bad := range []model.DraftSupersedeUpdate{
+		{ProposedContent: "", Reason: "r"},
+		{ProposedContent: "c", Reason: ""},
+	} {
+		_, err := h.SupersedeDraft("any-id", bad, at)
+		if err == nil || !strings.Contains(err.Error(), "proposed_content and reason") {
+			t.Fatalf("SupersedeDraft(%+v) error = %v, want proposed_content/reason required", bad, err)
+		}
+	}
+
+	// A non-markdown-note draft cannot be superseded.
+	draft := model.Draft{
+		ID:    "persona-draft",
+		Kind:  model.DraftKindPersonaUpdate,
+		State: model.DraftPendingReview,
+		Target: model.DocumentRef{
+			Path:        "0-x/persona.md",
+			Class:       model.DocClassPersona,
+			BaseVersion: "v1",
+		},
+		Title:           "seed",
+		Summary:         "fixture",
+		ProposedContent: "{}",
+		CreatedAt:       at,
+		UpdatedAt:       at,
+	}
+	if err := st.Drafts().SaveDraft(draft); err != nil {
+		t.Fatalf("SaveDraft() error = %v", err)
+	}
+	good := model.DraftSupersedeUpdate{ProposedContent: "new content", Reason: "because"}
+	if _, err := h.SupersedeDraft(draft.ID, good, at); !errors.Is(err, ErrUnsupportedDraft) {
+		t.Fatalf("SupersedeDraft on a persona-kind draft = %v, want ErrUnsupportedDraft", err)
+	}
+}
