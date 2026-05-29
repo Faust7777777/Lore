@@ -1137,7 +1137,7 @@ func upsertProgressIndexRow(current []byte, row string) ([]byte, error) {
 
 func progressIndexTableBlock(row string) string {
 	return strings.Join([]string{
-		"| 闁哄倸娲﹂妴?| 缂侇偉顕ч悗?| 闁绘鍩栭埀?| 闁哄牃鍋撻弶鈺傚灦濞插潡寮?|",
+		"| 文档 | 类型 | 状态 | 最近更新 |",
 		"| --- | --- | --- | --- |",
 		row,
 	}, "\n")

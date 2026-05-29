@@ -1707,3 +1707,41 @@ func writeVaultFile(t *testing.T, cfg config.Config, relPath string, content str
 	}
 	return data, hash, nil
 }
+
+func TestProgressIndexTableBlockHeaderIsRecognized(t *testing.T) {
+	// Regression: progressIndexTableBlock must emit a header that
+	// isProgressHeaderLine accepts. If it does not, a freshly-created
+	// progress table can never be found again, so later upserts append
+	// duplicate tables instead of updating rows. progressIndexTableBlock
+	// had 0% coverage, so a corrupt header literal slipped through.
+	block := progressIndexTableBlock("| notes/db.md | system | synced | 2026-05-29 10:00 |")
+	header := strings.SplitN(block, "\n", 2)[0]
+	if !isProgressHeaderLine(header) {
+		t.Fatalf("generated progress-index header not recognized by isProgressHeaderLine:\n%q", header)
+	}
+}
+
+func TestUpsertProgressIndexRowReplacesSameDocInsteadOfDuplicating(t *testing.T) {
+	// Creating a table then upserting another row for the same first
+	// column must update that row in place and keep a single table -- the
+	// downstream payoff of the header round-trip. Guards the duplicate-
+	// table regression end to end.
+	first, err := upsertProgressIndexRow(nil, "| notes/db.md | system | synced | 2026-05-29 10:00 |")
+	if err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	second, err := upsertProgressIndexRow(first, "| notes/db.md | system | synced | 2026-05-29 11:00 |")
+	if err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	out := string(second)
+	if n := strings.Count(out, "| --- | --- | --- | --- |"); n != 1 {
+		t.Fatalf("expected exactly one table (one separator row), got %d:\n%s", n, out)
+	}
+	if c := strings.Count(out, "notes/db.md"); c != 1 {
+		t.Fatalf("the doc row should appear once (replaced in place), got %d:\n%s", c, out)
+	}
+	if !strings.Contains(out, "2026-05-29 11:00") {
+		t.Fatalf("second upsert should update the row to the new timestamp:\n%s", out)
+	}
+}
