@@ -214,3 +214,31 @@ func TestParseUnixishHandlesIntFloatAndStringForms(t *testing.T) {
 		}
 	}
 }
+
+func TestSanitizeAgentIDNormalizesToSafeSlug(t *testing.T) {
+	// Agent IDs become directory/file names and attribution keys, so
+	// sanitizeAgentID lowercases, turns spaces into dashes, keeps only
+	// [a-z0-9-_], drops everything else, and trims leading/trailing
+	// separators. A regression here misfiles or collides imported
+	// sessions. (ASCII-only cases; the drop-branch is the same for any
+	// non-[a-z0-9-_ ] rune.)
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"Claude", "claude"},               // lowercased
+		{"Claude Code", "claude-code"},      // space -> dash
+		{"  Cursor-IDE_v2  ", "cursor-ide_v2"}, // trimmed, separators kept
+		{"claude.code!", "claudecode"},      // '.' and '!' dropped
+		{"-_trim-_", "trim"},                // leading/trailing separators trimmed
+		{"a  b", "a--b"},                    // each space becomes a dash (no collapse)
+		{"@#$", ""},                         // all-invalid -> empty
+		{"", ""},
+		{"   ", ""},
+	}
+	for _, tc := range cases {
+		if got := sanitizeAgentID(tc.in); got != tc.want {
+			t.Fatalf("sanitizeAgentID(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
