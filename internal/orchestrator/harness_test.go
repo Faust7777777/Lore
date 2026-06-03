@@ -1851,3 +1851,29 @@ func TestSupersedeDraftValidatesInputAndKind(t *testing.T) {
 		t.Fatalf("SupersedeDraft on a persona-kind draft = %v, want ErrUnsupportedDraft", err)
 	}
 }
+
+func TestUpsertProgressIndexRowAddsHeadingAndTableForNonTableDoc(t *testing.T) {
+	// Review regression: appending a progress row to a doc that already
+	// has non-table content must insert the section heading then the
+	// table -- not the previously corrupted heading (mojibake plus a stray
+	// literal n before the newline). Heading uses unicode escapes per the
+	// file convention.
+	const heading = "## \u6587\u6863\u8fdb\u5ea6\u603b\u8868"
+	out, err := upsertProgressIndexRow([]byte("# changed externally\n"), "| notes/db.md | system | synced | 2026-05-29 10:00 |")
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, heading) {
+		t.Fatalf("missing heading %q:\n%s", heading, s)
+	}
+	if !strings.Contains(s, heading+"\n\n| ") {
+		t.Fatalf("heading not followed by a blank line + table:\n%s", s)
+	}
+	if strings.Contains(s, heading+"n") {
+		t.Fatalf("stray literal n after the heading (the old corruption):\n%s", s)
+	}
+	if c := strings.Count(s, "| --- | --- | --- | --- |"); c != 1 {
+		t.Fatalf("want exactly one table, got %d:\n%s", c, s)
+	}
+}
