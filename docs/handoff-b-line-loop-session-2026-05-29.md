@@ -1,13 +1,18 @@
 # B-line review handoff — `/loop 迭代` session (2026-05-29)
 
 Audience: reviewer (DeepSeek) + B-line owner.
-Branch: local `main`, **26 commits ahead of `origin/main`, NOT pushed.**
-HEAD: `f88f38f`.
+Branch: local `main`, **29 commits ahead of `origin/main`, NOT pushed.**
+HEAD: local `main` tip — verify with `git log origin/main..HEAD`.
 
-Verification: a fresh `git worktree` checked out at HEAD (i.e. the
-reviewable batch with the uncommitted TUI/A-line WIP excluded) passes
-`go build ./...`, `go vet ./...`, and `go test ./...` — **every package
-`ok`, zero failures**.
+Review status: **DeepSeek review passed.** The three requested fixes are
+applied: the progress-index header + section heading are now `\u`-escaped
+and the `harness.go:1116` heading is repaired (commit `1665453`), and this
+doc is synced. Ready to push pending CI.
+
+Verification: a fresh `git worktree` checked out at HEAD (the reviewable
+batch with the uncommitted TUI/A-line WIP excluded) passes `go build
+./...`, `go vet ./...`, and `go test ./...` — **every package `ok`, zero
+failures** (re-run after the review fix at `1665453`).
 
 ---
 
@@ -19,14 +24,14 @@ reviewable batch with the uncommitted TUI/A-line WIP excluded) passes
 2. **The `lore usage` feature** (§2). The only other production code in
    this batch (`cli.go`, `model`, `store`). Detailed contract doc:
    `docs/handoff-b-line-usage-by-model-2026-05-28.md`.
-3. **Open decision needed from owner** (§4). A sibling corruption at
-   `harness.go:1116` I deliberately did **not** fix — I don't know the
-   intended heading text.
+3. **`harness.go:1116`** (§4) — the sibling corruption, now **fixed** in
+   `1665453` (heading set to the doc-progress-index title with `\n\n`,
+   `\u`-escaped) with a regression test.
 4. Everything else (§5) is **test-only** coverage hardening — no
    production behavior change.
 
-Of the 26 commits: **3 feat + 1 fix** touch production code; 16 are
-test-only; 6 are docs. Production diff is concentrated and small (see §1).
+Of the 29 commits: **3 feat + 2 fix** touch production code; the rest are
+test-only or docs. Production diff is concentrated and small (see §1).
 
 ---
 
@@ -102,30 +107,27 @@ before the fix, GREEN after:
 display, so I checked `.encode("utf-8").hex()` rather than trusting the
 render). Diff is surgical: 1 production line + the two tests.
 
-Reviewer note: the fix landed as raw UTF-8 Chinese rather than the file's
-usual `\u`-escape convention (my tooling kept interpreting typed `文`
-as the character). It is functionally identical and byte-matches
-`isProgressHeaderLine`. If you prefer `\u` escapes for corruption-
-resistance, that's a trivial follow-up — flagging it for your call.
+Update (`1665453`, per review): the header (and the §4 heading) now use
+`\u` escapes — `"| 文档 | 类型 | 状态 | 最近更新 |"`
+— matching the file convention and immune to the raw-CJK corruption that
+caused the original defect. Byte-verified.
 
 ---
 
-## 4. OPEN — needs owner decision: `harness.go:1116`
+## 4. RESOLVED — `harness.go:1116` (fixed in `1665453`)
 
 The **same corruption affected a second line**: the `## ` section heading
-inserted by `upsertProgressIndexRow` when appending a table to a doc that
-already has non-table content. It is mojibake **and** has a mangled
-newline (`…硵n\n` — a literal `n` before the newline).
+inserted by `upsertProgressIndexRow` when appending a table to a doc with
+existing non-table content — mojibake **and** a mangled newline (a literal
+`n` before the break).
 
-I did **not** fix it because **I don't know the intended heading text**
-(unlike the table header, which is fully determined by
-`isProgressHeaderLine`). The core re-detection bug is already resolved by
-`2ac9974`; this residual is a garbled section title on a narrower path.
-
-**Action needed:** tell me the intended heading text (and confirm the
-trailing should be `\n\n`), and I'll fix + test it. A repo-wide check
-found these were the **only two** corrupted raw-CJK lines in
-`harness.go`; the rest use `\u` escapes and are intact.
+Per review, the heading is now `## 文档进度总表` followed by `\n\n`, written
+as `\u` escapes (`"\n\n## 文档进度总表\n\n"`).
+Regression test `TestUpsertProgressIndexRowAddsHeadingAndTableForNonTableDoc`
+feeds a non-table doc and asserts the heading + a single detectable table,
+with no mojibake and no stray `n`. A repo-wide check confirmed these were
+the **only two** corrupted raw-CJK lines in `harness.go`; the rest are
+`\u` escapes and intact.
 
 ---
 
@@ -178,7 +180,10 @@ f5ea0fc test(orchestrator): guard SupersedeDraft input and kind validation
 86da720 test(docclass): cover rule validation and path normalization edges
 572e0f4 test(codexjsonl): cover transcript timestamp parsing forms
 f88f38f test(codexjsonl): cover sanitizeAgentID slug normalization
+cc70602 docs(b-line): review handoff for the loop-session batch
+1665453 fix(orchestrator): escape progress-index header, repair section heading   <-- review fix
 ```
+(plus this doc-sync commit on top.)
 
 ---
 
