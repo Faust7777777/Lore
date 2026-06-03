@@ -1,8 +1,10 @@
 package persona
 
 import (
+	"encoding/hex"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeTextNFKCAndWhitespace(t *testing.T) {
@@ -79,5 +81,61 @@ func TestDedupKeyPreservesChineseFidelity(t *testing.T) {
 	// store row can be inspected without re-running normalize.
 	if !strings.Contains(DedupKey(a), "经济管理") {
 		t.Fatalf("DedupKey lost Chinese content: %q", DedupKey(a))
+	}
+}
+
+func TestNormalizeCandidateStateDefaultsEmptyToOpen(t *testing.T) {
+	// Empty state -> Open so legacy / zero-state records land in the
+	// review queue instead of vanishing behind exact-match filters. Any
+	// explicit value -- including a future state this package doesn't
+	// know yet -- must pass through unchanged so it is never silently
+	// downgraded to Open.
+	if got := NormalizeCandidateState(""); got != PersonaCandidateOpen {
+		t.Fatalf("NormalizeCandidateState(\"\") = %q, want %q", got, PersonaCandidateOpen)
+	}
+	for _, s := range []PersonaCandidateState{
+		PersonaCandidateOpen,
+		PersonaCandidateDrafted,
+		PersonaCandidateDismissed,
+		PersonaCandidateState("some-future-state"),
+	} {
+		if got := NormalizeCandidateState(s); got != s {
+			t.Fatalf("NormalizeCandidateState(%q) = %q, want passthrough", s, got)
+		}
+	}
+}
+
+func TestNewCandidateIDFormatAndUniqueness(t *testing.T) {
+	// ID shape is "pc-<RFC3339Nano UTC>-<8 hex>": the timestamp prefix
+	// gives debuggable lexical ordering, the random suffix removes
+	// same-nanosecond collision risk. Two IDs minted at the same instant
+	// must differ; a zero time falls back to now rather than emitting the
+	// year-0001 zero stamp.
+	at := time.Date(2026, 5, 21, 8, 30, 15, 123456789, time.UTC)
+	const wantPrefix = "pc-20260521T083015.123456789Z-"
+	id := NewCandidateID(at)
+	if !strings.HasPrefix(id, wantPrefix) {
+		t.Fatalf("NewCandidateID = %q, want prefix %q", id, wantPrefix)
+	}
+	suffix := strings.TrimPrefix(id, wantPrefix)
+	if len(suffix) != 8 {
+		t.Fatalf("random suffix = %q (len %d), want 8 hex chars", suffix, len(suffix))
+	}
+	if _, err := hex.DecodeString(suffix); err != nil {
+		t.Fatalf("random suffix %q is not valid hex: %v", suffix, err)
+	}
+
+	// Same instant, different IDs (random suffix breaks the tie).
+	if a, b := NewCandidateID(at), NewCandidateID(at); a == b {
+		t.Fatalf("two IDs minted at the same instant collided: %q", a)
+	}
+
+	// Zero time falls back to now: well-formed and not the zero stamp.
+	zeroID := NewCandidateID(time.Time{})
+	if !strings.HasPrefix(zeroID, "pc-") {
+		t.Fatalf("zero-time NewCandidateID = %q, want pc- prefix", zeroID)
+	}
+	if strings.HasPrefix(zeroID, "pc-00010101T") {
+		t.Fatalf("zero time should fall back to now, got zero-stamp ID %q", zeroID)
 	}
 }

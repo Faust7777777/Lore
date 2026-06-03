@@ -328,11 +328,7 @@ func (s *Store) SummarizeUsage(day time.Time) (model.UsageSummary, error) {
 		summary.Calls++
 		summary.PromptTokens += record.PromptTokens
 		summary.CompletionTokens += record.CompletionTokens
-		stats := breakdown[record.Purpose]
-		stats.Calls++
-		stats.PromptTokens += record.PromptTokens
-		stats.CompletionTokens += record.CompletionTokens
-		breakdown[record.Purpose] = stats
+		store.AccumulateUsageBreakdown(breakdown, record.Purpose, record.Provider, record.Model, record.PromptTokens, record.CompletionTokens)
 	}
 	summary.TotalTokens = summary.PromptTokens + summary.CompletionTokens
 	if len(breakdown) > 0 {

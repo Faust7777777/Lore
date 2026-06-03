@@ -158,34 +158,158 @@ func TestSummarizeUsageBreakdownNilOnEmptyDay(t *testing.T) {
 	}
 }
 
-func TestSummarizeUsageBreakdownEmptyPurposeCollapses(t *testing.T) {
-	// Records without Purpose (pre-B-P11 / legacy) collapse into the
-	// "" bucket so they remain visible in the breakdown even though
-	// they predate the Purpose field. Backends MUST NOT drop them
-	// silently or roll them into "chat" -- the empty bucket is the
-	// honest answer.
+func TestSummarizeUsageBreakdownEmptyPurposeFoldsIntoChat(t *testing.T) {
+	// Records without Purpose (pre-B-P11 / legacy) fold into the
+	// "chat" bucket: before the Purpose field existed the operator
+	// agent was the only biller, so an unlabeled call is a chat call.
+	// A real chat-labeled record in the same day must merge with them
+	// rather than splitting into a separate bucket, so the breakdown
+	// has exactly one "chat" bucket and no "" bucket.
 	day := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
 	for _, b := range usageBackends(t) {
 		b := b
 		t.Run(b.name, func(t *testing.T) {
 			us := b.open(t)
-			if err := us.AppendUsage(model.UsageRecord{
-				RecordedAt:       day.Add(1 * time.Hour),
-				PromptTokens:     50,
-				CompletionTokens: 25,
-			}); err != nil {
-				t.Fatalf("AppendUsage: %v", err)
+			// One legacy (no Purpose) + one explicit chat record.
+			for _, r := range []model.UsageRecord{
+				{RecordedAt: day.Add(1 * time.Hour), PromptTokens: 50, CompletionTokens: 25},
+				{RecordedAt: day.Add(2 * time.Hour), PromptTokens: 10, CompletionTokens: 5, Purpose: model.UsagePurposeChat},
+			} {
+				if err := us.AppendUsage(r); err != nil {
+					t.Fatalf("AppendUsage: %v", err)
+				}
 			}
 			summary, err := us.SummarizeUsage(day)
 			if err != nil {
 				t.Fatalf("SummarizeUsage: %v", err)
 			}
-			empty, ok := summary.PurposeBreakdown[""]
-			if !ok {
-				t.Fatalf("PurposeBreakdown missing empty-purpose bucket: %+v", summary.PurposeBreakdown)
+			if _, ok := summary.PurposeBreakdown[""]; ok {
+				t.Fatalf("PurposeBreakdown must not carry an empty-string bucket: %+v", summary.PurposeBreakdown)
 			}
-			if empty.Calls != 1 || empty.PromptTokens != 50 || empty.CompletionTokens != 25 {
-				t.Fatalf("empty-purpose bucket = %+v, want {Calls:1 PromptTokens:50 CompletionTokens:25}", empty)
+			chat, ok := summary.PurposeBreakdown[model.UsagePurposeChat]
+			if !ok {
+				t.Fatalf("PurposeBreakdown missing chat bucket: %+v", summary.PurposeBreakdown)
+			}
+			if chat.Calls != 2 || chat.PromptTokens != 60 || chat.CompletionTokens != 30 {
+				t.Fatalf("chat bucket = %+v, want {Calls:2 PromptTokens:60 CompletionTokens:30} (legacy + explicit merged)", chat)
+			}
+		})
+	}
+}
+
+func TestSummarizeUsageByModelSplitsSamePurposeAcrossModels(t *testing.T) {
+	// Two models billing the same purpose must land in distinct
+	// by_model sub-buckets keyed provider/model, and their token sums
+	// must reconcile against the parent purpose bucket.
+	day := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	for _, b := range usageBackends(t) {
+		b := b
+		t.Run(b.name, func(t *testing.T) {
+			us := b.open(t)
+			for _, r := range []model.UsageRecord{
+				{RecordedAt: day.Add(1 * time.Hour), Provider: "deepseek", Model: "deepseek-v4-pro", PromptTokens: 100, CompletionTokens: 40, Purpose: model.UsagePurposeChat},
+				{RecordedAt: day.Add(2 * time.Hour), Provider: "deepseek", Model: "deepseek-v4-pro", PromptTokens: 50, CompletionTokens: 20, Purpose: model.UsagePurposeChat},
+				{RecordedAt: day.Add(3 * time.Hour), Provider: "kimi", Model: "kimi-k2", PromptTokens: 30, CompletionTokens: 10, Purpose: model.UsagePurposeChat},
+			} {
+				if err := us.AppendUsage(r); err != nil {
+					t.Fatalf("AppendUsage: %v", err)
+				}
+			}
+			summary, err := us.SummarizeUsage(day)
+			if err != nil {
+				t.Fatalf("SummarizeUsage: %v", err)
+			}
+			chat := summary.PurposeBreakdown[model.UsagePurposeChat]
+			if chat.Calls != 3 {
+				t.Fatalf("chat.Calls = %d, want 3", chat.Calls)
+			}
+			if len(chat.ByModel) != 2 {
+				t.Fatalf("chat.ByModel buckets = %d, want 2; got %+v", len(chat.ByModel), chat.ByModel)
+			}
+			ds := chat.ByModel["deepseek/deepseek-v4-pro"]
+			if ds.Calls != 2 || ds.PromptTokens != 150 || ds.CompletionTokens != 60 {
+				t.Fatalf("deepseek by_model = %+v, want {Calls:2 PromptTokens:150 CompletionTokens:60}", ds)
+			}
+			kimi := chat.ByModel["kimi/kimi-k2"]
+			if kimi.Calls != 1 || kimi.PromptTokens != 30 || kimi.CompletionTokens != 10 {
+				t.Fatalf("kimi by_model = %+v, want {Calls:1 PromptTokens:30 CompletionTokens:10}", kimi)
+			}
+			// Reconcile: sum of by_model equals the parent purpose stats.
+			var c, p, comp int
+			for _, leaf := range chat.ByModel {
+				c += leaf.Calls
+				p += leaf.PromptTokens
+				comp += leaf.CompletionTokens
+			}
+			if c != chat.Calls || p != chat.PromptTokens || comp != chat.CompletionTokens {
+				t.Fatalf("by_model sum (%d/%d/%d) != chat bucket (%d/%d/%d)", c, p, comp, chat.Calls, chat.PromptTokens, chat.CompletionTokens)
+			}
+		})
+	}
+}
+
+func TestSummarizeUsageByModelDoesNotMixAcrossPurposes(t *testing.T) {
+	// The same provider/model billing two different purposes must keep
+	// separate by_model entries under each purpose bucket -- a chat
+	// call and a persona_extract call on deepseek-v4-pro are different
+	// cost lines even though the model is identical.
+	day := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	for _, b := range usageBackends(t) {
+		b := b
+		t.Run(b.name, func(t *testing.T) {
+			us := b.open(t)
+			for _, r := range []model.UsageRecord{
+				{RecordedAt: day.Add(1 * time.Hour), Provider: "deepseek", Model: "deepseek-v4-pro", PromptTokens: 100, CompletionTokens: 40, Purpose: model.UsagePurposeChat},
+				{RecordedAt: day.Add(2 * time.Hour), Provider: "deepseek", Model: "deepseek-v4-pro", PromptTokens: 10, CompletionTokens: 5, Purpose: model.UsagePurposePersonaExtract},
+			} {
+				if err := us.AppendUsage(r); err != nil {
+					t.Fatalf("AppendUsage: %v", err)
+				}
+			}
+			summary, err := us.SummarizeUsage(day)
+			if err != nil {
+				t.Fatalf("SummarizeUsage: %v", err)
+			}
+			chatModel := summary.PurposeBreakdown[model.UsagePurposeChat].ByModel["deepseek/deepseek-v4-pro"]
+			if chatModel.Calls != 1 || chatModel.PromptTokens != 100 {
+				t.Fatalf("chat deepseek by_model = %+v, want {Calls:1 PromptTokens:100 ...}", chatModel)
+			}
+			personaModel := summary.PurposeBreakdown[model.UsagePurposePersonaExtract].ByModel["deepseek/deepseek-v4-pro"]
+			if personaModel.Calls != 1 || personaModel.PromptTokens != 10 {
+				t.Fatalf("persona deepseek by_model = %+v, want {Calls:1 PromptTokens:10 ...}", personaModel)
+			}
+		})
+	}
+}
+
+func TestSummarizeUsageByModelFallsBackToUnknown(t *testing.T) {
+	// A record missing provider AND model folds into the "unknown"
+	// by_model key; a record missing only the provider keeps the model
+	// half ("unknown/<model>"). Guards the fallback rules in
+	// UsageModelBucket across all backends.
+	day := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	for _, b := range usageBackends(t) {
+		b := b
+		t.Run(b.name, func(t *testing.T) {
+			us := b.open(t)
+			for _, r := range []model.UsageRecord{
+				{RecordedAt: day.Add(1 * time.Hour), PromptTokens: 5, CompletionTokens: 2, Purpose: model.UsagePurposeChat},
+				{RecordedAt: day.Add(2 * time.Hour), Model: "orphan-model", PromptTokens: 7, CompletionTokens: 3, Purpose: model.UsagePurposeChat},
+			} {
+				if err := us.AppendUsage(r); err != nil {
+					t.Fatalf("AppendUsage: %v", err)
+				}
+			}
+			summary, err := us.SummarizeUsage(day)
+			if err != nil {
+				t.Fatalf("SummarizeUsage: %v", err)
+			}
+			byModel := summary.PurposeBreakdown[model.UsagePurposeChat].ByModel
+			if _, ok := byModel["unknown"]; !ok {
+				t.Fatalf("missing 'unknown' by_model bucket for fully-unidentified record: %+v", byModel)
+			}
+			if _, ok := byModel["unknown/orphan-model"]; !ok {
+				t.Fatalf("missing 'unknown/orphan-model' bucket for provider-less record: %+v", byModel)
 			}
 		})
 	}

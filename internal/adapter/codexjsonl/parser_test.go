@@ -1,6 +1,7 @@
 package codexjsonl
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -151,5 +152,93 @@ func TestLoadTailConsumesOnlyCompleteLinesAndTracksOffsets(t *testing.T) {
 	}
 	if tailOffset != int64(len(initial)+1) {
 		t.Fatalf("tailOffset = %d, want %d", tailOffset, len(initial)+1)
+	}
+}
+
+func TestParseTimestampAcceptsRFC3339Forms(t *testing.T) {
+	// Event timestamps drive session-window bucketing, so parseTimestamp
+	// must accept both RFC3339 and RFC3339Nano, tolerate surrounding
+	// whitespace, and reject blank / non-timestamp input rather than
+	// silently bucketing into the zero time.
+	want := time.Date(2026, 5, 21, 8, 30, 15, 0, time.UTC)
+	for _, in := range []string{
+		"2026-05-21T08:30:15Z",
+		"2026-05-21T08:30:15.000Z",
+		"  2026-05-21T08:30:15Z  ",
+	} {
+		got, err := parseTimestamp(in)
+		if err != nil {
+			t.Fatalf("parseTimestamp(%q) error = %v", in, err)
+		}
+		if !got.Equal(want) {
+			t.Fatalf("parseTimestamp(%q) = %v, want %v", in, got, want)
+		}
+	}
+	for _, bad := range []string{"", "   ", "not-a-time", "2026/05/21"} {
+		if _, err := parseTimestamp(bad); err == nil {
+			t.Fatalf("parseTimestamp(%q) error = nil, want error", bad)
+		}
+	}
+}
+
+func TestParseUnixishHandlesIntFloatAndStringForms(t *testing.T) {
+	// Provider transcripts spell timestamps inconsistently, so parseUnixish
+	// accepts an int (epoch seconds), a float (truncated to seconds), a
+	// >=13-digit string (epoch millis), or an RFC3339 string -- and errors
+	// on anything else instead of guessing.
+	const sec = int64(1716280215)
+	cases := []struct {
+		name string
+		raw  string
+		want int64 // expected .Unix()
+	}{
+		{"int seconds", "1716280215", sec},
+		{"float seconds truncates", "1716280215.9", sec},
+		{"epoch millis string", `"1700000000000"`, 1700000000},
+		{"rfc3339 string", `"2026-05-21T08:30:15Z"`, time.Date(2026, 5, 21, 8, 30, 15, 0, time.UTC).Unix()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseUnixish(json.RawMessage(tc.raw))
+			if err != nil {
+				t.Fatalf("parseUnixish(%s) error = %v", tc.raw, err)
+			}
+			if got.Unix() != tc.want {
+				t.Fatalf("parseUnixish(%s).Unix() = %d, want %d", tc.raw, got.Unix(), tc.want)
+			}
+		})
+	}
+	for _, bad := range []string{`""`, `"   "`, `"garbage"`, `true`, `{}`} {
+		if _, err := parseUnixish(json.RawMessage(bad)); err == nil {
+			t.Fatalf("parseUnixish(%s) error = nil, want error", bad)
+		}
+	}
+}
+
+func TestSanitizeAgentIDNormalizesToSafeSlug(t *testing.T) {
+	// Agent IDs become directory/file names and attribution keys, so
+	// sanitizeAgentID lowercases, turns spaces into dashes, keeps only
+	// [a-z0-9-_], drops everything else, and trims leading/trailing
+	// separators. A regression here misfiles or collides imported
+	// sessions. (ASCII-only cases; the drop-branch is the same for any
+	// non-[a-z0-9-_ ] rune.)
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"Claude", "claude"},               // lowercased
+		{"Claude Code", "claude-code"},      // space -> dash
+		{"  Cursor-IDE_v2  ", "cursor-ide_v2"}, // trimmed, separators kept
+		{"claude.code!", "claudecode"},      // '.' and '!' dropped
+		{"-_trim-_", "trim"},                // leading/trailing separators trimmed
+		{"a  b", "a--b"},                    // each space becomes a dash (no collapse)
+		{"@#$", ""},                         // all-invalid -> empty
+		{"", ""},
+		{"   ", ""},
+	}
+	for _, tc := range cases {
+		if got := sanitizeAgentID(tc.in); got != tc.want {
+			t.Fatalf("sanitizeAgentID(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }

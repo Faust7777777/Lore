@@ -1113,7 +1113,7 @@ func upsertProgressIndexRow(current []byte, row string) ([]byte, error) {
 		if trimmed == "" {
 			return []byte(progressIndexTableBlock(row) + "\n"), nil
 		}
-		return []byte(strings.TrimRight(text, "\n") + "\n\n## 闁煎浜滄慨鈺呭触鐏炵虎鍔勯悹浣规緲缂嶅硵n\n" + progressIndexTableBlock(row) + "\n"), nil
+		return []byte(strings.TrimRight(text, "\n") + "\n\n## \u6587\u6863\u8fdb\u5ea6\u603b\u8868\n\n" + progressIndexTableBlock(row) + "\n"), nil
 	}
 
 	replaced := false
@@ -1137,7 +1137,7 @@ func upsertProgressIndexRow(current []byte, row string) ([]byte, error) {
 
 func progressIndexTableBlock(row string) string {
 	return strings.Join([]string{
-		"| 闁哄倸娲﹂妴?| 缂侇偉顕ч悗?| 闁绘鍩栭埀?| 闁哄牃鍋撻弶鈺傚灦濞插潡寮?|",
+		"| \u6587\u6863 | \u7c7b\u578b | \u72b6\u6001 | \u6700\u8fd1\u66f4\u65b0 |",
 		"| --- | --- | --- | --- |",
 		row,
 	}, "\n")

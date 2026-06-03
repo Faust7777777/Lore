@@ -1707,3 +1707,173 @@ func writeVaultFile(t *testing.T, cfg config.Config, relPath string, content str
 	}
 	return data, hash, nil
 }
+
+func TestProgressIndexTableBlockHeaderIsRecognized(t *testing.T) {
+	// Regression: progressIndexTableBlock must emit a header that
+	// isProgressHeaderLine accepts. If it does not, a freshly-created
+	// progress table can never be found again, so later upserts append
+	// duplicate tables instead of updating rows. progressIndexTableBlock
+	// had 0% coverage, so a corrupt header literal slipped through.
+	block := progressIndexTableBlock("| notes/db.md | system | synced | 2026-05-29 10:00 |")
+	header := strings.SplitN(block, "\n", 2)[0]
+	if !isProgressHeaderLine(header) {
+		t.Fatalf("generated progress-index header not recognized by isProgressHeaderLine:\n%q", header)
+	}
+}
+
+func TestUpsertProgressIndexRowReplacesSameDocInsteadOfDuplicating(t *testing.T) {
+	// Creating a table then upserting another row for the same first
+	// column must update that row in place and keep a single table -- the
+	// downstream payoff of the header round-trip. Guards the duplicate-
+	// table regression end to end.
+	first, err := upsertProgressIndexRow(nil, "| notes/db.md | system | synced | 2026-05-29 10:00 |")
+	if err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	second, err := upsertProgressIndexRow(first, "| notes/db.md | system | synced | 2026-05-29 11:00 |")
+	if err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	out := string(second)
+	if n := strings.Count(out, "| --- | --- | --- | --- |"); n != 1 {
+		t.Fatalf("expected exactly one table (one separator row), got %d:\n%s", n, out)
+	}
+	if c := strings.Count(out, "notes/db.md"); c != 1 {
+		t.Fatalf("the doc row should appear once (replaced in place), got %d:\n%s", c, out)
+	}
+	if !strings.Contains(out, "2026-05-29 11:00") {
+		t.Fatalf("second upsert should update the row to the new timestamp:\n%s", out)
+	}
+}
+
+func TestDraftReviewActionsRejectNonPendingDraft(t *testing.T) {
+	// ApproveDraft / RejectDraft / RequestDraftRevision are review-queue
+	// actions: each must refuse a draft that is not pending review, with
+	// the ErrDraftNotReady sentinel the CLI surfaces. The happy paths are
+	// covered elsewhere; the wrong-state precheck and the GetDraft-error
+	// branch were the untested 33%.
+	cfg := config.Default(t.TempDir())
+	st := memory.New()
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	at := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+	// Seed a draft already past review (Approved); review actions must reject it.
+	draft := model.Draft{
+		ID:    "draft-not-pending",
+		Kind:  model.DraftKindMarkdownNoteWrite,
+		State: model.DraftApproved,
+		Target: model.DocumentRef{
+			Path:        "03-notes/x.md",
+			Class:       model.DocClassNote,
+			BaseVersion: model.DraftBaseVersionNewFile,
+		},
+		Title:           "seed",
+		Summary:         "fixture",
+		ProposedContent: "{}",
+		CreatedAt:       at,
+		UpdatedAt:       at,
+	}
+	if err := st.Drafts().SaveDraft(draft); err != nil {
+		t.Fatalf("SaveDraft() error = %v", err)
+	}
+
+	actions := []struct {
+		name string
+		call func(string, time.Time) (model.Draft, error)
+	}{
+		{"approve", h.ApproveDraft},
+		{"reject", h.RejectDraft},
+		{"request_revision", h.RequestDraftRevision},
+	}
+	for _, a := range actions {
+		t.Run(a.name, func(t *testing.T) {
+			if _, err := a.call(draft.ID, at.Add(time.Minute)); !errors.Is(err, ErrDraftNotReady) {
+				t.Fatalf("%s on an approved draft = %v, want ErrDraftNotReady", a.name, err)
+			}
+		})
+	}
+
+	// A review action on a missing draft surfaces the store error (the
+	// GetDraft-error branch), not ErrDraftNotReady.
+	if _, err := h.ApproveDraft("does-not-exist", at); err == nil {
+		t.Fatal("ApproveDraft on a missing id = nil, want a store error")
+	}
+}
+
+func TestSupersedeDraftValidatesInputAndKind(t *testing.T) {
+	// SupersedeDraft is the mutate-in-place review action: it requires
+	// both proposed_content and reason, and only applies to markdown-note
+	// drafts. Guards the early validation branches (the happy path is
+	// covered; these error returns were the gap).
+	cfg := config.Default(t.TempDir())
+	st := memory.New()
+	h, err := New(cfg, st)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	at := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+
+	// Missing content or reason: rejected before any store lookup.
+	for _, bad := range []model.DraftSupersedeUpdate{
+		{ProposedContent: "", Reason: "r"},
+		{ProposedContent: "c", Reason: ""},
+	} {
+		_, err := h.SupersedeDraft("any-id", bad, at)
+		if err == nil || !strings.Contains(err.Error(), "proposed_content and reason") {
+			t.Fatalf("SupersedeDraft(%+v) error = %v, want proposed_content/reason required", bad, err)
+		}
+	}
+
+	// A non-markdown-note draft cannot be superseded.
+	draft := model.Draft{
+		ID:    "persona-draft",
+		Kind:  model.DraftKindPersonaUpdate,
+		State: model.DraftPendingReview,
+		Target: model.DocumentRef{
+			Path:        "0-x/persona.md",
+			Class:       model.DocClassPersona,
+			BaseVersion: "v1",
+		},
+		Title:           "seed",
+		Summary:         "fixture",
+		ProposedContent: "{}",
+		CreatedAt:       at,
+		UpdatedAt:       at,
+	}
+	if err := st.Drafts().SaveDraft(draft); err != nil {
+		t.Fatalf("SaveDraft() error = %v", err)
+	}
+	good := model.DraftSupersedeUpdate{ProposedContent: "new content", Reason: "because"}
+	if _, err := h.SupersedeDraft(draft.ID, good, at); !errors.Is(err, ErrUnsupportedDraft) {
+		t.Fatalf("SupersedeDraft on a persona-kind draft = %v, want ErrUnsupportedDraft", err)
+	}
+}
+
+func TestUpsertProgressIndexRowAddsHeadingAndTableForNonTableDoc(t *testing.T) {
+	// Review regression: appending a progress row to a doc that already
+	// has non-table content must insert the section heading then the
+	// table -- not the previously corrupted heading (mojibake plus a stray
+	// literal n before the newline). Heading uses unicode escapes per the
+	// file convention.
+	const heading = "## \u6587\u6863\u8fdb\u5ea6\u603b\u8868"
+	out, err := upsertProgressIndexRow([]byte("# changed externally\n"), "| notes/db.md | system | synced | 2026-05-29 10:00 |")
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, heading) {
+		t.Fatalf("missing heading %q:\n%s", heading, s)
+	}
+	if !strings.Contains(s, heading+"\n\n| ") {
+		t.Fatalf("heading not followed by a blank line + table:\n%s", s)
+	}
+	if strings.Contains(s, heading+"n") {
+		t.Fatalf("stray literal n after the heading (the old corruption):\n%s", s)
+	}
+	if c := strings.Count(s, "| --- | --- | --- | --- |"); c != 1 {
+		t.Fatalf("want exactly one table, got %d:\n%s", c, s)
+	}
+}
