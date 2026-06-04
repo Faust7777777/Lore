@@ -4,13 +4,21 @@ import (
 	"testing"
 	"time"
 
+	"obsidian-harness/internal/config"
 	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/store/memory"
 )
 
+// trackingConfig enables usage.track_usage so bare test Runtimes record
+// usage; a zero-value Config has TrackUsage=false, which now (correctly)
+// disables recording.
+func trackingConfig() config.Config {
+	return config.Config{Usage: config.UsageConfig{TrackUsage: true}}
+}
+
 func TestRuntimeRecordUsageAppendsAllRecords(t *testing.T) {
 	store := memory.New()
-	runtime := &Runtime{Store: store}
+	runtime := &Runtime{Store: store, Config: trackingConfig()}
 
 	day := time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)
 	records := []model.UsageRecord{
@@ -37,7 +45,7 @@ func TestRuntimeRecordUsageAppendsAllRecords(t *testing.T) {
 }
 
 func TestRuntimeRecordUsageEmptyIsNoOp(t *testing.T) {
-	runtime := &Runtime{Store: memory.New()}
+	runtime := &Runtime{Store: memory.New(), Config: trackingConfig()}
 	if err := runtime.RecordUsage(nil); err != nil {
 		t.Fatalf("RecordUsage(nil) error = %v", err)
 	}
@@ -56,7 +64,7 @@ func TestRuntimeSummarizeUsageBucketsAcrossUTCBoundary(t *testing.T) {
 	t.Cleanup(func() { time.Local = originalLocal })
 	time.Local = time.FixedZone("CST", 8*3600)
 
-	runtime := &Runtime{Store: memory.New()}
+	runtime := &Runtime{Store: memory.New(), Config: trackingConfig()}
 	// 2026-05-17 16:30 UTC == 2026-05-18 00:30 +0800 local.
 	recordedUTC := time.Date(2026, 5, 17, 16, 30, 0, 0, time.UTC)
 	if err := runtime.RecordUsage([]model.UsageRecord{{
@@ -90,5 +98,30 @@ func TestRuntimeSummarizeUsageBucketsAcrossUTCBoundary(t *testing.T) {
 	}
 	if prev.Calls != 0 {
 		t.Fatalf("yesterday summary should be empty, got %+v", prev)
+	}
+}
+
+func TestRuntimeRecordUsageRespectsTrackUsageDisabled(t *testing.T) {
+	// usage.track_usage = false must actually disable recording: an
+	// operator who opts out of billing capture should get zero usage rows.
+	// Previously the flag was parsed/validated but never enforced, so
+	// RecordUsage wrote rows regardless. RecordUsage is the single gate so
+	// chat, persona_extract, and process_sink billers all honour it.
+	store := memory.New()
+	runtime := &Runtime{Store: store, Config: config.Config{Usage: config.UsageConfig{TrackUsage: false}}}
+
+	day := time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)
+	if err := runtime.RecordUsage([]model.UsageRecord{
+		{Provider: "openai-compatible", Model: "gpt-x", AgentID: "codex", SessionID: "s1", PromptTokens: 30, CompletionTokens: 4, RecordedAt: day},
+	}); err != nil {
+		t.Fatalf("RecordUsage() error = %v", err)
+	}
+
+	summary, err := store.Usage().SummarizeUsage(day)
+	if err != nil {
+		t.Fatalf("SummarizeUsage() error = %v", err)
+	}
+	if summary.Calls != 0 || summary.TotalTokens != 0 {
+		t.Fatalf("track_usage=false should record nothing, got %d calls / %d tokens", summary.Calls, summary.TotalTokens)
 	}
 }
