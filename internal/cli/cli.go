@@ -141,6 +141,8 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 		return runPersonaCommand(args[1:], stdout, stderr)
 	case "usage":
 		return runUsageCommand(args[1:], stdout, stderr)
+	case "inbox":
+		return runInboxCommand(args[1:], stdout, stderr)
 	case "process-sink":
 		return runProcessSinkCommand(args[1:], stdout, stderr)
 	case "smoke":
@@ -195,6 +197,7 @@ Command:
 
 Commands:
   status [workdir]     Render the current text status view
+  inbox [workdir]      Unified operator queue: pending drafts, open findings, persona candidates
   bootstrap [workdir]  Scaffold the managed vault skeleton
   demo-p0a [workdir]   Run the managed doc -> draft -> apply demo chain
   demo-p0b [workdir]   Run the checkpoint -> daily report demo chain
