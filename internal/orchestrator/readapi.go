@@ -477,10 +477,16 @@ func cloneExcerptPtr(doc *model.VaultDocument, limit int) *model.VaultDocument {
 
 func excerpt(value string, limit int) string {
 	value = strings.TrimSpace(value)
-	if limit <= 0 || len(value) <= limit {
+	if limit <= 0 {
 		return value
 	}
-	return value[:limit] + "..."
+	// Slice by rune, not byte: a byte slice can split a multibyte UTF-8
+	// character (e.g. Chinese vault content) and emit an invalid sequence.
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit]) + "..."
 }
 
 func dedupeHits(hits []model.SearchHit, limit int) []model.SearchHit {

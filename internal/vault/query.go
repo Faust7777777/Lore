@@ -586,8 +586,11 @@ func pathBase(value string) string {
 
 func trimPreview(value string) string {
 	value = strings.TrimSpace(value)
-	if len(value) > 180 {
-		return value[:180] + "..."
+	// Rune-safe: search/backlink previews include Chinese; a 180-byte slice
+	// could split a multibyte character into an invalid UTF-8 sequence.
+	runes := []rune(value)
+	if len(runes) > 180 {
+		return string(runes[:180]) + "..."
 	}
 	return value
 }

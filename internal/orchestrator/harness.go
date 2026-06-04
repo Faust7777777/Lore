@@ -1079,8 +1079,11 @@ func summarizeContent(content []byte) string {
 	if preview == "" {
 		return "no preview"
 	}
-	if len(preview) > 80 {
-		return preview[:80] + "..."
+	// Rune-safe truncation so a multibyte (Chinese) character at the 80-byte
+	// boundary is not split into an invalid UTF-8 sequence.
+	runes := []rune(preview)
+	if len(runes) > 80 {
+		return string(runes[:80]) + "..."
 	}
 	return preview
 }

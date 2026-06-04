@@ -250,8 +250,14 @@ func extractJSONObject(content string) (string, error) {
 
 func truncateForSummary(value string, limit int) string {
 	value = strings.TrimSpace(value)
-	if limit <= 0 || len(value) <= limit {
+	if limit <= 0 {
 		return value
 	}
-	return value[:limit] + "..."
+	// Slice by rune, not byte: transcripts are often Chinese, and a byte
+	// slice can split a multibyte character before it reaches the LLM.
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit]) + "..."
 }
