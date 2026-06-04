@@ -123,8 +123,28 @@ regression tests.
 - **Watchers** (`vault_watcher.go`, `single_file_watcher.go`) — daemon
   infra; reviewed read-only this session, found sound, left untouched.
 
+## Flagged for owner — reviewed, deliberately not changed
+
+Domain-layer findings that are *not* bugs but warrant an owner decision
+(changing them is an owner-level call, not a B-line bugfix):
+
+- **Dead `drafts.Draft` struct API** — `New` / `SubmitForReview` / `Approve`
+  / `Apply` / `Params` / `Review` / `Source` in `internal/domain/drafts` have
+  no non-test consumers; the orchestrator uses `model.Draft` +
+  `ValidateTransition` directly. Consistent with `CanTransition` (a strict
+  subset), so not a landmine — but an unused parallel state machine. Delete,
+  or keep as a deliberate domain/SDK extension point?
+- **Classifier filename-driven rules** — `docclass.RecommendedRules` plan
+  rules set `RequireFileNameMatch` but not `RequirePathMatch`, so a `*week*`
+  / `*checkpoint*` file *anywhere* classifies as a plan (and is then denied
+  low-risk direct write). The match *code* is correct; this is a config/
+  A-line tuning question.
+- **`allowsLowRiskDirectWrite` permits `DocClassUnknown`** — permissive but
+  backstopped by audit + the out-of-band-write finding (see review scope).
+
 ## Boundary assertion
 
-Only B-line files touched: `internal/app/*`, `internal/cli/*`, one
+Only B-line files touched: `internal/app/*`, `internal/cli/*`,
+`internal/orchestrator/*`, `internal/persona/*`, one
 `cmd/obsidian-harness/*_test.go`, and `docs/*`. The 13 A/TUI WIP files in the
 working tree were left unstaged and unmodified throughout.
