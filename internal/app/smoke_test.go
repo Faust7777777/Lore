@@ -299,3 +299,11 @@ func (emptyCheckpointSummarySummarizer) SummarizeDaily(agentID string, _ time.Ti
 	}
 	return agentID + " daily report", "- checkpoint fallback was materialized", nil
 }
+
+func (e emptyCheckpointSummarySummarizer) SummarizeCheckpointContext(_ context.Context, window codexjsonl.WindowSummary) (string, string, error) {
+	return e.SummarizeCheckpoint(window)
+}
+
+func (e emptyCheckpointSummarySummarizer) SummarizeDailyContext(_ context.Context, agentID string, day time.Time, checkpoints []model.CheckpointDoc) (string, string, error) {
+	return e.SummarizeDaily(agentID, day, checkpoints)
+}

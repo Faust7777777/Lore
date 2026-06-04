@@ -224,3 +224,37 @@ func TestAttachUsageSinkWiresModelBackedSummarizer(t *testing.T) {
 		t.Fatalf("usage records = %d, want 1", len(sunk))
 	}
 }
+
+type ctxAwareProcessSinkClient struct{}
+
+func (ctxAwareProcessSinkClient) ChatCompletion(ctx context.Context, _ openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return openai.ChatCompletionResponse{}, err
+	}
+	return openai.ChatCompletionResponse{Content: `{"title":"t","content":"c"}`}, nil
+}
+
+func TestSummarizeContextVariantsPropagateCancellation(t *testing.T) {
+	// The Context variants thread the caller's context to the model call,
+	// so a cancelled context aborts summarization instead of running to
+	// completion -- the basis for cancelling a large `lore import`
+	// mid-flight. (The non-context methods still use context.Background()
+	// until callers are wired in slice 2.)
+	s := &modelProcessSinkSummarizer{client: ctxAwareProcessSinkClient{}, provider: "test", model: "test-model"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := s.SummarizeCheckpointContext(ctx, newCheckpointWindow()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("SummarizeCheckpointContext(cancelled) = %v, want context.Canceled", err)
+	}
+	day := time.Date(2026, 4, 22, 0, 0, 0, 0, time.UTC)
+	checkpoints := []model.CheckpointDoc{{Window: model.SessionWindow{AgentID: "codex"}, Title: "t"}}
+	if _, _, err := s.SummarizeDailyContext(ctx, "codex", day, checkpoints); !errors.Is(err, context.Canceled) {
+		t.Fatalf("SummarizeDailyContext(cancelled) = %v, want context.Canceled", err)
+	}
+
+	// Sanity: a live context summarizes without error.
+	if _, _, err := s.SummarizeCheckpointContext(context.Background(), newCheckpointWindow()); err != nil {
+		t.Fatalf("SummarizeCheckpointContext(live) error = %v", err)
+	}
+}

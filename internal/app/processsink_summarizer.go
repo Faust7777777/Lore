@@ -16,6 +16,13 @@ import (
 type ProcessSinkSummarizer interface {
 	SummarizeCheckpoint(window codexjsonl.WindowSummary) (string, string, error)
 	SummarizeDaily(agentID string, day time.Time, checkpoints []model.CheckpointDoc) (string, string, error)
+	// Context variants thread a caller's context.Context to the model
+	// call so a long-running summarization (e.g. a large `lore import`)
+	// can be cancelled mid-flight. The non-context methods above delegate
+	// to these with context.Background() for callers that do not yet
+	// thread one.
+	SummarizeCheckpointContext(ctx context.Context, window codexjsonl.WindowSummary) (string, string, error)
+	SummarizeDailyContext(ctx context.Context, agentID string, day time.Time, checkpoints []model.CheckpointDoc) (string, string, error)
 }
 
 type processSinkChatClient interface {
@@ -72,6 +79,10 @@ func attachUsageSink(summarizer ProcessSinkSummarizer, sink func(model.UsageReco
 }
 
 func (s *modelProcessSinkSummarizer) SummarizeCheckpoint(window codexjsonl.WindowSummary) (string, string, error) {
+	return s.SummarizeCheckpointContext(context.Background(), window)
+}
+
+func (s *modelProcessSinkSummarizer) SummarizeCheckpointContext(ctx context.Context, window codexjsonl.WindowSummary) (string, string, error) {
 	if strings.TrimSpace(window.RawTranscript) == "" {
 		return "", "", nil
 	}
@@ -86,10 +97,14 @@ func (s *modelProcessSinkSummarizer) SummarizeCheckpoint(window codexjsonl.Windo
 		truncateForSummary(window.Content, 2400),
 		truncateForSummary(window.RawTranscript, 6000),
 	)
-	return s.runSummaryPrompt(checkpointSummarySystemPrompt(), prompt, window.Window.AgentID, window.Window.SessionID)
+	return s.runSummaryPrompt(ctx, checkpointSummarySystemPrompt(), prompt, window.Window.AgentID, window.Window.SessionID)
 }
 
 func (s *modelProcessSinkSummarizer) SummarizeDaily(agentID string, day time.Time, checkpoints []model.CheckpointDoc) (string, string, error) {
+	return s.SummarizeDailyContext(context.Background(), agentID, day, checkpoints)
+}
+
+func (s *modelProcessSinkSummarizer) SummarizeDailyContext(ctx context.Context, agentID string, day time.Time, checkpoints []model.CheckpointDoc) (string, string, error) {
 	if len(checkpoints) == 0 {
 		return "", "", nil
 	}
@@ -115,12 +130,12 @@ func (s *modelProcessSinkSummarizer) SummarizeDaily(agentID string, day time.Tim
 	)
 	// Daily summaries have no natural session identifier; leave SessionID empty
 	// rather than synthesizing one.
-	return s.runSummaryPrompt(dailySummarySystemPrompt(), prompt, agentID, "")
+	return s.runSummaryPrompt(ctx, dailySummarySystemPrompt(), prompt, agentID, "")
 }
 
-func (s *modelProcessSinkSummarizer) runSummaryPrompt(system string, user string, agentID string, sessionID string) (string, string, error) {
+func (s *modelProcessSinkSummarizer) runSummaryPrompt(ctx context.Context, system string, user string, agentID string, sessionID string) (string, string, error) {
 	startedAt := time.Now().UTC()
-	resp, err := s.client.ChatCompletion(context.Background(), openai.ChatCompletionRequest{
+	resp, err := s.client.ChatCompletion(ctx, openai.ChatCompletionRequest{
 		Messages: []openai.Message{
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},

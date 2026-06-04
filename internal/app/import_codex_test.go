@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -932,4 +933,12 @@ func (fakeProcessSinkSummarizer) SummarizeDaily(agentID string, _ time.Time, che
 		lines = append(lines, "- no checkpoints recorded")
 	}
 	return fmt.Sprintf("%s daily report", agentID), strings.Join(lines, "\n"), nil
+}
+
+func (f fakeProcessSinkSummarizer) SummarizeCheckpointContext(_ context.Context, window codexjsonl.WindowSummary) (string, string, error) {
+	return f.SummarizeCheckpoint(window)
+}
+
+func (f fakeProcessSinkSummarizer) SummarizeDailyContext(_ context.Context, agentID string, day time.Time, checkpoints []model.CheckpointDoc) (string, string, error) {
+	return f.SummarizeDaily(agentID, day, checkpoints)
 }
