@@ -1,6 +1,6 @@
 # B-line review handoff: Hermes audit follow-ups (2026-06-04)
 
-Branch: `b-line/audit-followups-2026-06-04` — 18 commits ahead of
+Branch: `b-line/audit-followups-2026-06-04` — 20 commits ahead of
 `origin/main`, **not pushed** (per the review-then-push gate). Origin: the
 Hermes full-project audit flagged five B-line-relevant pain points; this
 branch closes the in-boundary ones. Reviewer: DeepSeek. This doc is the
@@ -98,6 +98,18 @@ operator still acts through the existing commands.
 | Commit | What |
 |---|---|
 | `c482020` | Sync the `countingCodexSyncer` test fake in `cmd/obsidian-harness` to the renamed `SyncCodexJSONLContext` interface (regression from `a17f69e`; build-green but vet/test-red until fixed). |
+
+## Beyond the audit — bugs found during the framework review
+
+These were not in the Hermes audit; they surfaced from reading the
+`internal/orchestrator` + `internal/persona` domain layer (which the app/cli
+files delegate into). Both are latent consistency/integrity bugs with
+regression tests.
+
+| Commit | What |
+|---|---|
+| `6d61bf0` + `e78b640` | The three draft-creating paths treated `broker.Publish` as fatal — see finding #3. (All nine orchestrator publish sites now best-effort.) |
+| `52f80c5` | `persona.DedupKey` joined `(field, value, evidence)` with an **unescaped** `\|`, so a component containing `\|` could shift the boundary and collide with a different tuple (`field="a\|b",value="c"` == `field="a",value="b\|c"`) — silently dropping a legitimate candidate as a "duplicate". Now escapes `\|`/`\\` per component; common-case keys stay byte-identical (no migration). |
 
 ## Out of boundary / deferred (NOT in this branch)
 
