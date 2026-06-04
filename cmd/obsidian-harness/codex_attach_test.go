@@ -81,7 +81,7 @@ type countingCodexSyncer struct {
 	onSync func(count int)
 }
 
-func (c *countingCodexSyncer) SyncCodexJSONL(_ app.ImportCodexJSONLParams, _ time.Time) (app.SyncCodexJSONLResult, error) {
+func (c *countingCodexSyncer) SyncCodexJSONLContext(_ context.Context, _ app.ImportCodexJSONLParams, _ time.Time) (app.SyncCodexJSONLResult, error) {
 	c.mu.Lock()
 	c.count++
 	count := c.count
