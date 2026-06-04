@@ -213,15 +213,18 @@ func (h *Harness) ProposePersonaUpdate(proposal model.PersonaUpdateProposal, at 
 	if err := h.store.Drafts().SaveDraft(draft); err != nil {
 		return model.PersonaUpdateProposalResult{}, err
 	}
-	if err := h.broker.Publish(context.Background(), hruntime.Event{
+	// Best-effort: the draft is already durably saved, so an event-bus
+	// hiccup must not fail the proposal and skip the audit below -- that
+	// would tell the agent it failed and provoke a duplicate-draft retry,
+	// while leaving a draft with no audit record. Mirrors the best-effort
+	// publish in transitionDraftState / SupersedeDraft / IngestSessionWindow.
+	_ = h.broker.Publish(context.Background(), hruntime.Event{
 		ID:         draft.ID,
 		Type:       hruntime.EventDraftCreated,
 		Source:     "persona_update_propose",
 		OccurredAt: at,
 		Payload:    draft,
-	}); err != nil {
-		return model.PersonaUpdateProposalResult{}, err
-	}
+	})
 	h.recordAudit(model.AuditRecord{
 		ID:            auditID("persona-update-proposed", at),
 		Kind:          model.AuditDraftCreated,
@@ -286,15 +289,16 @@ func (h *Harness) ProposeMarkdownNote(proposal model.MarkdownNoteProposal, at ti
 	if err := h.store.Drafts().SaveDraft(draft); err != nil {
 		return model.MarkdownNoteProposalResult{}, err
 	}
-	if err := h.broker.Publish(context.Background(), hruntime.Event{
+	// Best-effort publish, same rationale as ProposePersonaUpdate: the draft
+	// is saved, so a broker failure must not fail the proposal / skip the
+	// audit / invite a duplicate-draft retry.
+	_ = h.broker.Publish(context.Background(), hruntime.Event{
 		ID:         draft.ID,
 		Type:       hruntime.EventDraftCreated,
 		Source:     "markdown_note_propose",
 		OccurredAt: at,
 		Payload:    draft,
-	}); err != nil {
-		return model.MarkdownNoteProposalResult{}, err
-	}
+	})
 	h.recordAudit(model.AuditRecord{
 		ID:            auditID("markdown-note-proposed", at),
 		Kind:          model.AuditDraftCreated,
