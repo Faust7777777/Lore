@@ -38,7 +38,12 @@ func (r *Runtime) updateFindingState(id string, state model.FindingState, action
 			"action":     action,
 		},
 	}); err != nil {
-		return model.Finding{}, err
+		// The state change already committed; do not report it as a total
+		// failure (an empty finding). Return the updated finding plus a
+		// descriptive error so the caller knows the primary effect landed
+		// even though the audit trail is incomplete. Mirrors the harness's
+		// best-effort recordAudit rather than inverting the result.
+		return finding, fmt.Errorf("finding %s moved to %s but the audit record failed: %w", finding.ID, finding.State, err)
 	}
 	return finding, nil
 }

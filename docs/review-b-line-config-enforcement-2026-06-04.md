@@ -83,11 +83,14 @@ audit trail is missing the change.
 
 This contradicts the codebase's own pattern: `orchestrator/harness.go
 recordAudit` treats audit as best-effort (marks health-error, does not
-fail the primary operation). Recommended fix: align `updateFindingState`
-so a committed state change is not reported as total failure -- at minimum
-return the updated finding (not a zero value) with a descriptive error.
-Doing it cleanly wants an app-layer best-effort-audit seam (the Runtime
-calls the store's Audit directly today), and a test needs a fake store
-whose Audit fails while Findings succeeds -- a small but non-trivial
-slice, flagged here rather than rushed.
+fail the primary operation).
+
+**FIXED (this branch).** `updateFindingState` now returns the committed
+finding plus a descriptive error ("finding X moved to Y but the audit
+record failed: ...") instead of an empty finding, so a committed state
+change is no longer reported as a total failure -- the operator can see
+the change landed even when the audit trail is incomplete. Tested with a
+fake store whose Audit fails while Findings succeeds. (Full atomicity
+across the two writes would need cross-store transactions -- out of scope;
+this fixes the operator-facing harm, the misleading result.)
 

@@ -1,14 +1,33 @@
 package app
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
 	"obsidian-harness/internal/model"
+	"obsidian-harness/internal/store"
 	"obsidian-harness/internal/store/memory"
 )
+
+// auditFailingStateStore wraps a real StateStore but hands out an Audit
+// store whose AppendAudit always fails, so a test can exercise the
+// state-changed-but-audit-failed path.
+type auditFailingStateStore struct {
+	store.StateStore
+}
+
+func (auditFailingStateStore) Audit() store.AuditStore { return failingAuditStore{} }
+
+type failingAuditStore struct{}
+
+func (failingAuditStore) AppendAudit(model.AuditRecord) error {
+	return errors.New("audit store unavailable")
+}
+
+func (failingAuditStore) ListAudit(int) ([]model.AuditRecord, error) { return nil, nil }
 
 func TestResolveAndIgnoreFindingWriteStateAndAudit(t *testing.T) {
 	// ResolveFinding / IgnoreFinding move an open finding to its terminal
@@ -123,5 +142,45 @@ func TestFindingStateAuditIDSanitizesAndBounds(t *testing.T) {
 	}
 	if truncateFindingIDRunes("short", 80) != "short" {
 		t.Fatal("input under the limit should be returned unchanged")
+	}
+}
+
+func TestUpdateFindingStateReturnsFindingWhenAuditFails(t *testing.T) {
+	// Write-then-audit consistency: when the state change commits but the
+	// audit append fails, the operation must surface the committed change
+	// (the updated finding) with a clear error -- not an empty finding
+	// implying nothing happened. Aligns with the harness's best-effort
+	// recordAudit instead of inverting the result.
+	mem := memory.New()
+	if err := mem.Findings().SaveFinding(model.Finding{
+		ID:         "f1",
+		Kind:       model.FindingOutOfBandVaultWrite,
+		State:      model.FindingOpen,
+		Severity:   model.FindingSeverityInfo,
+		Title:      "seed",
+		Summary:    "fixture",
+		Source:     "test",
+		Target:     model.DocumentRef{Path: "0-x/y.md"},
+		DetectedAt: time.Now(),
+		UpdatedAt:  time.Now(),
+	}); err != nil {
+		t.Fatalf("SaveFinding: %v", err)
+	}
+	r := &Runtime{Store: auditFailingStateStore{StateStore: mem}}
+
+	finding, err := r.ResolveFinding("f1")
+	if err == nil {
+		t.Fatal("ResolveFinding must surface the audit failure")
+	}
+	if !strings.Contains(err.Error(), "audit") {
+		t.Fatalf("error should name the audit failure, got %v", err)
+	}
+	// The state change committed despite the audit failure: the returned
+	// finding reflects it (not a zero value).
+	if finding.State != model.FindingResolved {
+		t.Fatalf("returned finding state = %q, want resolved (the change committed)", finding.State)
+	}
+	if finding.ID != "f1" {
+		t.Fatalf("returned finding ID = %q, want f1 (not a zero value)", finding.ID)
 	}
 }
