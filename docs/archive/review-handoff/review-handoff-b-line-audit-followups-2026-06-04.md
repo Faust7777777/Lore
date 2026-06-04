@@ -1,11 +1,19 @@
 # B-line review handoff: Hermes audit follow-ups (2026-06-04)
 
-Branch: `b-line/audit-followups-2026-06-04` — 14 commits ahead of
+Branch: `b-line/audit-followups-2026-06-04` — 16 commits ahead of
 `origin/main`, **not pushed** (per the review-then-push gate). Origin: the
 Hermes full-project audit flagged five B-line-relevant pain points; this
 branch closes the in-boundary ones. Reviewer: DeepSeek. This doc is the
 map — what each commit does, which audit finding it answers, and where to
 focus.
+
+Review scope: every B-line file in `internal/app` + `internal/cli` was read,
+plus the `internal/orchestrator` domain layer those delegate into — the
+draft state machine, the two proposal entry points, and the low-risk
+direct-write governance boundary (`WriteLowRiskNote` /
+`validateLowGovernanceMarkdownTarget`: path-traversal blocked, audited,
+deny-by-default; the `DocClassUnknown` allowance is deliberate-with-backstops,
+flagged for the owner, not changed).
 
 ## Verification status (whole module, not just `./internal/...`)
 
@@ -55,6 +63,7 @@ behaviour identical for non-cancellable callers.
 | Commit | What |
 |---|---|
 | `b1cd066` | `updateFindingState` returns the **committed** finding + a wrapped error on audit-append failure (was returning `Finding{}` — pretending the state change didn't happen). |
+| `6d61bf0` | `ProposePersonaUpdate` / `ProposeMarkdownNote` treat the post-`SaveDraft` event publish as best-effort (was fatal — a broker hiccup failed the proposal *and* skipped the audit, inviting a duplicate-draft retry). Now matches `transitionDraftState` / `SupersedeDraft` / `IngestSessionWindow`. Regression test injects a failing broker. |
 
 The broader review of failure-handling across draft/finding/apply/status
 paths is in `docs/review-b-line-failure-semantics-2026-06-04.md` (commit
