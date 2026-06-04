@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"time"
@@ -13,7 +15,13 @@ import (
 // triage, persona candidates to review) plus a usage glance, instead of
 // running `lore draft`, `lore findings`, and `lore persona` separately.
 func runInboxCommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	workDir, err := resolveWorkDir(args)
+	flags := flag.NewFlagSet("inbox", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	asJSON := flags.Bool("json", false, "emit the operator queue as a single-line JSON object")
+	if err := flags.Parse(args); err != nil {
+		return 1
+	}
+	workDir, err := resolveWorkDir(flags.Args())
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -30,8 +38,93 @@ func runInboxCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "inbox: %v\n", err)
 		return 1
 	}
+	if *asJSON {
+		if err := emitOperatorQueueJSON(stdout, queue); err != nil {
+			fmt.Fprintf(stderr, "inbox: emit json: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	renderOperatorQueue(stdout, queue)
 	return 0
+}
+
+// operatorQueueNudge is a one-line, non-blocking pointer to `lore inbox`
+// for surfaces (like `lore status`) that want to flag pending work without
+// the full list. Empty when nothing awaits a decision.
+func operatorQueueNudge(actionItems int) string {
+	if actionItems <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("\nOperator queue: %d item(s) awaiting a decision -- run `lore inbox`.\n", actionItems)
+}
+
+type operatorQueueJSON struct {
+	Day                   string                       `json:"day"`
+	ActionItems           int                          `json:"action_items"`
+	PendingDrafts         []operatorQueueDraftJSON     `json:"pending_drafts"`
+	OpenFindings          []operatorQueueFindingJSON   `json:"open_findings"`
+	OpenPersonaCandidates []operatorQueueCandidateJSON `json:"open_persona_candidates"`
+	TodayUsage            operatorQueueUsageJSON       `json:"today_usage"`
+}
+
+type operatorQueueDraftJSON struct {
+	ID    string `json:"id"`
+	Kind  string `json:"kind"`
+	Title string `json:"title"`
+}
+
+type operatorQueueFindingJSON struct {
+	ID       string `json:"id"`
+	Severity string `json:"severity"`
+	Title    string `json:"title"`
+}
+
+type operatorQueueCandidateJSON struct {
+	ID            string `json:"id"`
+	Field         string `json:"field"`
+	ProposedValue string `json:"proposed_value"`
+}
+
+type operatorQueueUsageJSON struct {
+	Calls       int `json:"calls"`
+	TotalTokens int `json:"total_tokens"`
+}
+
+// emitOperatorQueueJSON writes the queue as a single-line JSON object so a
+// scripting / TUI consumer can drive a dashboard without re-querying each
+// source. Arrays are always present (possibly empty), never null.
+func emitOperatorQueueJSON(stdout io.Writer, queue app.OperatorQueue) error {
+	out := operatorQueueJSON{
+		Day:                   queue.Day.Format("2006-01-02"),
+		ActionItems:           queue.ActionItemCount(),
+		PendingDrafts:         make([]operatorQueueDraftJSON, 0, len(queue.PendingDrafts)),
+		OpenFindings:          make([]operatorQueueFindingJSON, 0, len(queue.OpenFindings)),
+		OpenPersonaCandidates: make([]operatorQueueCandidateJSON, 0, len(queue.OpenPersonaCandidates)),
+		TodayUsage: operatorQueueUsageJSON{
+			Calls:       queue.TodayUsage.Calls,
+			TotalTokens: queue.TodayUsage.TotalTokens,
+		},
+	}
+	for _, d := range queue.PendingDrafts {
+		out.PendingDrafts = append(out.PendingDrafts, operatorQueueDraftJSON{ID: d.ID, Kind: string(d.Kind), Title: d.Title})
+	}
+	for _, f := range queue.OpenFindings {
+		out.OpenFindings = append(out.OpenFindings, operatorQueueFindingJSON{ID: f.ID, Severity: string(f.Severity), Title: f.Title})
+	}
+	for _, c := range queue.OpenPersonaCandidates {
+		out.OpenPersonaCandidates = append(out.OpenPersonaCandidates, operatorQueueCandidateJSON{ID: c.ID, Field: c.Candidate.Field, ProposedValue: c.Candidate.ProposedValue})
+	}
+
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return err
+	}
+	if _, err := stdout.Write(encoded); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout)
+	return err
 }
 
 func renderOperatorQueue(stdout io.Writer, queue app.OperatorQueue) {

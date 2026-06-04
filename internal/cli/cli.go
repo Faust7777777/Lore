@@ -57,6 +57,9 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 			fmt.Fprint(stdout, renderTodayUsageTail(summary))
 			fmt.Fprint(stdout, usageSoftWarning(summary.TotalTokens, runtime.Config.Usage.SoftWarningTokens))
 		}
+		if q, err := runtime.OperatorQueue(time.Now()); err == nil {
+			fmt.Fprint(stdout, operatorQueueNudge(q.ActionItemCount()))
+		}
 		return 0
 	case "bootstrap":
 		workDir, err := resolveWorkDir(args[1:])
