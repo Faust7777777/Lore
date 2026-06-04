@@ -2,12 +2,13 @@
 
 Standalone index for the review handoff documents under `docs/archive/review-handoff/`.
 
-Updated: 2026-05-26
+Updated: 2026-06-04
 
-Total handoff documents indexed: 115
+Total handoff documents indexed: 116
 
 ## Current Workstreams
 
+- [B-line Hermes Audit Follow-ups (2026-06-04)](archive/review-handoff/review-handoff-b-line-audit-followups-2026-06-04.md)
 - [B-line Persona Gate Activation](archive/review-handoff/review-handoff-b-line-cross-boundary-persona-gate-activation-2026-05-21.md)
 - [B-P8 Candidate Lifecycle Recovery](archive/review-handoff/review-handoff-b-line-p8-candidate-lifecycle-recovery-2026-05-22.md)
 - [B-P9 Persona Extraction Observability](archive/review-handoff/review-handoff-b-line-p9-extraction-observability-2026-05-22.md)
@@ -36,6 +37,7 @@ Total handoff documents indexed: 115
 
 ## All Handoff Documents
 
+- [review-handoff-b-line-audit-followups-2026-06-04.md](archive/review-handoff/review-handoff-b-line-audit-followups-2026-06-04.md)
 - [review-handoff-backend-stability-workset.md](archive/review-handoff/review-handoff-backend-stability-workset.md)
 - [review-handoff-b-line-cli-hint-batch-2026-05-23.md](archive/review-handoff/review-handoff-b-line-cli-hint-batch-2026-05-23.md)
 - [review-handoff-b-line-cross-boundary-console-propose-tools-2026-05-25.md](archive/review-handoff/review-handoff-b-line-cross-boundary-console-propose-tools-2026-05-25.md)
