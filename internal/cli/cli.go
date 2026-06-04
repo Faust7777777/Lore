@@ -55,6 +55,7 @@ func Run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ver
 		fmt.Fprint(stdout, renderLLMConfigDiagnostics(runtime.LLMDiagnostics))
 		if summary, err := runtime.SummarizeUsage(time.Now()); err == nil && summary.Calls > 0 {
 			fmt.Fprint(stdout, renderTodayUsageTail(summary))
+			fmt.Fprint(stdout, usageSoftWarning(summary.TotalTokens, runtime.Config.Usage.SoftWarningTokens))
 		}
 		return 0
 	case "bootstrap":
@@ -975,6 +976,12 @@ func runUsageCommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 0
 	}
 	renderUsageReport(stdout, days, daily)
+	// Surface the soft-budget nudge under the report too (human path only;
+	// --json stays a clean machine object). daily is newest-last, so the
+	// final entry is today.
+	if len(daily) > 0 {
+		fmt.Fprint(stdout, usageSoftWarning(daily[len(daily)-1].TotalTokens, runtime.Config.Usage.SoftWarningTokens))
+	}
 	return 0
 }
 
@@ -1300,6 +1307,22 @@ func renderTodayUsageTail(summary model.UsageSummary) string {
 	return fmt.Sprintf(
 		"\nToday Usage\n-----------\n%d calls / %d prompt + %d completion = %d tokens\n",
 		summary.Calls, summary.PromptTokens, summary.CompletionTokens, summary.TotalTokens,
+	)
+}
+
+// usageSoftWarning returns a one-line, non-blocking nudge when today's
+// token usage has reached the configured usage.soft_warning_tokens
+// budget. It returns "" when the budget is unset (<= 0) or not yet
+// reached, so callers can Fprint it unconditionally. ASCII-only so the
+// line survives every terminal the usage surfaces render in. Previously
+// soft_warning_tokens was parsed and validated but never surfaced.
+func usageSoftWarning(todayTokens, threshold int) string {
+	if threshold <= 0 || todayTokens < threshold {
+		return ""
+	}
+	return fmt.Sprintf(
+		"\n[!] Soft budget: today's %d tokens reached the soft_warning_tokens threshold (%d).\n",
+		todayTokens, threshold,
 	)
 }
 

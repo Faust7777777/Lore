@@ -640,3 +640,28 @@ func TestRenderUsageReportHidesCrossPurposeBlockForSinglePurpose(t *testing.T) {
 		t.Fatalf("single-purpose report must not add the redundant cross-purpose rollup:\n%s", out)
 	}
 }
+
+func TestUsageSoftWarning(t *testing.T) {
+	// usage.soft_warning_tokens is a soft daily budget: warn once today's
+	// tokens reach it. An unset (<=0) budget never warns; below the budget
+	// never warns; at or above warns and names both numbers. (Previously
+	// the config was parsed/validated but never surfaced.)
+	if got := usageSoftWarning(5000, 0); got != "" {
+		t.Fatalf("threshold 0 (unset) must never warn, got %q", got)
+	}
+	if got := usageSoftWarning(10, -1); got != "" {
+		t.Fatalf("negative threshold must never warn, got %q", got)
+	}
+	if got := usageSoftWarning(499, 500); got != "" {
+		t.Fatalf("below the budget must not warn, got %q", got)
+	}
+	for _, tokens := range []int{500, 750} {
+		got := usageSoftWarning(tokens, 500)
+		if got == "" {
+			t.Fatalf("today's %d tokens >= budget 500 must warn", tokens)
+		}
+		if !strings.Contains(got, "500") || !strings.Contains(got, fmt.Sprintf("%d", tokens)) {
+			t.Fatalf("warning must name today's tokens and the budget: %q", got)
+		}
+	}
+}
