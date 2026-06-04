@@ -142,15 +142,17 @@ func (h *Harness) ObserveDocumentChange(relPath string, content []byte, at time.
 	if err := h.store.Drafts().SaveDraft(draft); err != nil {
 		return model.Draft{}, err
 	}
-	if err := h.broker.Publish(context.Background(), hruntime.Event{
+	// Best-effort publish, same rationale as the propose paths: the draft is
+	// saved, so a broker failure must not fail the observation and skip the
+	// audit below -- that would invite a duplicate progress-sync draft on the
+	// caller's retry. Mirrors transitionDraftState / SupersedeDraft.
+	_ = h.broker.Publish(context.Background(), hruntime.Event{
 		ID:         draft.ID,
 		Type:       hruntime.EventDraftCreated,
 		Source:     "observe_document_change",
 		OccurredAt: at,
 		Payload:    draft,
-	}); err != nil {
-		return model.Draft{}, err
-	}
+	})
 	h.recordAudit(model.AuditRecord{
 		ID:            auditID("draft-created", at),
 		Kind:          model.AuditDraftCreated,

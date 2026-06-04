@@ -26,13 +26,14 @@ func (publishFailingBroker) Subscribe(hruntime.EventType, int) (<-chan hruntime.
 	return nil, func() {}
 }
 
-// TestProposeDraftToleratesBrokerPublishFailure pins the fix that made
-// ProposePersonaUpdate / ProposeMarkdownNote treat the EventDraftCreated
-// publish as best-effort. Both durably SaveDraft before publishing; a
-// broker hiccup must not (a) fail the proposal -- the external agent would
-// think it failed and retry, creating a duplicate draft -- nor (b) skip the
-// audit record that follows the publish. Mirrors the best-effort publish in
-// transitionDraftState / SupersedeDraft / IngestSessionWindow.
+// TestProposeDraftToleratesBrokerPublishFailure pins the fix that made every
+// draft-creating path -- ProposePersonaUpdate, ProposeMarkdownNote, and
+// ObserveDocumentChange -- treat the EventDraftCreated publish as best-effort.
+// Each durably SaveDraft before publishing; a broker hiccup must not (a) fail
+// the operation -- the caller would think it failed and retry, creating a
+// duplicate draft -- nor (b) skip the audit record that follows the publish.
+// Mirrors the best-effort publish in transitionDraftState / SupersedeDraft /
+// IngestSessionWindow.
 func TestProposeDraftToleratesBrokerPublishFailure(t *testing.T) {
 	cfg := config.Default(t.TempDir())
 	inner := memory.New()
@@ -78,6 +79,17 @@ func TestProposeDraftToleratesBrokerPublishFailure(t *testing.T) {
 			t.Fatalf("ProposeMarkdownNote must succeed despite broker failure: %v", err)
 		}
 		assertDraftSavedAndAudited(t, h, inner, result.DraftID)
+	})
+
+	t.Run("observe document change", func(t *testing.T) {
+		// plans/week.md classifies as a plan (prefix plans/ + filename
+		// contains "week") so ObserveDocumentChange creates a progress-sync
+		// draft rather than rejecting with ErrUnsupportedDocument.
+		draft, err := h.ObserveDocumentChange("plans/week.md", []byte("week plan body"), at.Add(2*time.Second))
+		if err != nil {
+			t.Fatalf("ObserveDocumentChange must succeed despite broker failure: %v", err)
+		}
+		assertDraftSavedAndAudited(t, h, inner, draft.ID)
 	})
 }
 
