@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -941,4 +942,62 @@ func (f fakeProcessSinkSummarizer) SummarizeCheckpointContext(_ context.Context,
 
 func (f fakeProcessSinkSummarizer) SummarizeDailyContext(_ context.Context, agentID string, day time.Time, checkpoints []model.CheckpointDoc) (string, string, error) {
 	return f.SummarizeDaily(agentID, day, checkpoints)
+}
+
+// ctxAwareFakeSummarizer aborts its Context variants on a cancelled
+// context, so a test can prove the import path threads the context all
+// the way to the per-window summarization.
+type ctxAwareFakeSummarizer struct{}
+
+func (ctxAwareFakeSummarizer) SummarizeCheckpoint(window codexjsonl.WindowSummary) (string, string, error) {
+	return "title", strings.TrimSpace(window.Content), nil
+}
+
+func (ctxAwareFakeSummarizer) SummarizeDaily(agentID string, _ time.Time, _ []model.CheckpointDoc) (string, string, error) {
+	return agentID + " daily report", "content", nil
+}
+
+func (f ctxAwareFakeSummarizer) SummarizeCheckpointContext(ctx context.Context, window codexjsonl.WindowSummary) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	return f.SummarizeCheckpoint(window)
+}
+
+func (f ctxAwareFakeSummarizer) SummarizeDailyContext(ctx context.Context, agentID string, day time.Time, checkpoints []model.CheckpointDoc) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	return f.SummarizeDaily(agentID, day, checkpoints)
+}
+
+func TestImportCodexJSONLContextCancelsMidImport(t *testing.T) {
+	// Slice 2 wiring proof: a cancelled context handed to
+	// ImportCodexJSONLContext threads down to the per-window summarization
+	// and aborts the import, so an operator can Ctrl-C a large import. The
+	// non-context entry point still imports (delegates to Background).
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "cancel.jsonl")
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-1","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"hello"}}`,
+	)
+
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	runtime.ProcessSinkSummarizer = ctxAwareFakeSummarizer{}
+
+	params := ImportCodexJSONLParams{InputPath: transcriptPath, AgentID: "codex", SessionID: "session-1"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := runtime.ImportCodexJSONLContext(ctx, params, time.Now()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ImportCodexJSONLContext(cancelled) = %v, want context.Canceled", err)
+	}
+
+	if _, err := runtime.ImportCodexJSONL(params, time.Now()); err != nil {
+		t.Fatalf("ImportCodexJSONL (non-context) error = %v", err)
+	}
 }

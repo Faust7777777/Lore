@@ -245,7 +245,9 @@ func runImportCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int 
 	}
 	defer closeRuntime(stderr, runtime, "import-codex-jsonl")
 
-	result, err := runtime.ImportCodexJSONL(params, time.Now())
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	result, err := runtime.ImportCodexJSONLContext(ctx, params, time.Now())
 	if err != nil {
 		fmt.Fprintf(stderr, "import-codex-jsonl: %v\n", err)
 		return 1
@@ -276,7 +278,9 @@ func runImportExternalJSONL(args []string, stdout io.Writer, stderr io.Writer) i
 	}
 	defer closeRuntime(stderr, runtime, "import-external-jsonl")
 
-	result, err := runtime.ImportExternalTranscriptJSONL(params, time.Now())
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	result, err := runtime.ImportExternalTranscriptJSONLContext(ctx, params, time.Now())
 	if err != nil {
 		fmt.Fprintf(stderr, "import-external-jsonl: %v\n", err)
 		return 1

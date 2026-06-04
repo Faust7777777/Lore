@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -324,6 +325,10 @@ func (r *Runtime) requireProcessSinkSummarizer() (ProcessSinkSummarizer, error) 
 }
 
 func (r *Runtime) rollupProcessSinkDay(agentID string, day time.Time, at time.Time) (model.DailyReport, error) {
+	return r.rollupProcessSinkDayContext(context.Background(), agentID, day, at)
+}
+
+func (r *Runtime) rollupProcessSinkDayContext(ctx context.Context, agentID string, day time.Time, at time.Time) (model.DailyReport, error) {
 	summarizer, err := r.requireProcessSinkSummarizer()
 	if err != nil {
 		return model.DailyReport{}, err
@@ -333,7 +338,7 @@ func (r *Runtime) rollupProcessSinkDay(agentID string, day time.Time, at time.Ti
 	if err != nil {
 		return model.DailyReport{}, err
 	}
-	title, content, err := summarizer.SummarizeDaily(agentID, day, checkpoints)
+	title, content, err := summarizer.SummarizeDailyContext(ctx, agentID, day, checkpoints)
 	if err != nil {
 		return model.DailyReport{}, err
 	}

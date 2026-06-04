@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,13 @@ type ImportExternalTranscriptJSONLResult struct {
 }
 
 func (r *Runtime) ImportExternalTranscriptJSONL(params ImportExternalTranscriptJSONLParams, now time.Time) (ImportExternalTranscriptJSONLResult, error) {
+	return r.ImportExternalTranscriptJSONLContext(context.Background(), params, now)
+}
+
+// ImportExternalTranscriptJSONLContext is ImportExternalTranscriptJSONL
+// with a caller-supplied context so the CLI can cancel a long import
+// mid-flight; the context threads to each per-window model summarization.
+func (r *Runtime) ImportExternalTranscriptJSONLContext(ctx context.Context, params ImportExternalTranscriptJSONLParams, now time.Time) (ImportExternalTranscriptJSONLResult, error) {
 	r.Harness.UpdateDependencies(true, true)
 	if _, err := r.Bootstrap(now); err != nil {
 		return ImportExternalTranscriptJSONLResult{}, err
@@ -43,7 +51,7 @@ func (r *Runtime) ImportExternalTranscriptJSONL(params ImportExternalTranscriptJ
 	}
 	applyExternalTranscriptIdentity(&transcript, params)
 	windows := codexjsonl.BuildWindows(transcript, resolveCodexWindowSize(r.Config.ProcessSink.CheckpointEvery, params.Window))
-	imported, err := r.importCodexWindows(inputPath, transcript, windows, params.SkipRollup, now)
+	imported, err := r.importCodexWindowsContext(ctx, inputPath, transcript, windows, params.SkipRollup, now)
 	if err != nil {
 		return ImportExternalTranscriptJSONLResult{}, err
 	}

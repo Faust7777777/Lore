@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -27,6 +28,13 @@ type ImportCodexJSONLResult struct {
 }
 
 func (r *Runtime) ImportCodexJSONL(params ImportCodexJSONLParams, now time.Time) (ImportCodexJSONLResult, error) {
+	return r.ImportCodexJSONLContext(context.Background(), params, now)
+}
+
+// ImportCodexJSONLContext is ImportCodexJSONL with a caller-supplied
+// context so the CLI can cancel a long import (e.g. on Ctrl-C) mid-flight;
+// the context is threaded to each per-window model summarization.
+func (r *Runtime) ImportCodexJSONLContext(ctx context.Context, params ImportCodexJSONLParams, now time.Time) (ImportCodexJSONLResult, error) {
 	r.Harness.UpdateDependencies(true, true)
 	if _, err := r.Bootstrap(now); err != nil {
 		return ImportCodexJSONLResult{}, err
@@ -39,7 +47,7 @@ func (r *Runtime) ImportCodexJSONL(params ImportCodexJSONLParams, now time.Time)
 	}
 	applyCodexJSONLIdentity(&transcript, params, codexjsonl.Cursor{}, false)
 	windows := codexjsonl.BuildWindows(transcript, resolveCodexWindowSize(r.Config.ProcessSink.CheckpointEvery, params.Window))
-	return r.importCodexWindows(inputPath, transcript, windows, params.SkipRollup, now)
+	return r.importCodexWindowsContext(ctx, inputPath, transcript, windows, params.SkipRollup, now)
 }
 
 func resolveCodexWindowSize(defaultWindow time.Duration, requested time.Duration) time.Duration {
@@ -67,6 +75,10 @@ func applyCodexJSONLIdentity(transcript *codexjsonl.Transcript, params ImportCod
 }
 
 func (r *Runtime) importCodexWindows(inputPath string, transcript codexjsonl.Transcript, windows []codexjsonl.WindowSummary, skipRollup bool, now time.Time) (ImportCodexJSONLResult, error) {
+	return r.importCodexWindowsContext(context.Background(), inputPath, transcript, windows, skipRollup, now)
+}
+
+func (r *Runtime) importCodexWindowsContext(ctx context.Context, inputPath string, transcript codexjsonl.Transcript, windows []codexjsonl.WindowSummary, skipRollup bool, now time.Time) (ImportCodexJSONLResult, error) {
 	summarizer, err := r.requireProcessSinkSummarizer()
 	if err != nil {
 		return ImportCodexJSONLResult{}, err
@@ -80,7 +92,7 @@ func (r *Runtime) importCodexWindows(inputPath string, transcript codexjsonl.Tra
 
 	reportDays := make(map[string]time.Time)
 	for _, payload := range windows {
-		title, content, err := summarizer.SummarizeCheckpoint(payload)
+		title, content, err := summarizer.SummarizeCheckpointContext(ctx, payload)
 		if err != nil {
 			return ImportCodexJSONLResult{}, err
 		}
@@ -109,7 +121,7 @@ func (r *Runtime) importCodexWindows(inputPath string, transcript codexjsonl.Tra
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		report, err := r.rollupProcessSinkDay(transcript.AgentID, reportDays[key], now)
+		report, err := r.rollupProcessSinkDayContext(ctx, transcript.AgentID, reportDays[key], now)
 		if err != nil {
 			return ImportCodexJSONLResult{}, err
 		}
