@@ -61,10 +61,10 @@ func (r *Runtime) OperatorQueue(now time.Time) (OperatorQueue, error) {
 		return OperatorQueue{}, err
 	}
 
-	usage, err := r.SummarizeUsage(now)
-	if err != nil {
-		return OperatorQueue{}, err
-	}
+	// Usage is a best-effort glance, not an action item: a usage-store
+	// hiccup must not hide the operator's pending drafts / findings /
+	// candidates (the point of the queue). Zero on error.
+	usage, _ := r.SummarizeUsage(now)
 
 	return OperatorQueue{
 		Day:                   now,
