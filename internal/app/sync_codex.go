@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -35,6 +36,13 @@ type codexJSONLLockPayload struct {
 }
 
 func (r *Runtime) SyncCodexJSONL(params ImportCodexJSONLParams, now time.Time) (SyncCodexJSONLResult, error) {
+	return r.SyncCodexJSONLContext(context.Background(), params, now)
+}
+
+// SyncCodexJSONLContext is SyncCodexJSONL with a caller-supplied context so
+// the attach loop / CLI can cancel an in-flight sync's per-window
+// summarization mid-flight (e.g. on Ctrl-C or attach-loop shutdown).
+func (r *Runtime) SyncCodexJSONLContext(ctx context.Context, params ImportCodexJSONLParams, now time.Time) (SyncCodexJSONLResult, error) {
 	inputPath := filepath.Clean(strings.TrimSpace(params.InputPath))
 	if inputPath == "" {
 		return SyncCodexJSONLResult{}, fmt.Errorf("empty input path")
@@ -68,7 +76,7 @@ func (r *Runtime) SyncCodexJSONL(params ImportCodexJSONLParams, now time.Time) (
 
 	windowSize := resolveCodexWindowSize(r.Config.ProcessSink.CheckpointEvery, params.Window)
 	if savedCursorRaw != "" && codexJSONLSourceUnchanged(cursor, source) {
-		return r.syncCodexJSONLPlaceholders(params, now, source, cursorKey, savedCursorRaw, cursor, windowSize)
+		return r.syncCodexJSONLPlaceholders(ctx, params, now, source, cursorKey, savedCursorRaw, cursor, windowSize)
 	}
 
 	baseCursor := codexjsonl.Cursor{}
@@ -104,7 +112,7 @@ func (r *Runtime) SyncCodexJSONL(params ImportCodexJSONLParams, now time.Time) (
 	}
 	windows = append(windows, trailing...)
 
-	imported, err := r.importCodexWindows(source.Path, transcript, windows, params.SkipRollup, now)
+	imported, err := r.importCodexWindowsContext(ctx, source.Path, transcript, windows, params.SkipRollup, now)
 	if err != nil {
 		return SyncCodexJSONLResult{}, err
 	}
@@ -132,6 +140,7 @@ func (r *Runtime) SyncCodexJSONL(params ImportCodexJSONLParams, now time.Time) (
 }
 
 func (r *Runtime) syncCodexJSONLPlaceholders(
+	ctx context.Context,
 	params ImportCodexJSONLParams,
 	now time.Time,
 	source codexjsonl.SourceState,
@@ -156,7 +165,7 @@ func (r *Runtime) syncCodexJSONLPlaceholders(
 		}, nil
 	}
 
-	imported, err := r.importCodexWindows(source.Path, transcript, windows, params.SkipRollup, now)
+	imported, err := r.importCodexWindowsContext(ctx, source.Path, transcript, windows, params.SkipRollup, now)
 	if err != nil {
 		return SyncCodexJSONLResult{}, err
 	}

@@ -1518,7 +1518,9 @@ func runSyncCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	defer closeRuntime(stderr, runtime, "sync-codex-jsonl")
 
-	result, err := runtime.SyncCodexJSONL(params, time.Now())
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	result, err := runtime.SyncCodexJSONLContext(ctx, params, time.Now())
 	if err != nil {
 		fmt.Fprintf(stderr, "sync-codex-jsonl: %v\n", err)
 		return 1
@@ -1557,7 +1559,7 @@ func runAttachCodexJSONL(args []string, stdout io.Writer, stderr io.Writer) int 
 	defer stop()
 
 	if once {
-		result, err := runtime.SyncCodexJSONL(params, time.Now())
+		result, err := runtime.SyncCodexJSONLContext(ctx, params, time.Now())
 		if err != nil {
 			fmt.Fprintf(stderr, "attach-codex-jsonl: %v\n", err)
 			return 1

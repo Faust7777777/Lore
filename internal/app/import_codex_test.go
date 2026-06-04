@@ -1039,3 +1039,29 @@ func TestImportCodexJSONLSkipsEmptySlotsWhenWriteEmptySlotsFalse(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncCodexJSONLContextCancelsMidSync(t *testing.T) {
+	// Slice 3: the attach loop / one-shot sync threads its context to the
+	// per-window summarization, so a cancelled context aborts an in-flight
+	// sync (e.g. attach-loop shutdown) instead of running to completion.
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "cancel-sync.jsonl")
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-1","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"hello"}}`,
+	)
+
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	runtime.ProcessSinkSummarizer = ctxAwareFakeSummarizer{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := runtime.SyncCodexJSONLContext(ctx, ImportCodexJSONLParams{
+		InputPath: transcriptPath, AgentID: "codex", SessionID: "session-1",
+	}, time.Now()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("SyncCodexJSONLContext(cancelled) = %v, want context.Canceled", err)
+	}
+}

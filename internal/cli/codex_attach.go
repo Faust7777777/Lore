@@ -16,7 +16,7 @@ import (
 const codexAttachDebounce = 200 * time.Millisecond
 
 type CodexJSONLSyncer interface {
-	SyncCodexJSONL(params app.ImportCodexJSONLParams, now time.Time) (app.SyncCodexJSONLResult, error)
+	SyncCodexJSONLContext(ctx context.Context, params app.ImportCodexJSONLParams, now time.Time) (app.SyncCodexJSONLResult, error)
 }
 
 func RunCodexAttachLoop(ctx context.Context, syncer CodexJSONLSyncer, params app.ImportCodexJSONLParams, pollEvery time.Duration, stdout io.Writer, stderr io.Writer) error {
@@ -34,7 +34,7 @@ func RunCodexAttachLoop(ctx context.Context, syncer CodexJSONLSyncer, params app
 	params.InputPath = absoluteInputPath
 
 	fmt.Fprintf(stdout, "Attaching Codex JSONL\n- input: %s\n- poll: %s\n", params.InputPath, pollEvery)
-	if err := syncCodexAttachOnce(syncer, params, stdout); err != nil {
+	if err := syncCodexAttachOnce(ctx, syncer, params, stdout); err != nil {
 		return err
 	}
 
@@ -127,19 +127,19 @@ func RunCodexAttachLoop(ctx context.Context, syncer CodexJSONLSyncer, params app
 			watcher = nil
 		case <-debounceCh:
 			debounceCh = nil
-			if err := syncCodexAttachOnce(syncer, params, stdout); err != nil {
+			if err := syncCodexAttachOnce(ctx, syncer, params, stdout); err != nil {
 				fmt.Fprintf(stderr, "attach-codex-jsonl: %v\n", err)
 			}
 		case <-ticker.C:
-			if err := syncCodexAttachOnce(syncer, params, stdout); err != nil {
+			if err := syncCodexAttachOnce(ctx, syncer, params, stdout); err != nil {
 				fmt.Fprintf(stderr, "attach-codex-jsonl: %v\n", err)
 			}
 		}
 	}
 }
 
-func syncCodexAttachOnce(syncer CodexJSONLSyncer, params app.ImportCodexJSONLParams, stdout io.Writer) error {
-	result, err := syncer.SyncCodexJSONL(params, time.Now())
+func syncCodexAttachOnce(ctx context.Context, syncer CodexJSONLSyncer, params app.ImportCodexJSONLParams, stdout io.Writer) error {
+	result, err := syncer.SyncCodexJSONLContext(ctx, params, time.Now())
 	if err != nil {
 		return err
 	}
