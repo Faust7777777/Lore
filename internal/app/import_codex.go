@@ -92,6 +92,14 @@ func (r *Runtime) importCodexWindowsContext(ctx context.Context, inputPath strin
 
 	reportDays := make(map[string]time.Time)
 	for _, payload := range windows {
+		// process_sink.write_empty_slots=false suppresses placeholder
+		// checkpoints for windows with no ingested transcript (idle time
+		// slots). Skipping here also avoids the model call. This is the
+		// chokepoint for every window-ingestion path (import / external /
+		// sync / appserver), so the flag applies uniformly.
+		if !r.Config.ProcessSink.WriteEmptySlots && strings.TrimSpace(payload.RawTranscript) == "" {
+			continue
+		}
 		title, content, err := summarizer.SummarizeCheckpointContext(ctx, payload)
 		if err != nil {
 			return ImportCodexJSONLResult{}, err

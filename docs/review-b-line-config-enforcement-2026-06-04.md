@@ -17,7 +17,7 @@ any of these has zero effect.
 |---|---|---|---|
 | `usage.track_usage` | B-line | gate usage recording | **FIXED** this branch (`2e9479a`) |
 | `usage.soft_warning_tokens` | B-line | soft daily budget warning | **FIXED** this branch (`db0b7a8`) |
-| `process_sink.write_empty_slots` | B-line | write placeholder checkpoints for empty windows | dead |
+| `process_sink.write_empty_slots` | B-line | write placeholder checkpoints for empty windows | **FIXED** this branch |
 | `process_sink.retention_days` | B-line | prune process-sink docs older than N days | dead |
 | `process_sink.daily_rollup_at` | B-line / daemon | schedule the daily rollup at HH:MM | dead |
 | `runtime.inspect_at` | daemon (out-of-boundary) | scheduled inspect time | dead |
@@ -51,12 +51,11 @@ actively misleads. Same root cause the audit named for usage.
 
 ## Suggested priority (B-line slices)
 
-1. `write_empty_slots` — most contained. The single placeholder-writing
-   chokepoint is `processsink.Service.WriteCheckpoint` (constructed once at
-   `orchestrator/harness.go:63`). Gate it there; needs a decision on how
-   `WriteCheckpoint`/`IngestSessionWindow` represent a skipped slot (the
-   reason it was not done in this review tick — it is a contract change,
-   not a drop-in).
+1. `write_empty_slots` — **FIXED** (this branch). Gated at
+   `importCodexWindowsContext` — the chokepoint every window-ingestion
+   path (import / external / sync / appserver) funnels through: an
+   empty-transcript window is skipped when the flag is false, before the
+   model call. No `WriteCheckpoint` contract change was needed after all.
 2. `retention_days` — a new prune pass over process-sink checkpoints /
    daily reports (store-level delete-older-than). Feature-sized.
 3. `daily_rollup_at` — daemon scheduling; touches the daemon (boundary).

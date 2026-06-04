@@ -1001,3 +1001,41 @@ func TestImportCodexJSONLContextCancelsMidImport(t *testing.T) {
 		t.Fatalf("ImportCodexJSONL (non-context) error = %v", err)
 	}
 }
+
+func TestImportCodexJSONLSkipsEmptySlotsWhenWriteEmptySlotsFalse(t *testing.T) {
+	// process_sink.write_empty_slots=false must suppress placeholder
+	// checkpoints for empty (no-transcript) windows. The same transcript
+	// under the default (true) produces a placeholder slot at 09:30 (see
+	// TestRuntimeImportCodexJSONLWritesPlaceholderCheckpointAndSingleDayRollup);
+	// here that slot must be skipped entirely.
+	loc := useFixedLocalZone(t)
+	workDir := t.TempDir()
+	transcriptPath := filepath.Join(workDir, "gaps.jsonl")
+	writeCodexJSONL(t, transcriptPath,
+		`{"timestamp":"2026-04-22T09:00:00+08:00","type":"session_meta","payload":{"id":"session-1","agent_nickname":"Codex"}}`,
+		`{"timestamp":"2026-04-22T09:05:00+08:00","type":"event_msg","payload":{"type":"user_message","message":"review the weekly drift"}}`,
+		`{"timestamp":"2026-04-22T10:05:00+08:00","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"drafted the next checkpoint"}}`,
+	)
+
+	runtime, err := openRuntimeWithFakeProcessSinkSummarizer(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	runtime.Config.ProcessSink.WriteEmptySlots = false
+
+	result, err := runtime.ImportCodexJSONL(ImportCodexJSONLParams{
+		InputPath: transcriptPath, AgentID: "codex", SessionID: "session-1",
+	}, time.Date(2026, 4, 22, 23, 45, 0, 0, loc))
+	if err != nil {
+		t.Fatalf("ImportCodexJSONL() error = %v", err)
+	}
+
+	if len(result.Checkpoints) != 2 {
+		t.Fatalf("len(Checkpoints) = %d, want 2 (the empty 09:30 slot skipped)", len(result.Checkpoints))
+	}
+	for _, cp := range result.Checkpoints {
+		if cp.State == model.CheckpointPlaceholder {
+			t.Fatalf("write_empty_slots=false should skip placeholder checkpoints, got one: %+v", cp)
+		}
+	}
+}
