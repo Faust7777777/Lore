@@ -56,8 +56,13 @@ actively misleads. Same root cause the audit named for usage.
    path (import / external / sync / appserver) funnels through: an
    empty-transcript window is skipped when the flag is false, before the
    model call. No `WriteCheckpoint` contract change was needed after all.
-2. `retention_days` — a new prune pass over process-sink checkpoints /
-   daily reports (store-level delete-older-than). Feature-sized.
+2. `retention_days` — **deferred (low priority).** Enforcing it needs a
+   new `ProcessSinkStore` delete-older-than capability across all three
+   backends (memory / json / sqlite) plus `.md` file cleanup, a service
+   prune, and a trigger — a multi-slice feature. The value is modest
+   (process-sink docs are small markdown files with low daily volume), so
+   the multi-backend store change is not worth a rushed loop tick. Build
+   deliberately if/when storage growth becomes a real concern.
 3. `daily_rollup_at` — daemon scheduling; touches the daemon (boundary).
 
 ## Out of boundary (flag for the owning line, do not fix in B-line)
@@ -65,3 +70,24 @@ actively misleads. Same root cause the audit named for usage.
 The entire `runtime.*` block (server/daemon config) is dead. Either wire
 it in the daemon/server line or drop the fields + their validation so the
 config surface stops advertising knobs that do nothing.
+
+## Adjacent finding: write-then-audit consistency
+
+A concrete instance of the audit's "state consistency via compensation":
+`app/findings.go updateFindingState` changes a finding's state, then
+appends an audit record; if the audit append fails it returns an **empty**
+finding plus the error -- so the caller is told the operation failed even
+though the state change already committed. The operator then sees a
+confusing "resolved -> resolved invalid transition" on retry, and the
+audit trail is missing the change.
+
+This contradicts the codebase's own pattern: `orchestrator/harness.go
+recordAudit` treats audit as best-effort (marks health-error, does not
+fail the primary operation). Recommended fix: align `updateFindingState`
+so a committed state change is not reported as total failure -- at minimum
+return the updated finding (not a zero value) with a descriptive error.
+Doing it cleanly wants an app-layer best-effort-audit seam (the Runtime
+calls the store's Audit directly today), and a test needs a fake store
+whose Audit fails while Findings succeeds -- a small but non-trivial
+slice, flagged here rather than rushed.
+
