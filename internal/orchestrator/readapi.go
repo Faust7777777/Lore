@@ -156,13 +156,19 @@ func (h *Harness) VaultResolve(query string, relDir string, limit int) (model.Va
 		}
 		return matches[i].Path < matches[j].Path
 	})
+	// Determine uniqueness on the FULL sorted set, before truncating to
+	// limit. The margin check compares the top two matches, so truncating
+	// first (e.g. a caller passing limit=1) would drop the near-tie
+	// competitor and report a genuinely ambiguous query as "unique" --
+	// auto-selecting one of several equally-good paths.
+	unique := isUniqueVaultResolveMatch(matches, h.cfg.Vault.Resolve.UniqueScoreThreshold, h.cfg.Vault.Resolve.UniqueScoreMargin)
 	if len(matches) > limit {
 		matches = matches[:limit]
 	}
 	result.Matches = matches
 	if len(matches) == 0 {
 		result.Reason = "no_path_match"
-	} else if isUniqueVaultResolveMatch(matches, h.cfg.Vault.Resolve.UniqueScoreThreshold, h.cfg.Vault.Resolve.UniqueScoreMargin) {
+	} else if unique {
 		result.Status = "unique"
 		result.SelectedPath = matches[0].Path
 		result.Reason = matches[0].Reason

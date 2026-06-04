@@ -199,6 +199,22 @@ func TestVaultResolveUniqueAmbiguousAndNotFound(t *testing.T) {
 		t.Fatalf("ambiguous result = %+v, want multiple matches", ambiguous)
 	}
 
+	// limit=1 must NOT mask ambiguity: the uniqueness margin check is
+	// computed on the full match set before truncation, so a near-tie
+	// competitor (python-diary.md) is not dropped before the comparison.
+	// Before the fix this returned "unique" and auto-selected python.md.
+	ambiguousLimited, err := h.VaultResolve("python", "", 1)
+	if err != nil {
+		t.Fatalf("VaultResolve(ambiguous, limit=1) error = %v", err)
+	}
+	if ambiguousLimited.Status != "ambiguous" {
+		t.Fatalf("ambiguous limit=1 status = %q (selected %q), want ambiguous; limit must not mask a near-tie",
+			ambiguousLimited.Status, ambiguousLimited.SelectedPath)
+	}
+	if len(ambiguousLimited.Matches) != 1 {
+		t.Fatalf("ambiguous limit=1 returned %d matches, want 1 (display truncated)", len(ambiguousLimited.Matches))
+	}
+
 	missing, err := h.VaultResolve("does-not-exist", "", 5)
 	if err != nil {
 		t.Fatalf("VaultResolve(missing) error = %v", err)
