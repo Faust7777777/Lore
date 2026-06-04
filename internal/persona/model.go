@@ -27,6 +27,7 @@ package persona
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"strings"
 	"time"
 )
 
@@ -220,8 +221,25 @@ func NewCandidateID(now time.Time) string {
 // NOT part of the key: the same fact observed twice in different
 // sessions should still collapse to one candidate.
 func DedupKey(c PersonaCandidate) string {
-	field := NormalizeText(c.Field)
-	value := NormalizeText(c.ProposedValue)
-	evidence := NormalizeText(c.EvidenceQuote)
+	field := escapeDedupComponent(NormalizeText(c.Field))
+	value := escapeDedupComponent(NormalizeText(c.ProposedValue))
+	evidence := escapeDedupComponent(NormalizeText(c.EvidenceQuote))
 	return field + "|" + value + "|" + evidence
+}
+
+// escapeDedupComponent escapes the '|' separator (and the '\' escape
+// char itself) so a component that contains '|' cannot shift the field
+// boundary and collide with a different (field, value, evidence) tuple --
+// e.g. field="a|b",value="c" must not key the same as
+// field="a",value="b|c". Components free of '|' and '\' are returned
+// unchanged, so dedup keys for the overwhelmingly common case stay
+// byte-identical to the pre-escape format and existing stored rows keep
+// deduping without a migration.
+func escapeDedupComponent(s string) string {
+	if !strings.ContainsAny(s, "\\|") {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "|", "\\|")
+	return s
 }

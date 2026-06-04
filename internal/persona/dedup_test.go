@@ -52,6 +52,24 @@ func TestDedupKeyDistinguishesFieldOrValue(t *testing.T) {
 	}
 }
 
+func TestDedupKeyResistsSeparatorInjection(t *testing.T) {
+	// A '|' inside one component must not shift the separator boundary and
+	// collide with a different (field, value, evidence) tuple. Without
+	// escaping, both of these key to "a|b|c|e".
+	a := PersonaCandidate{Field: "a|b", ProposedValue: "c", EvidenceQuote: "e"}
+	b := PersonaCandidate{Field: "a", ProposedValue: "b|c", EvidenceQuote: "e"}
+	if DedupKey(a) == DedupKey(b) {
+		t.Fatalf("DedupKey collides under separator injection:\n a = %q\n b = %q", DedupKey(a), DedupKey(b))
+	}
+
+	// The common case (no '|' or '\') stays byte-identical to the plain
+	// pipe-join, so existing stored keys still match -- no migration.
+	plain := PersonaCandidate{Field: "major", ProposedValue: "economics", EvidenceQuote: "i study economics"}
+	if got, want := DedupKey(plain), "major|economics|i study economics"; got != want {
+		t.Fatalf("DedupKey changed the unescaped common-case format: got %q, want %q", got, want)
+	}
+}
+
 func TestDedupKeyPreservesChineseFidelity(t *testing.T) {
 	// Two Chinese candidates with the same field+value+evidence (modulo
 	// half/full-width punctuation) must collide; different content must
