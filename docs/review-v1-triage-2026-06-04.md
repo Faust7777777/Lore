@@ -23,14 +23,26 @@ console / cli-structure). The B-line actionable set is small and listed first.
 
 ## B-line fix plan (what I will change)
 
-Prioritised, in-boundary, genuinely valid:
+Prioritised, in-boundary, genuinely valid. **All four DONE 2026-06-05:**
 
-| # | Finding | Issue | Current location | Effort |
-|---|---|---|---|---|
-| 1 | P1-3, P2-11 **+2 unreported siblings** | byte-slice truncation can split a multibyte (Chinese) rune → invalid UTF-8 | `orchestrator/readapi.go` `excerpt`; `app/processsink_summarizer.go` `truncateForSummary`; `orchestrator/harness.go` `summarizeContent` (`preview[:80]`); `vault/query.go` `trimPreview` (`value[:180]`) | trivial |
-| 2 | P1-2 | `broker.Publish` failures are fully silent (no log, no health-mark) — gap vs "audit is first-class" | `orchestrator/harness.go` (9 sites) | trivial |
-| 3 | P2-6 | `UsageRecord.Purpose` accepts any string → typo creates a junk bucket in `lore usage` | `app/usage.go` `RecordUsage` (normalise/validate) | trivial |
-| 4 | P1-1 | draft ID = `draft-<UnixNano>` can collide under multi-entry concurrency | `orchestrator/harness.go` (draft-ID mint sites) | small |
+| # | Finding | Issue | Fix commit |
+|---|---|---|---|
+| 1 | P1-3, P2-11 **+2 unreported siblings** | byte-slice truncation can split a multibyte (Chinese) rune → invalid UTF-8 (`excerpt`, `truncateForSummary`, `summarizeContent`, `trimPreview`) | `8d2abf8` — all four → `[]rune` slicing + CJK regression tests |
+| 2 | P1-2 | `broker.Publish` failures were fully silent (no log, no health-mark) | `7a33bb4` — 9 sites routed through `publishEvent`, which `health.MarkError`s on failure (visible in `lore status`); best-effort semantics kept |
+| 3 | P2-6 | `UsageRecord.Purpose` casing/whitespace variants fanned out into separate `lore usage` buckets | `bff626d` — trim+lowercase at the `RecordUsage` chokepoint (unbounded design kept; no whitelist) |
+| 4 | P1-1 | draft ID = `draft-<UnixNano>` could collide under multi-entry concurrency | `3f243a9` — `newDraftID` adds 8 hex of crypto/rand entropy, mirroring `NewCandidateID`; prefix preserved |
+
+Also landed independently (not in this report — found during the framework
+review): **VaultResolve uniqueness vs limit-truncation** (`402806c`).
+
+### Still open (next)
+- **P0-2 + P2-2 (coupled)** — no concurrent-ApplyDraft test, and a real
+  TOCTOU between `readDraftTargetForApply`'s hash/exists check and the atomic
+  write. A concurrent test would expose the TOCTOU, so the fix is to serialize
+  the apply critical section (read-check → write → transition) under an apply
+  mutex, then add the concurrent test asserting exactly one `applied` and the
+  rest `conflicted`. This is the review's "阻断点 3" (release blocker). **Now
+  tackling.**
 
 **Deferred / owner-judgment (in-boundary but not auto-fixing this pass):**
 - **P2-5 + P2-37** — the dead `drafts.Draft` struct API (`New`/`SubmitForReview`/
