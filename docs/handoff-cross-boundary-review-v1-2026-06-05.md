@@ -54,8 +54,13 @@ owner can act fast. I also touched **no WIP files** (the TUI line's
 - **P2-38** (`inferProvider` heuristic): in WIP `tui_workbench.go` — skip.
 
 ### mcp
-- **P2-31** (`structuredContent` non-standard field), **P2-32** (`MarshalIndent`
-  vs `Marshal`): minor; may be intentional (client compat / readable logs). Owner.
+- **P2-31 / P2-32 — NOT bugs (verified 2026-06-05).** `tools/call` deliberately
+  returns BOTH a pretty-printed `content[].text` (the human/LLM-readable result,
+  `server.go:155-162`) AND `structuredContent` (the machine-parseable result,
+  `:164`). So `MarshalIndent` (P2-32) is intentional readability for the text
+  channel, not overhead — switching to `Marshal` would regress it; and
+  `structuredContent` (P2-31) is the intended machine path (a current MCP field,
+  not "non-standard"). No action — both are correct as-is.
 
 ### console
 - **P1-14** (24-method `Runtime` interface → split per ISP): a large refactor
