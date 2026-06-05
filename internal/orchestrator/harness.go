@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -123,7 +125,7 @@ func (h *Harness) ObserveDocumentChange(relPath string, content []byte, at time.
 	}
 
 	draft := model.Draft{
-		ID:    fmt.Sprintf("draft-%d", at.UnixNano()),
+		ID:    newDraftID(at),
 		Kind:  model.DraftKindProgressSync,
 		State: model.DraftPendingReview,
 		Target: model.DocumentRef{
@@ -196,7 +198,7 @@ func (h *Harness) ProposePersonaUpdate(proposal model.PersonaUpdateProposal, at 
 	}
 
 	draft := model.Draft{
-		ID:    fmt.Sprintf("draft-%d", at.UnixNano()),
+		ID:    newDraftID(at),
 		Kind:  model.DraftKindPersonaUpdate,
 		State: model.DraftPendingReview,
 		Target: model.DocumentRef{
@@ -272,7 +274,7 @@ func (h *Harness) ProposeMarkdownNote(proposal model.MarkdownNoteProposal, at ti
 		return model.MarkdownNoteProposalResult{}, err
 	}
 	draft := model.Draft{
-		ID:    fmt.Sprintf("draft-%d", at.UnixNano()),
+		ID:    newDraftID(at),
 		Kind:  model.DraftKindMarkdownNoteWrite,
 		State: model.DraftPendingReview,
 		Target: model.DocumentRef{
@@ -1247,4 +1249,19 @@ func (h *Harness) recordAudit(record model.AuditRecord) {
 }
 func auditID(prefix string, at time.Time) string {
 	return fmt.Sprintf("%s-%d", prefix, at.UnixNano())
+}
+
+// newDraftID mints a draft ID as "draft-<UnixNano>-<8 hex>". The timestamp
+// prefix keeps lexical ordering (and the existing "draft-" prefix that
+// consumers match on); the random suffix removes the chance of two proposals
+// minted in the same nanosecond colliding now that daemon / console / MCP can
+// all create drafts concurrently. Mirrors persona.NewCandidateID; falls back
+// to a deterministic suffix if crypto/rand is unavailable so a draft is still
+// created (review-v1 P1-1).
+func newDraftID(at time.Time) string {
+	var random [4]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return fmt.Sprintf("draft-%d-0000", at.UnixNano())
+	}
+	return fmt.Sprintf("draft-%d-%s", at.UnixNano(), hex.EncodeToString(random[:]))
 }
