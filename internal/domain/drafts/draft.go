@@ -58,6 +58,18 @@ type Params struct {
 	CreatedAt       time.Time
 }
 
+// Draft is a self-contained draft-lifecycle domain entity: model.Draft plus
+// reviewer/applier provenance (Source, Review, AppliedBy) and the
+// New→SubmitForReview→Approve→Apply methods that enforce the state machine in
+// one object. It is an alternative to how the live runtime governs drafts: the
+// orchestrator operates on model.Draft through the store and the package-level
+// CanTransition / ValidateTransition (ValidateTransition is the only symbol of
+// this package the orchestrator consumes). This richer entity API is retained
+// as the domain model but is not currently wired into the runtime path -- keep
+// its State* constants in sync with model.DraftState if the orchestrator ever
+// migrates onto it. (review-v1 P2-5: model.DraftCreated is consequently
+// reachable only via this New()/SubmitForReview() path, not the runtime's
+// propose path, which starts drafts at pending_review.)
 type Draft struct {
 	model.Draft
 	Source    Source
@@ -189,6 +201,13 @@ func ValidateTransition(from State, to State) error {
 	return invalidTransition(from, "transition_to_"+string(to))
 }
 
+// AllowsDirectWrite reports whether applying this draft may write the vault
+// without review. It is always false by governance rule -- a Draft never
+// authorizes a direct write; every change flows through propose → review →
+// apply. It is kept as an explicit, named invariant on the domain entity (the
+// orchestrator enforces the same rule at apply time via validateDraftTarget)
+// so no future caller can assume a draft kind is a direct-write shortcut.
+// (review-v1 P2-37: documents the deliberate always-false return.)
 func (d Draft) AllowsDirectWrite() bool {
 	return false
 }
