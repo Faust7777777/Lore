@@ -71,6 +71,7 @@ Updated: 2026-06-05
 - Persona memory candidate pipeline exists on the local path: LLM extraction runs asynchronously, candidates are persisted, evidence is validated, usage is recorded under `persona_extract`, and CLI supports list/show/dismiss/draft/recover.
 - Usage summaries normalize records by local calendar day and show per-purpose breakdowns through `lore usage` and status output.
 - Release gates now separate PR-safe fake-provider checks from full model-backed checks, with persona acceptance available as an explicit opt-in gate.
+- Audit-followup hardening (branch `b-line/audit-followups`): a unified `lore inbox` operator queue (pending drafts + open findings + open persona candidates + today's usage glance, with `--json`); enforcement of `usage.track_usage` and `usage.soft_warning_tokens`; cancellable context threaded through the process-sink summarizer and Codex import/sync/attach paths; rune-safe truncation for CJK content; and consistency fixes (best-effort-but-health-marked event publish, apply-path serialization, persona DedupKey escaping).
 
 ## Verified
 
