@@ -146,7 +146,7 @@ func (h *Harness) ObserveDocumentChange(relPath string, content []byte, at time.
 	// saved, so a broker failure must not fail the observation and skip the
 	// audit below -- that would invite a duplicate progress-sync draft on the
 	// caller's retry. Mirrors transitionDraftState / SupersedeDraft.
-	_ = h.broker.Publish(context.Background(), hruntime.Event{
+	h.publishEvent(hruntime.Event{
 		ID:         draft.ID,
 		Type:       hruntime.EventDraftCreated,
 		Source:     "observe_document_change",
@@ -220,7 +220,7 @@ func (h *Harness) ProposePersonaUpdate(proposal model.PersonaUpdateProposal, at 
 	// would tell the agent it failed and provoke a duplicate-draft retry,
 	// while leaving a draft with no audit record. Mirrors the best-effort
 	// publish in transitionDraftState / SupersedeDraft / IngestSessionWindow.
-	_ = h.broker.Publish(context.Background(), hruntime.Event{
+	h.publishEvent(hruntime.Event{
 		ID:         draft.ID,
 		Type:       hruntime.EventDraftCreated,
 		Source:     "persona_update_propose",
@@ -294,7 +294,7 @@ func (h *Harness) ProposeMarkdownNote(proposal model.MarkdownNoteProposal, at ti
 	// Best-effort publish, same rationale as ProposePersonaUpdate: the draft
 	// is saved, so a broker failure must not fail the proposal / skip the
 	// audit / invite a duplicate-draft retry.
-	_ = h.broker.Publish(context.Background(), hruntime.Event{
+	h.publishEvent(hruntime.Event{
 		ID:         draft.ID,
 		Type:       hruntime.EventDraftCreated,
 		Source:     "markdown_note_propose",
@@ -441,14 +441,14 @@ func (h *Harness) SupersedeDraft(id string, update model.DraftSupersedeUpdate, a
 	if err != nil {
 		return model.Draft{}, err
 	}
-	_ = h.broker.Publish(context.Background(), hruntime.Event{
+	h.publishEvent(hruntime.Event{
 		ID:         superseded.ID,
 		Type:       hruntime.EventDraftStateChanged,
 		Source:     "supersede_draft",
 		OccurredAt: at,
 		Payload:    superseded,
 	})
-	_ = h.broker.Publish(context.Background(), hruntime.Event{
+	h.publishEvent(hruntime.Event{
 		ID:         revised.ID,
 		Type:       hruntime.EventDraftCreated,
 		Source:     "supersede_draft",
@@ -622,7 +622,7 @@ func (h *Harness) markDraftConflicted(draft model.Draft, at time.Time) error {
 	}
 	conflicted, updateErr := h.store.Drafts().UpdateDraftState(draft.ID, model.DraftConflicted, at)
 	if updateErr == nil {
-		_ = h.broker.Publish(context.Background(), hruntime.Event{
+		h.publishEvent(hruntime.Event{
 			ID:         conflicted.ID,
 			Type:       hruntime.EventDraftStateChanged,
 			Source:     "apply_draft_conflict",
@@ -808,7 +808,7 @@ func (h *Harness) transitionDraftState(id string, next model.DraftState, source 
 	if err != nil {
 		return model.Draft{}, err
 	}
-	_ = h.broker.Publish(context.Background(), hruntime.Event{
+	h.publishEvent(hruntime.Event{
 		ID:         updated.ID,
 		Type:       hruntime.EventDraftStateChanged,
 		Source:     source,
@@ -835,7 +835,7 @@ func (h *Harness) IngestSessionWindow(window model.SessionWindow, title string, 
 	if err != nil {
 		return model.CheckpointDoc{}, err
 	}
-	_ = h.broker.Publish(context.Background(), hruntime.Event{
+	h.publishEvent(hruntime.Event{
 		ID:         doc.WindowKey,
 		Type:       hruntime.EventCheckpointWritten,
 		Source:     "ingest_session_window",
@@ -873,7 +873,7 @@ func (h *Harness) RollupDailyWithSummary(agentID string, day time.Time, title st
 }
 
 func (h *Harness) publishDailyRollup(agentID string, report model.DailyReport, at time.Time) model.DailyReport {
-	_ = h.broker.Publish(context.Background(), hruntime.Event{
+	h.publishEvent(hruntime.Event{
 		ID:         report.Path,
 		Type:       hruntime.EventDailyRollupWritten,
 		Source:     "rollup_daily",
@@ -1222,6 +1222,19 @@ func insertLine(lines []string, index int, line string) []string {
 	copy(lines[index+1:], lines[index:])
 	lines[index] = line
 	return lines
+}
+
+// publishEvent publishes a runtime event best-effort. The durable state
+// change has already been persisted, so a broker failure must not fail the
+// operation (and provoke a duplicate-draft retry). But it is not silent --
+// the failure degrades health, surfaced in `lore status`, mirroring
+// recordAudit, so a failing event bus is visible to the operator rather than
+// dropped (review-v1 P1-2). Centralizing the publish also keeps all nine
+// call sites consistent.
+func (h *Harness) publishEvent(event hruntime.Event) {
+	if err := h.broker.Publish(context.Background(), event); err != nil {
+		h.health.MarkError("event publish failed: " + err.Error())
+	}
 }
 
 func (h *Harness) recordAudit(record model.AuditRecord) {

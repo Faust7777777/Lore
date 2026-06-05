@@ -105,6 +105,11 @@ func assertDraftSavedAndAudited(t *testing.T, h *Harness, inner store.StateStore
 	if draft.State != model.DraftPendingReview {
 		t.Fatalf("draft state = %s, want pending_review", draft.State)
 	}
+	// Best-effort publish is not silent: the failing broker must degrade
+	// health (surfaced in `lore status`), per review-v1 P1-2.
+	if snap := h.StatusSnapshot(); snap.Outcome.Status != model.StatusError {
+		t.Fatalf("publish failure must degrade health, got status %q (message %q)", snap.Outcome.Status, snap.Message)
+	}
 	records, err := inner.Audit().ListAudit(64)
 	if err != nil {
 		t.Fatalf("ListAudit: %v", err)
