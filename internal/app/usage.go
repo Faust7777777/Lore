@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"obsidian-harness/internal/model"
@@ -32,6 +33,12 @@ func (r *Runtime) RecordUsage(records []model.UsageRecord) error {
 	}
 	usageStore := r.Store.Usage()
 	for _, record := range records {
+		// Normalize Purpose so trivial casing/whitespace variants ("Chat",
+		// " chat ") do not fan out into separate buckets in `lore usage`.
+		// Unknown values are preserved (Purpose is intentionally unbounded
+		// for future categories) and empty stays empty ("unspecified").
+		// (review-v1 P2-6)
+		record.Purpose = strings.ToLower(strings.TrimSpace(record.Purpose))
 		if err := usageStore.AppendUsage(record); err != nil {
 			return err
 		}

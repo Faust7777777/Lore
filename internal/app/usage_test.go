@@ -44,6 +44,38 @@ func TestRuntimeRecordUsageAppendsAllRecords(t *testing.T) {
 	}
 }
 
+func TestRuntimeRecordUsageNormalizesPurposeBuckets(t *testing.T) {
+	store := memory.New()
+	runtime := &Runtime{Store: store, Config: trackingConfig()}
+
+	day := time.Date(2026, 6, 5, 9, 0, 0, 0, time.UTC)
+	// Casing/whitespace variants of the same purpose must collapse into one
+	// bucket, not fan out into "Persona_Extract" + " persona_extract "
+	// (review-v1 P2-6).
+	records := []model.UsageRecord{
+		{Model: "m", Purpose: "Persona_Extract", PromptTokens: 1, RecordedAt: day},
+		{Model: "m", Purpose: " persona_extract ", PromptTokens: 2, RecordedAt: day},
+	}
+	if err := runtime.RecordUsage(records); err != nil {
+		t.Fatalf("RecordUsage() error = %v", err)
+	}
+	summary, err := store.Usage().SummarizeUsage(day)
+	if err != nil {
+		t.Fatalf("SummarizeUsage() error = %v", err)
+	}
+	if len(summary.PurposeBreakdown) != 1 {
+		t.Fatalf("want exactly 1 purpose bucket (variants collapsed), got %d: %v",
+			len(summary.PurposeBreakdown), summary.PurposeBreakdown)
+	}
+	bucket, ok := summary.PurposeBreakdown[model.UsagePurposePersonaExtract]
+	if !ok {
+		t.Fatalf("expected a %q bucket, got %v", model.UsagePurposePersonaExtract, summary.PurposeBreakdown)
+	}
+	if bucket.Calls != 2 {
+		t.Fatalf("persona_extract bucket Calls = %d, want 2", bucket.Calls)
+	}
+}
+
 func TestRuntimeRecordUsageEmptyIsNoOp(t *testing.T) {
 	runtime := &Runtime{Store: memory.New(), Config: trackingConfig()}
 	if err := runtime.RecordUsage(nil); err != nil {
