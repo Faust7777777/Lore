@@ -221,6 +221,86 @@ func TestChatCompletionUsesResponsesAPITools(t *testing.T) {
 	}
 }
 
+func TestChatCompletionLegacyPathTools(t *testing.T) {
+	// review-v1 P1-7: a non-Responses model must still send tools on the
+	// legacy /chat/completions path and parse tool_calls back, including the
+	// content-less (content: null) tool-call turn that previously errored.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q, want /chat/completions", r.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		// Chat tools nest name/description/parameters under "function".
+		tools, ok := payload["tools"].([]any)
+		if !ok || len(tools) != 1 {
+			t.Fatalf("tools = %#v, want one tool", payload["tools"])
+		}
+		tool := tools[0].(map[string]any)
+		if tool["type"] != "function" {
+			t.Fatalf("tool.type = %#v, want function", tool["type"])
+		}
+		fn, ok := tool["function"].(map[string]any)
+		if !ok || fn["name"] != "vault_read" {
+			t.Fatalf("tool.function = %#v, want vault_read", tool["function"])
+		}
+		if payload["tool_choice"] != "auto" {
+			t.Fatalf("tool_choice = %#v, want auto", payload["tool_choice"])
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{
+					"content": nil,
+					"tool_calls": []map[string]any{{
+						"id":   "call_9",
+						"type": "function",
+						"function": map[string]any{
+							"name":      "vault_read",
+							"arguments": `{"path":"a.md"}`,
+						},
+					}},
+				},
+			}},
+			"usage": map[string]any{"prompt_tokens": 7, "completion_tokens": 3},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL: server.URL,
+		APIKey:  "secret",
+		Model:   "deepseek-v4", // non-gpt-5.4 -> legacy /chat/completions path
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.ChatCompletion(context.Background(), ChatCompletionRequest{
+		Messages: []Message{{Role: "user", Content: "read a.md"}},
+		Tools:    []ToolDefinition{{Name: "vault_read", Description: "read a note", Parameters: map[string]any{"type": "object"}}},
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() error = %v (content-less tool call must not error)", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("resp.ToolCalls = %+v, want one tool call", resp.ToolCalls)
+	}
+	call := resp.ToolCalls[0]
+	if call.Name != "vault_read" {
+		t.Fatalf("tool call name = %q, want vault_read", call.Name)
+	}
+	if call.ID != "call_9" || call.CallID != "call_9" {
+		t.Fatalf("tool call id/callid = %q/%q, want call_9", call.ID, call.CallID)
+	}
+	if got := call.Arguments["path"]; got != "a.md" {
+		t.Fatalf("tool call arguments[path] = %#v, want a.md", got)
+	}
+}
+
 func TestChatCompletionUsesResponsesAPIPreservesAssistantHistory(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {

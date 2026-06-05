@@ -70,17 +70,35 @@ const (
 )
 
 type chatCompletionRequestPayload struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Temperature float64   `json:"temperature,omitempty"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	Stream      bool      `json:"stream"`
+	Model       string     `json:"model"`
+	Messages    []Message  `json:"messages"`
+	Tools       []chatTool `json:"tools,omitempty"`
+	ToolChoice  string     `json:"tool_choice,omitempty"`
+	Temperature float64    `json:"temperature,omitempty"`
+	MaxTokens   int        `json:"max_tokens,omitempty"`
+	Stream      bool       `json:"stream"`
+}
+
+// chatTool is the /chat/completions function-tool shape. Unlike the Responses
+// API's flat responsesTool, the chat API nests name/description/parameters
+// under a "function" object.
+type chatTool struct {
+	Type     string           `json:"type"`
+	Function chatToolFunction `json:"function"`
+}
+
+type chatToolFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters"`
+	Strict      bool           `json:"strict,omitempty"`
 }
 
 type chatCompletionResponsePayload struct {
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content   string         `json:"content"`
+			ToolCalls []chatToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 	} `json:"choices"`
 	Usage struct {
@@ -91,6 +109,18 @@ type chatCompletionResponsePayload struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
 	} `json:"error,omitempty"`
+}
+
+// chatToolCall is one entry of a chat message's tool_calls. The chat API uses a
+// single `id` per call (referenced back as tool_call_id) and nests the function
+// name/arguments (arguments is a JSON string) under "function".
+type chatToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
 }
 
 type responsesRequestPayload struct {
@@ -219,6 +249,10 @@ func (c *Client) chatCompletionOnce(ctx context.Context, req ChatCompletionReque
 		MaxTokens:   req.MaxTokens,
 		Stream:      false,
 	}
+	if len(req.Tools) > 0 {
+		payload.Tools = buildChatTools(req.Tools)
+		payload.ToolChoice = "auto"
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return ChatCompletionResponse{}, err
@@ -261,16 +295,79 @@ func (c *Client) chatCompletionOnce(ctx context.Context, req ChatCompletionReque
 		return ChatCompletionResponse{}, fmt.Errorf("openai client: empty choices")
 	}
 
+	toolCalls, err := extractChatToolCalls(parsed.Choices[0].Message.ToolCalls)
+	if err != nil {
+		return ChatCompletionResponse{}, err
+	}
 	content := strings.TrimSpace(parsed.Choices[0].Message.Content)
-	if content == "" {
+	// A tool-call turn legitimately carries no text content (content: null);
+	// only treat an empty response as an error when there are also no tool
+	// calls. Previously tool calls were dropped and a content-less turn was
+	// rejected (review-v1 P1-7).
+	if content == "" && len(toolCalls) == 0 {
 		return ChatCompletionResponse{}, fmt.Errorf("openai client: empty message content")
 	}
 
 	return ChatCompletionResponse{
 		Content:          content,
+		ToolCalls:        toolCalls,
 		PromptTokens:     parsed.Usage.PromptTokens,
 		CompletionTokens: parsed.Usage.CompletionTokens,
 	}, nil
+}
+
+// buildChatTools maps the internal tool definitions to the /chat/completions
+// function-tool shape (mirrors the Responses path's tool building, including
+// the empty-parameters fallback that some providers require).
+func buildChatTools(tools []ToolDefinition) []chatTool {
+	out := make([]chatTool, 0, len(tools))
+	for _, tool := range tools {
+		parameters := tool.Parameters
+		if len(parameters) == 0 {
+			parameters = map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			}
+		}
+		out = append(out, chatTool{
+			Type: "function",
+			Function: chatToolFunction{
+				Name:        strings.TrimSpace(tool.Name),
+				Description: strings.TrimSpace(tool.Description),
+				Parameters:  parameters,
+				Strict:      tool.Strict,
+			},
+		})
+	}
+	return out
+}
+
+// extractChatToolCalls decodes a chat message's tool_calls into the internal
+// ToolCall shape. The chat API has one id per call (used as both ID and the
+// CallID the agent echoes back as tool_call_id) and carries arguments as a JSON
+// string. Mirrors extractResponsesToolCalls.
+func extractChatToolCalls(raw []chatToolCall) ([]ToolCall, error) {
+	toolCalls := make([]ToolCall, 0, len(raw))
+	for _, tc := range raw {
+		name := strings.TrimSpace(tc.Function.Name)
+		if name == "" {
+			return nil, fmt.Errorf("openai client: chat tool_call missing function name")
+		}
+		arguments := map[string]any{}
+		rawArgs := strings.TrimSpace(tc.Function.Arguments)
+		if rawArgs != "" {
+			if err := json.Unmarshal([]byte(rawArgs), &arguments); err != nil {
+				return nil, fmt.Errorf("openai client: decode tool_call arguments for %s: %w", name, err)
+			}
+		}
+		toolCalls = append(toolCalls, ToolCall{
+			ID:        strings.TrimSpace(tc.ID),
+			CallID:    strings.TrimSpace(tc.ID),
+			Name:      name,
+			Arguments: arguments,
+		})
+	}
+	return toolCalls, nil
 }
 
 func (c *Client) responsesOnce(ctx context.Context, req ChatCompletionRequest) (ChatCompletionResponse, error) {
