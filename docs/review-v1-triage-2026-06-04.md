@@ -47,10 +47,15 @@ release blocker). Both the P2-2 TOCTOU fix and the P0-2 test gap closed.
   owner call (possible deliberate DDD/SDK extension point). **Surfaced, not
   deleted** — per the "don't delete code you didn't create when intent is
   ambiguous" rule.
-- **P1-4 / P2-7** — `internal/runtime` InMemoryBroker partial-delivery on
-  backpressure + a publish-vs-close race. B-line-adjacent **shared infra**;
-  largely defanged now that all publishers are best-effort. Needs coordination
-  + a concurrent close-vs-publish test before changing shared code.
+- **P2-7** — broker publish-vs-close panic. **DONE `bf23fc4`**: `Publish` now
+  sends under the read lock so `cancel()`'s `close(ch)` (write lock) can never
+  fire mid-send. Semantics-preserving (delivery + backpressure unchanged), so
+  the daemon subscriber side is unaffected; race test added.
+- **P1-4** — `internal/runtime` InMemoryBroker partial-delivery on backpressure
+  (early-return on the first full subscriber). Still **deferred**: changing the
+  delivery/return semantics is a behavior change to shared infra that interacts
+  with the P1-2 health-marking, and it's defanged now that publishers are
+  best-effort. Needs coordination before changing.
 
 **Deferred / owner-judgment (in-boundary but not auto-fixing this pass):**
 - **P2-5 + P2-37** — the dead `drafts.Draft` struct API (`New`/`SubmitForReview`/
