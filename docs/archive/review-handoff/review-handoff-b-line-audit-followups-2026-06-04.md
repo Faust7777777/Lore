@@ -141,6 +141,14 @@ Domain-layer findings that are *not* bugs but warrant an owner decision
   A-line tuning question.
 - **`allowsLowRiskDirectWrite` permits `DocClassUnknown`** — permissive but
   backstopped by audit + the out-of-band-write finding (see review scope).
+- **Unused `internal/store/jsonstore` backend** (surfaced 2026-06-05 via a
+  coverage hunt — its 23% coverage flagged it). A complete `StateStore`
+  implementation (~1k lines) with **no non-test importer**; production uses
+  `sqlitestore.OpenWithJSONMigration`. Spot-checked `SupersedeDraft` (the
+  most complex untested method) — sound, just unexercised. Like the
+  `drafts.Draft` API it may be a deliberate alternative/portable backend, so
+  delete-vs-keep is an owner call; not removed. (The low coverage is therefore
+  benign — it is an unused backend, not an untested production path.)
 
 ## Boundary assertion
 
