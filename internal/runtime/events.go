@@ -48,15 +48,17 @@ func NewInMemoryBroker() *InMemoryBroker {
 }
 
 func (b *InMemoryBroker) Publish(ctx context.Context, event Event) error {
+	// Hold the read lock across the sends. A subscriber's cancel() closes its
+	// channel under the write lock, so the previous version -- which snapshotted
+	// the channels, released the lock, then sent -- could send on a channel a
+	// concurrent cancel had already closed, panicking with "send on closed
+	// channel" (review-v1 P2-7). Sending under RLock makes that impossible
+	// (cancel's write lock waits for us). The sends are non-blocking (the
+	// default case below), so this cannot stall cancel for long.
 	b.mu.RLock()
-	subs := b.subscribers[event.Type]
-	channels := make([]chan Event, 0, len(subs))
-	for ch := range subs {
-		channels = append(channels, ch)
-	}
-	b.mu.RUnlock()
+	defer b.mu.RUnlock()
 
-	for _, ch := range channels {
+	for ch := range b.subscribers[event.Type] {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
