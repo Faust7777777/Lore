@@ -42,11 +42,16 @@ exactly one `applied` and the rest `conflicted` (the review's "阻断点 3"
 release blocker). Both the P2-2 TOCTOU fix and the P0-2 test gap closed.
 
 ### Still deferred (owner-judgment / shared-infra — NOT auto-fixing)
-- **P2-5 + P2-37** — the dead `drafts.Draft` struct API. Confirmed dead by
-  two independent reviews, but deleting a whole domain API + its test is an
-  owner call (possible deliberate DDD/SDK extension point). **Surfaced, not
-  deleted** — per the "don't delete code you didn't create when intent is
-  ambiguous" rule.
+- **P2-5 + P2-37** — the un-wired `drafts.Draft` struct API (only
+  `ValidateTransition` is consumed by the orchestrator; verified by usage map).
+  On inspection it is a deliberate, fully-tested draft-lifecycle domain entity
+  (a plausible DDD migration target), not orphan code, so **deletion would
+  discard real design work** — that stays an owner call. Addressed
+  non-destructively instead (`fcf4e26`): documented the `Draft` type's
+  relationship to the live `model.Draft` path (and why `DraftCreated` only
+  arises there) and added the always-false `AllowsDirectWrite` design-intent
+  comment P2-37 explicitly asked for. The confusion is removed; the design is
+  preserved.
 - **P2-7** — broker publish-vs-close panic. **DONE `bf23fc4`**: `Publish` now
   sends under the read lock so `cancel()`'s `close(ch)` (write lock) can never
   fire mid-send. Semantics-preserving (delivery + backpressure unchanged), so
