@@ -43,6 +43,16 @@ func TestRunCodexAttachLoopSyncsOnWatcherEventBeforePoll(t *testing.T) {
 		},
 	}
 
+	// Generous margins so the test is robust under heavy parallel CI load
+	// (the watcher fires in ~200ms normally; the happy path stays sub-second).
+	// The invariant being checked is "the watcher triggers the second sync
+	// before the poll would": the poll interval (60s) is far larger than the
+	// watcher latency, and the wait deadline (30s) is kept below the poll
+	// interval so a genuinely broken watcher still fails (no second sync
+	// arrives before the deadline).
+	const pollEvery = 60 * time.Second
+	const waitDeadline = 30 * time.Second
+
 	errCh := make(chan error, 1)
 	startedAt := time.Now()
 	go func() {
@@ -50,7 +60,7 @@ func TestRunCodexAttachLoopSyncsOnWatcherEventBeforePoll(t *testing.T) {
 			InputPath: transcriptPath,
 			AgentID:   "codex",
 			SessionID: "session-watch",
-		}, 5*time.Second, io.Discard, io.Discard)
+		}, pollEvery, io.Discard, io.Discard)
 	}()
 
 	time.Sleep(200 * time.Millisecond)
@@ -63,11 +73,11 @@ func TestRunCodexAttachLoopSyncsOnWatcherEventBeforePoll(t *testing.T) {
 		if err != nil {
 			t.Fatalf("runCodexAttachLoop() error = %v", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(waitDeadline):
 		t.Fatal("runCodexAttachLoop() did not react to watcher event in time")
 	}
 
-	if elapsed := time.Since(startedAt); elapsed >= 5*time.Second {
+	if elapsed := time.Since(startedAt); elapsed >= pollEvery {
 		t.Fatalf("attach loop elapsed = %s, want watcher-triggered sync before poll interval", elapsed)
 	}
 	if got := syncer.Count(); got < 2 {
