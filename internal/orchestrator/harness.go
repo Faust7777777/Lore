@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"obsidian-harness/internal/bootstrap"
@@ -46,6 +47,12 @@ type Harness struct {
 	health     *hruntime.HealthService
 	classifier docclass.Classifier
 	sink       *processsink.Service
+	// applyMu serializes ApplyDraft's read-check → write → state-transition
+	// critical section so two concurrent applies to the same vault file
+	// cannot both pass the baseVersion / new-file guard and both write
+	// (review-v1 P2-2/P0-2). Single-user apply contention is ~nil, so one
+	// harness-wide mutex is sufficient and simplest.
+	applyMu sync.Mutex
 }
 
 func New(cfg config.Config, state store.StateStore) (*Harness, error) {
@@ -488,6 +495,13 @@ func (h *Harness) SupersedeDraft(id string, update model.DraftSupersedeUpdate, a
 }
 
 func (h *Harness) ApplyDraft(id string, at time.Time) (model.Draft, error) {
+	// Hold applyMu for the whole apply: the read-check (baseVersion / new-file
+	// guard in readDraftTargetForApply), the vault write, and the state
+	// transition must be one atomic critical section, or concurrent applies to
+	// the same target race the guard and both write (review-v1 P2-2/P0-2).
+	h.applyMu.Lock()
+	defer h.applyMu.Unlock()
+
 	draft, err := h.store.Drafts().GetDraft(id)
 	if err != nil {
 		return model.Draft{}, err
