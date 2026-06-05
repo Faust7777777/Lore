@@ -20,19 +20,15 @@ owner can act fast. I also touched **no WIP files** (the TUI line's
 | MCP | **P1-15** (security) | `30b1e59` | `validateProcessAuth` now uses `crypto/subtle.ConstantTimeCompare` instead of `==` (which leaks the key prefix length via timing). Test added. |
 | adapter | **P1-9** (OOM) | `f1972a7` | `LoadTail` reads via `io.LimitReader(file, 64MB)`; the returned offset advances so >cap tails are consumed across calls — no data loss, bounded memory. |
 | console | **P2-29** (dead code) | `22876ae` | Removed ~182 lines of commented-out `hasExplicitLocalWorkIntent` code. Zero behavior change. |
+| **llm** | **P1-7** (function-calling) | `591712a` | The legacy `/chat/completions` path now sends `req.Tools` (chat function-tool shape, `tool_choice=auto`) and parses `tool_calls` back, returning them via `ChatCompletionResponse.ToolCalls`; a content-less tool-call turn no longer errors. Mirrors the Responses helpers. Mocked-endpoint test. **(Done on follow-up: I took this on once authorized — the wire format is standard and unit-testable without a live endpoint.)** |
+| cmd (test) | flaky watcher test | `ce26ccb` | De-flaked `TestRunCodexAttachLoopSyncsOnWatcherEventBeforePoll` (60s poll / 30s deadline) — it was intermittently failing under full-module load, which would break the Release Gate. |
 
 ## Deferred to owner — verified diagnosis, NOT a safe cross-boundary quick fix
 
 ### llm
-- **P1-7 (legacy chat path ignores tools / drops `tool_calls`).** Confirmed: the
-  legacy `chatCompletionRequestPayload` has **no `Tools` field**, so `req.Tools`
-  is silently dropped (the model is never told about tools) and the response's
-  `tool_calls` are not parsed; `chatCompletionOnce` even errors on empty content
-  (would reject a content-less tool-call turn). Fix = a *feature*: marshal
-  `req.Tools` into the legacy payload, parse `message.tool_calls` from the
-  response, return them via the existing `ChatCompletionResponse.ToolCalls`, and
-  stop erroring when a tool call carries no text. Needs the OpenAI `/chat/completions`
-  tools wire format + a real-endpoint test — owner's call.
+- **P1-7 — DONE `591712a`** (see Fixed table). Originally deferred as a feature;
+  taken on once authorized since the chat tools/`tool_calls` wire format is
+  standard and unit-testable with a mocked endpoint.
 - **P2-16** (`NewClient` doesn't validate empty `Model`): trivial, but two
   callers live in WIP `tui_workbench.go` I can't verify — owner should add
   `if cfg.Model == "" { return err }` once those are confirmed to set Model.
