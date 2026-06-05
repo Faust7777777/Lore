@@ -1,6 +1,6 @@
 # Development Status
 
-Updated: 2026-05-22
+Updated: 2026-06-05
 
 ## Implemented
 
@@ -98,7 +98,7 @@ The `smoke p0`, `demo-p0b`, and process-sink summarization paths require `LORE_L
 - No long-running app-server attach loop yet; app-server support is currently one-shot import, while continuous attach is JSONL-based.
 - Pending approval queue is still a placeholder in the TUI; draft review/apply exists through CLI and agent actions.
 - Attachment refs are surfaced in read APIs, but binary/media extraction is not implemented yet.
-- Usage tracking has CLI/status visibility, but product-level soft warnings and richer TUI usage panels are still not implemented.
+- Usage tracking has CLI/status visibility and a soft daily-budget warning (`usage.soft_warning_tokens`, surfaced as a nudge in `lore status`); richer TUI usage panels are still not implemented.
 - Persona candidates do not update `人物画像.md` directly; they still require explicit draft creation and the existing local review/apply path.
 - External transcript import is not yet connected to persona candidate extraction; the stable path is still the local console/TUI conversation flow.
 
