@@ -35,14 +35,22 @@ Prioritised, in-boundary, genuinely valid. **All four DONE 2026-06-05:**
 Also landed independently (not in this report — found during the framework
 review): **VaultResolve uniqueness vs limit-truncation** (`402806c`).
 
-### Still open (next)
-- **P0-2 + P2-2 (coupled)** — no concurrent-ApplyDraft test, and a real
-  TOCTOU between `readDraftTargetForApply`'s hash/exists check and the atomic
-  write. A concurrent test would expose the TOCTOU, so the fix is to serialize
-  the apply critical section (read-check → write → transition) under an apply
-  mutex, then add the concurrent test asserting exactly one `applied` and the
-  rest `conflicted`. This is the review's "阻断点 3" (release blocker). **Now
-  tackling.**
+### P0-2 + P2-2 (coupled) — DONE `dd77d37`
+Serialized ApplyDraft's read-check → write → transition under a harness-wide
+`applyMu`, closing the TOCTOU; added an 8-goroutine concurrent test asserting
+exactly one `applied` and the rest `conflicted` (the review's "阻断点 3"
+release blocker). Both the P2-2 TOCTOU fix and the P0-2 test gap closed.
+
+### Still deferred (owner-judgment / shared-infra — NOT auto-fixing)
+- **P2-5 + P2-37** — the dead `drafts.Draft` struct API. Confirmed dead by
+  two independent reviews, but deleting a whole domain API + its test is an
+  owner call (possible deliberate DDD/SDK extension point). **Surfaced, not
+  deleted** — per the "don't delete code you didn't create when intent is
+  ambiguous" rule.
+- **P1-4 / P2-7** — `internal/runtime` InMemoryBroker partial-delivery on
+  backpressure + a publish-vs-close race. B-line-adjacent **shared infra**;
+  largely defanged now that all publishers are best-effort. Needs coordination
+  + a concurrent close-vs-publish test before changing shared code.
 
 **Deferred / owner-judgment (in-boundary but not auto-fixing this pass):**
 - **P2-5 + P2-37** — the dead `drafts.Draft` struct API (`New`/`SubmitForReview`/
