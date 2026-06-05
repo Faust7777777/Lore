@@ -16,6 +16,12 @@ import (
 
 const maxJSONLLine = 4 * 1024 * 1024
 
+// maxTailBytes caps a single LoadTail read so a very large or maliciously huge
+// JSONL file cannot OOM the process (review-v1 P1-9). LoadTail returns the
+// advanced offset, so content beyond the cap is consumed by the next call --
+// no data is lost, the read is just bounded per invocation.
+const maxTailBytes = 64 * 1024 * 1024
+
 type Event struct {
 	Timestamp   time.Time
 	Role        string
@@ -80,7 +86,7 @@ func LoadTail(path string, startOffset int64) (Transcript, int64, error) {
 		}
 	}
 
-	data, err := io.ReadAll(file)
+	data, err := io.ReadAll(io.LimitReader(file, maxTailBytes))
 	if err != nil {
 		return Transcript{}, 0, err
 	}
