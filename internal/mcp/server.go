@@ -3,6 +3,7 @@ package mcp
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -193,7 +194,11 @@ func validateProcessAuth() error {
 		return nil
 	}
 	provided := firstNonEmptyEnv("LORE_CLIENT_KEY", "OBSIDIAN_HARNESS_CLIENT_KEY")
-	if provided == expected {
+	// Constant-time comparison so a caller cannot recover the configured key
+	// byte-by-byte from response-timing differences. A plain `==` short-circuits
+	// on the first mismatching byte and leaks the match prefix length
+	// (review-v1 P1-15).
+	if subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1 {
 		return nil
 	}
 	return fmt.Errorf("mcp authentication failed: client key mismatch")
