@@ -341,13 +341,13 @@ func TestRenderApprovalDetailPendingReview(t *testing.T) {
 		State: model.DraftPendingReview, Summary: "A summary here", ProposedContent: "Note content",
 	}
 	result := renderApprovalPane([]model.Draft{draft}, 0, 0, true, nil, 36, 20)
-	if !strings.Contains(result, "Draft Detail") {
-		t.Errorf("approval detail should show 'Draft Detail', got: %q", result)
+	if !strings.Contains(result, "Draft Review") {
+		t.Errorf("approval detail should show 'Draft Review', got: %q", result)
 	}
-	if !strings.Contains(result, "a=同意") {
+	if !strings.Contains(result, "a=approve") {
 		t.Errorf("pending review detail should show approve action, got: %q", result)
 	}
-	if strings.Contains(result, "p=应用") {
+	if strings.Contains(result, "p=apply") {
 		t.Errorf("pending review detail should NOT show apply action, got: %q", result)
 	}
 }
@@ -358,10 +358,10 @@ func TestRenderApprovalDetailApproved(t *testing.T) {
 		State: model.DraftApproved, Summary: "A summary here", ProposedContent: "Note content",
 	}
 	result := renderApprovalPane([]model.Draft{draft}, 0, 0, true, nil, 36, 20)
-	if !strings.Contains(result, "p=应用") {
+	if !strings.Contains(result, "p=apply") {
 		t.Errorf("approved detail should show apply action, got: %q", result)
 	}
-	if strings.Contains(result, "a=同意") {
+	if strings.Contains(result, "a=approve") {
 		t.Errorf("approved detail should NOT show approve action, got: %q", result)
 	}
 }
@@ -568,15 +568,14 @@ func TestRenderApprovalDetailPersonaUpdateStructured(t *testing.T) {
 	result := renderApprovalPane([]model.Draft{draft}, 0, 0, true, nil, 60, 30)
 
 	for _, expected := range []string{
-		"Field:",
 		"目标角色",
 		"学生",
 		"讲师",
 		"Evidence",
 		"我是个学生",
-		"Confidence:",
+		"Confidence",
 		"high",
-		"a=同意",
+		"a=approve",
 	} {
 		if !strings.Contains(result, expected) {
 			t.Errorf("persona_update detail missing %q in output:\n%s", expected, result)

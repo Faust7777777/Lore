@@ -11,18 +11,22 @@ import (
 )
 
 type WorkbenchViewModel struct {
-	Header        WorkbenchHeader
-	Snapshot      WorkbenchSnapshot
-	ManagedCore   []model.ManagedCoreStatus
-	PendingDrafts []model.Draft
-	FocusedReview *app.DraftReview
-	ProcessSink   app.ProcessSinkDayView
-	Findings      []model.Finding
-	ToolTrace     []operatoragent.ToolCallTrace
-	TurnSteps     []operatoragent.TurnStep
-	Conversation  WorkbenchConversation
-	QuickActions  []string
-	Controls      []string
+	Header               WorkbenchHeader
+	Snapshot             WorkbenchSnapshot
+	ManagedCore          []model.ManagedCoreStatus
+	PendingDrafts        []model.Draft
+	FocusedReview        *app.DraftReview
+	ProcessSink          app.ProcessSinkDayView
+	Findings             []model.Finding
+	ToolTrace            []operatoragent.ToolCallTrace
+	TurnSteps            []operatoragent.TurnStep
+	Conversation         WorkbenchConversation
+	CandidateList        []PersonaCandidateInfo
+	ChatModelIdentity    *app.LLMIdentity
+	PersonaModelIdentity *app.LLMIdentity
+	SinkModelIdentity    *app.LLMIdentity
+	QuickActions         []string
+	Controls             []string
 }
 
 type WorkbenchHeader struct {

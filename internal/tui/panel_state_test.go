@@ -385,6 +385,7 @@ func TestTabCycleIncludesNewPanels(t *testing.T) {
 		focusFindings,
 		focusProcessSink,
 		focusApproval,
+		focusCandidates,
 		focusInput,
 	}
 
@@ -398,15 +399,16 @@ func TestTabCycleIncludesNewPanels(t *testing.T) {
 
 	// Reverse cycle
 	reverseCycle := []interactiveFocus{
+		focusCandidates,
+		focusApproval,
 		focusProcessSink,
 		focusFindings,
 		focusStatus,
 		focusConversation,
 		focusInput,
-		focusApproval,
 	}
 
-	current = interactiveFocus(focusApproval)
+	current = interactiveFocus(focusInput)
 	for i, expected := range reverseCycle {
 		current = previousFocus(current)
 		if current != expected {
@@ -488,6 +490,12 @@ type panelDriverStub struct {
 	drafts       []model.Draft
 	conversation []operatoragent.ConversationTurn
 	models       []ModelInfo
+	profiles     []ModelInfo
+	presets      []ModelProfilePreset
+	candidates   []PersonaCandidateInfo
+	errors       []ErrorEntry
+	persisted    []string
+	created      []string
 }
 
 func (d *panelDriverStub) Load(lastOutput string) (WorkbenchViewModel, error) {
@@ -547,6 +555,68 @@ func (d *panelDriverStub) TestModel(name string) error {
 	return nil
 }
 
+func (d *panelDriverStub) ListProfiles() ([]ModelInfo, error) {
+	return d.profiles, nil
+}
+
+func (d *panelDriverStub) CreateProfileFromPreset(presetName string, profileName string) error {
+	d.created = append(d.created, presetName+":"+profileName)
+	d.profiles = append(d.profiles, ModelInfo{
+		Name:        presetName + "-model",
+		Provider:    "preset",
+		Source:      "workspace",
+		KeyStatus:   "present",
+		ProfileName: profileName,
+		IsProfile:   true,
+	})
+	return nil
+}
+
+func (d *panelDriverStub) PersistActiveProfile(profileName string) error {
+	d.persisted = append(d.persisted, profileName)
+	for i := range d.profiles {
+		d.profiles[i].Active = d.profiles[i].ProfileName == profileName
+	}
+	return nil
+}
+
+func (d *panelDriverStub) AvailablePresets() []ModelProfilePreset {
+	if d.presets != nil {
+		return d.presets
+	}
+	return []ModelProfilePreset{{
+		Name:      "deepseek",
+		Provider:  "deepseek",
+		BaseURL:   "https://api.deepseek.com/v1",
+		Model:     "deepseek-v4-pro",
+		APIKeyEnv: "DEEPSEEK_API_KEY",
+	}}
+}
+
+func (d *panelDriverStub) ListPersonaCandidates() ([]PersonaCandidateInfo, error) {
+	return d.candidates, nil
+}
+
+func (d *panelDriverStub) DraftPersonaCandidate(id string) ([]PersonaCandidateInfo, error) {
+	return d.candidates, nil
+}
+
+func (d *panelDriverStub) DismissPersonaCandidate(id string) ([]PersonaCandidateInfo, error) {
+	return d.candidates, nil
+}
+
+func (d *panelDriverStub) RecoverPersonaCandidate(id string) ([]PersonaCandidateInfo, error) {
+	return d.candidates, nil
+}
+
+func (d *panelDriverStub) ListErrors() ([]ErrorEntry, error) {
+	return d.errors, nil
+}
+
+func (d *panelDriverStub) RetryPersonaCandidate(id string) ([]PersonaCandidateInfo, error) {
+	return d.candidates, nil
+}
+
 // errorDriverStub always returns errors from ExecuteFindingAction and ExecuteApprovalAction.
 type errorDriverStub struct {
 	findings []model.Finding
@@ -584,6 +654,46 @@ func (d *errorDriverStub) SwitchModel(name string) ([]ModelInfo, error) {
 
 func (d *errorDriverStub) TestModel(name string) error {
 	return fmt.Errorf("not implemented")
+}
+
+func (d *errorDriverStub) ListProfiles() ([]ModelInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (d *errorDriverStub) CreateProfileFromPreset(presetName string, profileName string) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (d *errorDriverStub) PersistActiveProfile(profileName string) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (d *errorDriverStub) AvailablePresets() []ModelProfilePreset {
+	return nil
+}
+
+func (d *errorDriverStub) ListPersonaCandidates() ([]PersonaCandidateInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (d *errorDriverStub) DraftPersonaCandidate(id string) ([]PersonaCandidateInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (d *errorDriverStub) DismissPersonaCandidate(id string) ([]PersonaCandidateInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (d *errorDriverStub) RecoverPersonaCandidate(id string) ([]PersonaCandidateInfo, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (d *errorDriverStub) ListErrors() ([]ErrorEntry, error) {
+	return nil, nil
+}
+
+func (d *errorDriverStub) RetryPersonaCandidate(id string) ([]PersonaCandidateInfo, error) {
+	return nil, fmt.Errorf("not implemented")
 }
 
 // TestP0PaneOverlapPrevention verifies that the layout never exceeds
@@ -634,7 +744,7 @@ func TestP0PaneOverlapPrevention(t *testing.T) {
 	// Cycle through all 6 focus states
 	focusOrder := []interactiveFocus{
 		focusInput, focusConversation, focusStatus,
-		focusFindings, focusProcessSink, focusApproval,
+		focusFindings, focusProcessSink, focusApproval, focusCandidates,
 	}
 
 	for _, f := range focusOrder {
@@ -661,9 +771,9 @@ func TestP0PaneOverlapPrevention(t *testing.T) {
 		}
 	}
 
-	// Verify full Tab cycle: start at focusInput, tab 6 times, should return to input
+	// Verify full Tab cycle: start at focusInput, tab through every focus state, should return to input
 	m.focus = focusInput
-	for i := 0; i < 6; i++ {
+	for i := 0; i < len(focusOrder); i++ {
 		m.focus = nextFocus(m.focus)
 		m.resize()
 		m.clampCurrentPanelOffset()
@@ -827,5 +937,209 @@ func TestModelPanelRenderEmpty(t *testing.T) {
 	result := renderModelPanel(nil, 0, false, "", 50, 10)
 	if !strings.Contains(result, "No models discovered") {
 		t.Errorf("empty state should show 'No models discovered', got: %q", result)
+	}
+}
+
+func TestModelPanelProfilesPersistSelectedProfile(t *testing.T) {
+	profiles := []ModelInfo{
+		{Name: "gpt-5.4", Provider: "openai", Source: "workspace", KeyStatus: "present", ProfileName: "openai", IsProfile: true, Active: true},
+		{Name: "deepseek-v4-pro", Provider: "deepseek", Source: "workspace", KeyStatus: "present", ProfileName: "deepseek", IsProfile: true},
+	}
+	driver := &panelDriverStub{profiles: profiles}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+
+	handled, updated, cmd := m.handleLocalCommand("/model profiles")
+	if !handled {
+		t.Fatal("/model profiles should be handled")
+	}
+	m = *updated.(*interactiveWorkbenchModel)
+	if cmd == nil {
+		t.Fatal("/model profiles should return a Cmd")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(interactiveWorkbenchModel)
+	if m.modelPanelMode != modelPanelProfiles {
+		t.Fatalf("modelPanelMode = %d, want profiles", m.modelPanelMode)
+	}
+	if len(m.modelPanelList) != 2 {
+		t.Fatalf("len(modelPanelList) = %d, want 2", len(m.modelPanelList))
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(interactiveWorkbenchModel)
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(interactiveWorkbenchModel)
+	if cmd == nil {
+		t.Fatal("enter on profile should return persist Cmd")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(interactiveWorkbenchModel)
+
+	if got := strings.Join(driver.persisted, ","); got != "deepseek" {
+		t.Fatalf("persisted profiles = %q, want deepseek", got)
+	}
+	if !strings.Contains(m.lastOutput, "Workspace active profile set to: deepseek") {
+		t.Fatalf("lastOutput = %q, want profile persisted message", m.lastOutput)
+	}
+	if !driver.profiles[1].Active {
+		t.Fatal("selected profile Active = false, want true")
+	}
+}
+
+func TestModelPanelCreateProfileFromPreset(t *testing.T) {
+	driver := &panelDriverStub{
+		profiles: nil,
+		presets: []ModelProfilePreset{{
+			Name:      "deepseek",
+			Provider:  "deepseek",
+			BaseURL:   "https://api.deepseek.com/v1",
+			Model:     "deepseek-v4-pro",
+			APIKeyEnv: "DEEPSEEK_API_KEY",
+		}},
+	}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+
+	handled, updated, cmd := m.handleLocalCommand("/model profiles")
+	if !handled {
+		t.Fatal("/model profiles should be handled")
+	}
+	m = *updated.(*interactiveWorkbenchModel)
+	updated, _ = m.Update(cmd())
+	m = updated.(interactiveWorkbenchModel)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = updated.(interactiveWorkbenchModel)
+	if m.modelPanelMode != modelPanelPresets {
+		t.Fatalf("modelPanelMode = %d, want presets", m.modelPanelMode)
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(interactiveWorkbenchModel)
+	if cmd == nil {
+		t.Fatal("enter on preset should create profile")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(interactiveWorkbenchModel)
+
+	if got := strings.Join(driver.created, ","); got != "deepseek:deepseek" {
+		t.Fatalf("created profiles = %q, want deepseek:deepseek", got)
+	}
+	if !strings.Contains(m.lastOutput, "Profile created: deepseek") {
+		t.Fatalf("lastOutput = %q, want profile created message", m.lastOutput)
+	}
+	if m.modelPanelMode != modelPanelProfiles {
+		t.Fatalf("modelPanelMode after create = %d, want profiles", m.modelPanelMode)
+	}
+}
+
+func TestModelProfileAndPresetRenderDoNotLeakSecrets(t *testing.T) {
+	profiles := []ModelInfo{{
+		Name:        "deepseek-v4-pro",
+		Provider:    "deepseek",
+		BaseURL:     "https://api.deepseek.com/v1",
+		Source:      "workspace",
+		KeyStatus:   "present",
+		ProfileName: "deepseek",
+		IsProfile:   true,
+		Active:      true,
+		APIKeyEnv:   "DEEPSEEK_API_KEY",
+	}}
+	profilePanel := renderProfilePanel(profiles, 0, false, "", 96, 8)
+	presetPanel := renderPresetPicker([]ModelProfilePreset{{
+		Name:        "deepseek",
+		Provider:    "deepseek",
+		BaseURL:     "https://api.deepseek.com/v1",
+		Model:       "deepseek-v4-pro",
+		APIKeyEnv:   "DEEPSEEK_API_KEY",
+		Description: "DeepSeek official endpoint",
+	}}, 0, 96, 8)
+	combined := profilePanel + "\n" + presetPanel
+	for _, expected := range []string{"deepseek", "deepseek-v4-pro", "DEEPSEEK_API_KEY"} {
+		if !strings.Contains(combined, expected) {
+			t.Fatalf("rendered panel missing %q:\n%s", expected, combined)
+		}
+	}
+	for _, forbidden := range []string{"sk-", "deepseek-secret", "Bearer "} {
+		if strings.Contains(combined, forbidden) {
+			t.Fatalf("rendered panel leaked %q:\n%s", forbidden, combined)
+		}
+	}
+}
+
+func TestErrorsCommandRendersDiagnosticsWithHintsAndNoSecrets(t *testing.T) {
+	driver := &panelDriverStub{errors: []ErrorEntry{{
+		Time:    "2026-05-28 19:20",
+		Stage:   "persona_extract",
+		Model:   "deepseek-v4-pro",
+		BaseURL: "https://api.deepseek.com/v1",
+		Error:   "400 model not found: use deepseek-v4-pro, not v4-pro",
+	}}}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+
+	handled, updated, cmd := m.handleLocalCommand("/errors")
+	if !handled {
+		t.Fatal("/errors should be handled")
+	}
+	m = *updated.(*interactiveWorkbenchModel)
+	if cmd == nil {
+		t.Fatal("/errors should return diagnostics Cmd")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(interactiveWorkbenchModel)
+
+	for _, want := range []string{
+		"Recent Errors",
+		"persona_extract",
+		"deepseek-v4-pro",
+		"https://api.deepseek.com/v1",
+		"hint:",
+		"Model name may be incorrect",
+	} {
+		if !strings.Contains(m.lastOutput, want) {
+			t.Fatalf("error diagnostics output missing %q:\n%s", want, m.lastOutput)
+		}
+	}
+	for _, forbidden := range []string{"sk-", "Bearer ", "deepseek-secret"} {
+		if strings.Contains(m.lastOutput, forbidden) {
+			t.Fatalf("error diagnostics leaked %q:\n%s", forbidden, m.lastOutput)
+		}
+	}
+}
+
+func TestErrorsCommandEmptyState(t *testing.T) {
+	driver := &panelDriverStub{}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+
+	handled, updated, cmd := m.handleLocalCommand("/errors")
+	if !handled {
+		t.Fatal("/errors should be handled")
+	}
+	m = *updated.(*interactiveWorkbenchModel)
+	if cmd == nil {
+		t.Fatal("/errors should return diagnostics Cmd")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(interactiveWorkbenchModel)
+	if m.lastOutput != "No recent errors." {
+		t.Fatalf("lastOutput = %q, want empty diagnostics message", m.lastOutput)
 	}
 }

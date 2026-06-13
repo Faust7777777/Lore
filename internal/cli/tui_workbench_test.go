@@ -426,6 +426,141 @@ func TestInteractiveWorkbenchSwitchModelUpdatesPersonaExtractor(t *testing.T) {
 	}
 }
 
+func TestInteractiveWorkbenchCreateProfileFromPresetWritesWorkspaceConfigWithoutSecret(t *testing.T) {
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, config.LoadOptions{
+		UserGlobalPath: filepath.Join(t.TempDir(), "absent-user-global.json"),
+	})
+	if err != nil {
+		t.Fatalf("OpenRuntimeWithConfigOptions() error = %v", err)
+	}
+	defer runtime.Close()
+
+	driver := interactiveWorkbenchDriver{
+		version: "test",
+		runtime: runtime,
+		session: console.NewSessionWithAgent("test", runtime.OperatorAgent),
+	}
+	if err := driver.CreateProfileFromPreset("deepseek", "deepseek"); err != nil {
+		t.Fatalf("CreateProfileFromPreset(deepseek) error = %v", err)
+	}
+
+	configPath := filepath.Join(workDir, ".lore", "config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.json) error = %v", err)
+	}
+	body := string(data)
+	for _, expected := range []string{"deepseek-v4-pro", "DEEPSEEK_API_KEY", "https://api.deepseek.com/v1"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("workspace config missing %q:\n%s", expected, body)
+		}
+	}
+	if strings.Contains(body, "deepseek-secret") {
+		t.Fatalf("workspace config leaked API key value:\n%s", body)
+	}
+
+	profiles, err := driver.ListProfiles()
+	if err != nil {
+		t.Fatalf("ListProfiles() error = %v", err)
+	}
+	if len(profiles) != 1 {
+		t.Fatalf("len(profiles) = %d, want 1: %+v", len(profiles), profiles)
+	}
+	if profiles[0].ProfileName != "deepseek" || profiles[0].Name != "deepseek-v4-pro" {
+		t.Fatalf("profile row = %+v, want deepseek/deepseek-v4-pro", profiles[0])
+	}
+	if profiles[0].KeyStatus != "present" {
+		t.Fatalf("profile KeyStatus = %q, want present", profiles[0].KeyStatus)
+	}
+}
+
+func TestInteractiveWorkbenchPersistActiveProfileUpdatesWorkspaceAndSession(t *testing.T) {
+	configtest.IsolateHome(t)
+	workDir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"type\":\"final\",\"message\":\"ok\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+	t.Setenv("KIMI_API_KEY", "kimi-secret")
+	writeWorkbenchMultiProfileLLMConfig(t, workDir, server.URL)
+
+	runtime, err := app.OpenRuntimeWithConfigOptions(workDir, config.LoadOptions{
+		UserGlobalPath: filepath.Join(t.TempDir(), "absent-user-global.json"),
+	})
+	if err != nil {
+		t.Fatalf("OpenRuntimeWithConfigOptions() error = %v", err)
+	}
+	defer runtime.Close()
+	session := console.NewSessionWithAgent("test", runtime.OperatorAgent)
+	session.PersonaExtractor = runtime.PersonaExtractor
+	session.PersonaExtractModelInfo = console.PersonaExtractModelInfo{
+		Provider: runtime.PersonaExtractProvider,
+		Model:    runtime.PersonaExtractModel,
+		BaseURL:  runtime.PersonaExtractBaseURL,
+	}
+	driver := interactiveWorkbenchDriver{
+		version: "test",
+		runtime: runtime,
+		session: session,
+	}
+
+	if err := driver.PersistActiveProfile("kimi"); err != nil {
+		t.Fatalf("PersistActiveProfile(kimi) error = %v", err)
+	}
+	if got := modelLabel(session); got != "kimi-latest" {
+		t.Fatalf("session model = %q, want kimi-latest", got)
+	}
+	if got := session.PersonaExtractModelInfo.Model; got != "kimi-latest" {
+		t.Fatalf("PersonaExtractModelInfo.Model = %q, want kimi-latest", got)
+	}
+	if got := session.PersonaExtractModelInfo.Provider; got != "kimi" {
+		t.Fatalf("PersonaExtractModelInfo.Provider = %q, want kimi", got)
+	}
+
+	cfg, err := runtime.ResolveLLMConfig(config.LLMPurposeOperator)
+	if err != nil {
+		t.Fatalf("ResolveLLMConfig(operator) error = %v", err)
+	}
+	if cfg.Profile != "kimi" || cfg.Model != "kimi-latest" {
+		t.Fatalf("resolved profile/model = %q/%q, want kimi/kimi-latest", cfg.Profile, cfg.Model)
+	}
+	profiles, err := driver.ListProfiles()
+	if err != nil {
+		t.Fatalf("ListProfiles() error = %v", err)
+	}
+	var active string
+	for _, profile := range profiles {
+		if profile.Active {
+			active = profile.ProfileName
+		}
+	}
+	if active != "kimi" {
+		t.Fatalf("active profile row = %q, want kimi: %+v", active, profiles)
+	}
+
+	freshRuntime, err := app.OpenRuntimeWithConfigOptions(workDir, config.LoadOptions{
+		UserGlobalPath: filepath.Join(t.TempDir(), "absent-user-global.json"),
+	})
+	if err != nil {
+		t.Fatalf("fresh OpenRuntimeWithConfigOptions() error = %v", err)
+	}
+	defer freshRuntime.Close()
+	freshCfg, err := freshRuntime.ResolveLLMConfig(config.LLMPurposeOperator)
+	if err != nil {
+		t.Fatalf("fresh ResolveLLMConfig(operator) error = %v", err)
+	}
+	if freshCfg.Profile != "kimi" || freshCfg.Model != "kimi-latest" {
+		t.Fatalf("fresh profile/model = %q/%q, want kimi/kimi-latest", freshCfg.Profile, freshCfg.Model)
+	}
+}
+
 func writeWorkbenchLLMConfig(t *testing.T, workDir string, baseURL string) {
 	t.Helper()
 	configDir := filepath.Join(workDir, ".lore")
@@ -445,6 +580,36 @@ func writeWorkbenchLLMConfig(t *testing.T, workDir string, baseURL string) {
     }
   }
 }`, baseURL)
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
+	}
+}
+
+func writeWorkbenchMultiProfileLLMConfig(t *testing.T, workDir string, baseURL string) {
+	t.Helper()
+	configDir := filepath.Join(workDir, ".lore")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(.lore) error = %v", err)
+	}
+	body := fmt.Sprintf(`{
+  "llm": {
+    "active_profile": "deepseek",
+    "profiles": {
+      "deepseek": {
+        "provider": "deepseek",
+        "base_url": %q,
+        "model": "deepseek-chat",
+        "api_key_env": "DEEPSEEK_API_KEY"
+      },
+      "kimi": {
+        "provider": "kimi",
+        "base_url": %q,
+        "model": "kimi-latest",
+        "api_key_env": "KIMI_API_KEY"
+      }
+    }
+  }
+}`, baseURL, baseURL)
 	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(body), 0o644); err != nil {
 		t.Fatalf("WriteFile(config.json) error = %v", err)
 	}

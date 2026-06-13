@@ -73,6 +73,46 @@ func (d *approvalDriverStub) TestModel(name string) error {
 	return nil
 }
 
+func (d *approvalDriverStub) ListProfiles() ([]ModelInfo, error) {
+	return nil, nil
+}
+
+func (d *approvalDriverStub) CreateProfileFromPreset(presetName string, profileName string) error {
+	return nil
+}
+
+func (d *approvalDriverStub) PersistActiveProfile(profileName string) error {
+	return nil
+}
+
+func (d *approvalDriverStub) AvailablePresets() []ModelProfilePreset {
+	return nil
+}
+
+func (d *approvalDriverStub) ListPersonaCandidates() ([]PersonaCandidateInfo, error) {
+	return nil, nil
+}
+
+func (d *approvalDriverStub) DraftPersonaCandidate(id string) ([]PersonaCandidateInfo, error) {
+	return nil, nil
+}
+
+func (d *approvalDriverStub) DismissPersonaCandidate(id string) ([]PersonaCandidateInfo, error) {
+	return nil, nil
+}
+
+func (d *approvalDriverStub) RecoverPersonaCandidate(id string) ([]PersonaCandidateInfo, error) {
+	return nil, nil
+}
+
+func (d *approvalDriverStub) ListErrors() ([]ErrorEntry, error) {
+	return nil, nil
+}
+
+func (d *approvalDriverStub) RetryPersonaCandidate(id string) ([]PersonaCandidateInfo, error) {
+	return nil, nil
+}
+
 func newApprovalModel(drafts []model.Draft) interactiveWorkbenchModel {
 	driver := &approvalDriverStub{drafts: drafts}
 	vm, _ := driver.Load("")

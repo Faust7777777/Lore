@@ -54,8 +54,17 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 	var rightBottomContent string
 	var rightBottomTitle string
 	if model.modelPanelActive {
-		rightBottomTitle = "Model"
-		rightBottomContent = renderModelPanel(model.modelPanelList, model.modelPanelCursor, model.modelPanelEditing, model.modelPanelEditText, rightWidth-4, visiblePanelHeight(model.approvalHeight, rightBottomHeight-4))
+		switch model.modelPanelMode {
+		case modelPanelPresets:
+			rightBottomTitle = "New Profile (pick preset)"
+			rightBottomContent = renderPresetPicker(model.modelPanelPresets, model.modelPanelCursor, rightWidth-4, visiblePanelHeight(model.approvalHeight, rightBottomHeight-4))
+		case modelPanelProfiles:
+			rightBottomTitle = "Model Profiles"
+			rightBottomContent = renderProfilePanel(model.modelPanelList, model.modelPanelCursor, model.modelPanelEditing, model.modelPanelEditText, rightWidth-4, visiblePanelHeight(model.approvalHeight, rightBottomHeight-4))
+		default:
+			rightBottomTitle = "Model"
+			rightBottomContent = renderModelPanel(model.modelPanelList, model.modelPanelCursor, model.modelPanelEditing, model.modelPanelEditText, rightWidth-4, visiblePanelHeight(model.approvalHeight, rightBottomHeight-4))
+		}
 	} else {
 		switch model.focus {
 		case focusFindings:
@@ -72,10 +81,13 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 			// focusApproval (and any other) shows drafts
 			rightBottomTitle = approvalTitle
 			rightBottomContent = renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalOffset, model.approvalDetail, model.viewModel.FocusedReview, rightWidth-4, visiblePanelHeight(model.approvalHeight, rightBottomHeight-4))
+		case focusCandidates:
+			rightBottomTitle = "Persona Candidates"
+			rightBottomContent = renderCandidatePanel(model.viewModel.CandidateList, model.candidatePanelCursor, model.candidatePanelDetail, rightWidth-4, visiblePanelHeight(model.approvalHeight, rightBottomHeight-4))
 		}
 	}
 
-	rightBottomFocused := model.modelPanelActive || model.focus == focusApproval || model.focus == focusFindings || model.focus == focusProcessSink
+	rightBottomFocused := model.modelPanelActive || model.focus == focusApproval || model.focus == focusFindings || model.focus == focusProcessSink || model.focus == focusCandidates
 
 	rightBottomPane := clipPaneLines(
 		paneStyle(rightBottomFocused).Width(rightWidth).Height(rightBottomHeight).Render(
@@ -256,10 +268,23 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 	}
 	builder.WriteString("  Drafts   " + viewModel.Snapshot.DraftSummary() + "\n")
 	builder.WriteString("  Agent    " + oneLine(viewModel.Snapshot.AgentID, 20) + "\n")
-	if viewModel.Snapshot.CurrentModel != "" {
-		builder.WriteString("  Model    " + styleOK.Render(viewModel.Snapshot.CurrentModel) + "\n")
+
+	// Three-line model identity display
+	builder.WriteString("\n" + styleSectionHead.Render("Models") + "\n")
+	renderModelIdentityLine(&builder, "Chat", viewModel.ChatModelIdentity, viewModel.Snapshot.CurrentModel)
+	renderModelIdentityLine(&builder, "Persona", viewModel.PersonaModelIdentity, "")
+	renderModelIdentityLine(&builder, "Sink", viewModel.SinkModelIdentity, "")
+
+	// Warning if chat and persona use different models
+	if viewModel.ChatModelIdentity != nil && viewModel.PersonaModelIdentity != nil &&
+		viewModel.ChatModelIdentity.Enabled && viewModel.PersonaModelIdentity.Enabled &&
+		viewModel.ChatModelIdentity.Model != "" && viewModel.PersonaModelIdentity.Model != "" &&
+		viewModel.ChatModelIdentity.Model != viewModel.PersonaModelIdentity.Model {
+		builder.WriteString("  " + styleWarn.Render("chat/persona models differ") + "\n")
 	}
+
 	if viewModel.Snapshot.SessionID != "" {
+		builder.WriteString("\n" + styleSectionHead.Render("Session") + "\n")
 		builder.WriteString("  Session  " + oneLine(viewModel.Snapshot.SessionID, 20) + "\n")
 	}
 	if viewModel.Snapshot.TranscriptPath != "" {
@@ -364,10 +389,345 @@ func renderModelPanel(models []ModelInfo, cursor int, editing bool, editText str
 		builder.WriteString("\n")
 	}
 
-	footer := fmt.Sprintf("[%d/%d] r=refresh t=test enter=use e=edit esc=back", cursor+1, len(models))
+	footer := fmt.Sprintf("[%d/%d] r=refresh t=test enter=use e=edit s=profiles n=new esc=back", cursor+1, len(models))
 	if len(models) > 0 && models[0].BaseURL != "" {
 		footer += " @ " + models[0].BaseURL
 	}
+	builder.WriteString(styleMutedText.Render(footer))
+	builder.WriteString("\n")
+
+	return builder.String()
+}
+
+func renderCandidatePanel(candidates []PersonaCandidateInfo, cursor int, detail bool, width int, height int) string {
+	if len(candidates) == 0 {
+		return styleMutedText.Render("No persona candidates yet.") + "\n" +
+			styleMutedText.Render("Candidates appear after chat turns.") + "\n" +
+			styleMutedText.Render("Use /candidates to refresh.")
+	}
+
+	if detail && cursor < len(candidates) {
+		return renderCandidateDetail(candidates[cursor], width, height)
+	}
+
+	return renderCandidateList(candidates, cursor, width, height)
+}
+
+func renderCandidateList(candidates []PersonaCandidateInfo, cursor int, width int, height int) string {
+	var builder strings.Builder
+
+	listHeight := height - 2
+	if listHeight < 1 {
+		listHeight = 1
+	}
+
+	start := cursor - listHeight/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + listHeight
+	if end > len(candidates) {
+		end = len(candidates)
+		start = maxInt(0, end-listHeight)
+	}
+
+	for i := start; i < end; i++ {
+		c := candidates[i]
+		prefix := "  "
+		nameStyle := styleMutedText
+		if i == cursor {
+			prefix = styleWarn.Render(glyphFocus + " ")
+			nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
+		}
+
+		// State badge
+		stateBadge := renderCandidateStateBadge(c.State)
+
+		// Field + proposed value (truncated)
+		field := oneLine(c.Field, 12)
+		proposed := oneLine(c.ProposedValue, 20)
+		conflictMark := ""
+		if c.Conflict {
+			conflictMark = styleErr.Render("!")
+		}
+
+		line := prefix + stateBadge + " " + nameStyle.Render(field) + " " + styleMutedText.Render(proposed) + conflictMark
+		builder.WriteString(oneLine(line, maxInt(8, width-2)))
+		builder.WriteString("\n")
+
+		// Orphan partial detection
+		if i == cursor && c.State == "drafted" && c.DraftID == "" {
+			builder.WriteString("  " + styleErr.Render("orphan partial: needs recover or force-dismiss") + "\n")
+		}
+	}
+
+	footer := fmt.Sprintf("[%d/%d]", cursor+1, len(candidates))
+	if cursor < len(candidates) {
+		c := candidates[cursor]
+		// Derive footer actions from the B-line Actions bundle (single source of truth)
+		if c.Actions.CanDraft {
+			footer += " d=draft"
+		}
+		if c.Actions.CanDismiss {
+			footer += " x=dismiss"
+		}
+		if c.Actions.CanRetry {
+			footer += " r=retry"
+		} else if c.Actions.CanRecover && c.DraftID == "" {
+			footer += " f=force-dismiss"
+		} else if c.Actions.CanRecover {
+			footer += " r=recover"
+		}
+		if c.State == "drafted" && c.DraftID != "" {
+			footer += " draft=" + shortID(c.DraftID, 8)
+		}
+	}
+	footer += " enter=detail esc=tab"
+	builder.WriteString(styleMutedText.Render(footer))
+	builder.WriteString("\n")
+
+	return builder.String()
+}
+
+func renderCandidateDetail(c PersonaCandidateInfo, width int, height int) string {
+	var builder strings.Builder
+
+	builder.WriteString(styleSectionHead.Render("Candidate Detail") + "\n")
+	builder.WriteString("  ID      " + styleMutedText.Render(shortID(c.ID, 16)) + "\n")
+	builder.WriteString("  State   " + renderCandidateStateBadge(c.State) + "\n")
+	builder.WriteString("  Field   " + styleWarn.Render(c.Field) + "\n")
+
+	if c.CurrentValue != "" {
+		builder.WriteString("  Current " + styleMutedText.Render(oneLine(c.CurrentValue, maxInt(8, width-12))) + "\n")
+	} else {
+		builder.WriteString("  Current " + styleMutedText.Render("(empty)") + "\n")
+	}
+
+	builder.WriteString("  Proposed " + styleOK.Render(oneLine(c.ProposedValue, maxInt(8, width-12))) + "\n")
+
+	if c.Conflict {
+		builder.WriteString("  Conflict " + styleErr.Render("yes") + "\n")
+	}
+
+	builder.WriteString("\n" + styleSectionHead.Render("Evidence") + "\n")
+	if c.EvidenceQuote != "" {
+		builder.WriteString("  " + wrapText(oneLine(c.EvidenceQuote, width*3), maxInt(10, width-2)) + "\n")
+	} else {
+		builder.WriteString("  " + styleMutedText.Render("(none)") + "\n")
+	}
+
+	if c.Reason != "" {
+		builder.WriteString("\n" + styleSectionHead.Render("Reason") + "\n")
+		builder.WriteString("  " + wrapText(oneLine(c.Reason, width*2), maxInt(10, width-2)) + "\n")
+	}
+
+	builder.WriteString("\n" + styleSectionHead.Render("Meta") + "\n")
+	if c.Confidence != "" {
+		builder.WriteString("  Confidence " + c.Confidence + "\n")
+	}
+	if c.SourceKind != "" {
+		builder.WriteString("  Source     " + c.SourceKind + "\n")
+	}
+	if c.SourceSession != "" {
+		builder.WriteString("  Session    " + oneLine(c.SourceSession, 20) + "\n")
+	}
+	if c.ObservedAt != "" {
+		builder.WriteString("  Observed   " + c.ObservedAt + "\n")
+	}
+	if c.DraftID != "" {
+		builder.WriteString("  Draft      " + styleOK.Render(c.DraftID) + "\n")
+	}
+	if c.DedupKey != "" {
+		builder.WriteString("  DedupKey   " + styleMutedText.Render(oneLine(c.DedupKey, maxInt(8, width-14))) + "\n")
+	}
+
+	builder.WriteString("\n")
+	// Derive detail actions from the B-line Actions bundle (single source of truth)
+	actions := c.Actions
+	if actions.CanDraft {
+		builder.WriteString(styleOK.Render("d") + "=draft ")
+	}
+	if actions.CanDismiss {
+		builder.WriteString(styleErr.Render("x") + "=dismiss ")
+	}
+	if actions.CanRetry {
+		builder.WriteString(styleOK.Render("r") + "=retry ")
+	} else if actions.CanRecover && c.DraftID == "" {
+		builder.WriteString(styleErr.Render("f") + "=force-dismiss ")
+	} else if actions.CanRecover {
+		builder.WriteString(styleWarn.Render("r") + "=recover ")
+	}
+	builder.WriteString(styleMutedText.Render("esc=back"))
+	builder.WriteString("\n")
+
+	return builder.String()
+}
+
+func renderCandidateStateBadge(state string) string {
+	switch state {
+	case "open":
+		return styleWarn.Render("opn")
+	case "drafted":
+		return styleOK.Render("dft")
+	case "dismissed":
+		return styleMutedText.Render("dis")
+	default:
+		return styleMutedText.Render(state[:minInt(3, len(state))])
+	}
+}
+
+func renderModelIdentityLine(b *strings.Builder, label string, identity *app.LLMIdentity, fallbackModel string) {
+	if identity == nil || !identity.Enabled {
+		b.WriteString("  " + styleMutedText.Render(fmt.Sprintf("%-8s (not configured)", label)) + "\n")
+		return
+	}
+	model := identity.Model
+	if model == "" && fallbackModel != "" {
+		model = fallbackModel
+	}
+	if model == "" {
+		model = "?"
+	}
+	source := string(identity.Source)
+	profile := identity.Profile
+	if profile != "" {
+		source += ":" + profile
+	}
+	line := fmt.Sprintf("%-8s %s", label, styleOK.Render(model))
+	if source != "" {
+		line += " " + styleMutedText.Render("("+source+")")
+	}
+	// Key status indicator
+	if identity.APIKeyEnv != "" {
+		// We don't know key status from identity alone (it doesn't include the key),
+		// but we show the env var name for user reference
+	}
+	b.WriteString("  " + oneLine(line, maxInt(20, 36)) + "\n")
+}
+
+func renderProfilePanel(profiles []ModelInfo, cursor int, editing bool, editText string, width int, height int) string {
+	if len(profiles) == 0 {
+		return styleMutedText.Render("No profiles configured.") + "\n" +
+			styleMutedText.Render("Press n to create one from a preset.") + "\n" +
+			styleMutedText.Render("Press esc to return to model list.")
+	}
+
+	var builder strings.Builder
+
+	listHeight := height - 2
+	if listHeight < 1 {
+		listHeight = 1
+	}
+
+	start := cursor - listHeight/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + listHeight
+	if end > len(profiles) {
+		end = len(profiles)
+		start = maxInt(0, end-listHeight)
+	}
+
+	for i := start; i < end; i++ {
+		p := profiles[i]
+		prefix := "  "
+		nameStyle := styleMutedText
+		if i == cursor {
+			prefix = styleWarn.Render(glyphFocus + " ")
+			nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
+		}
+
+		activeMark := "  "
+		if p.Active {
+			activeMark = styleOK.Render("* ")
+		}
+
+		// Key status indicator
+		keyMark := styleMutedText.Render("   ")
+		if p.KeyStatus == "missing" {
+			keyMark = styleErr.Render("!! ")
+		} else if p.KeyStatus == "present" {
+			keyMark = styleOK.Render("ok ")
+		}
+
+		line := prefix + activeMark + nameStyle.Render(p.ProfileName)
+		if width > 50 {
+			line += " " + styleMutedText.Render(p.Provider+"/"+p.Name)
+		}
+		if width > 64 {
+			line += " " + keyMark
+		}
+		builder.WriteString(oneLine(line, maxInt(8, width-2)))
+		builder.WriteString("\n")
+
+		// Show missing key warning inline for the selected profile
+		if i == cursor && p.KeyStatus == "missing" && p.APIKeyEnv != "" {
+			builder.WriteString("  " + styleErr.Render(p.APIKeyEnv+" missing") + "\n")
+		}
+	}
+
+	if editing {
+		builder.WriteString(styleWarn.Render("profile> ") + editText)
+		builder.WriteString("\n")
+	}
+
+	footer := fmt.Sprintf("[%d/%d] enter=use p=persist t=test n=new r=refresh esc=models", cursor+1, len(profiles))
+	builder.WriteString(styleMutedText.Render(footer))
+	builder.WriteString("\n")
+
+	return builder.String()
+}
+
+func renderPresetPicker(presets []ModelProfilePreset, cursor int, width int, height int) string {
+	if len(presets) == 0 {
+		return styleMutedText.Render("No presets available.")
+	}
+
+	var builder strings.Builder
+
+	listHeight := height - 2
+	if listHeight < 1 {
+		listHeight = 1
+	}
+
+	start := cursor - listHeight/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + listHeight
+	if end > len(presets) {
+		end = len(presets)
+		start = maxInt(0, end-listHeight)
+	}
+
+	for i := start; i < end; i++ {
+		p := presets[i]
+		prefix := "  "
+		nameStyle := styleMutedText
+		descStyle := styleMutedText
+		if i == cursor {
+			prefix = styleWarn.Render(glyphFocus + " ")
+			nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
+			descStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
+		}
+
+		line := prefix + nameStyle.Render(p.Name) + " " + descStyle.Render(oneLine(p.Description, maxInt(8, width-16)))
+		builder.WriteString(oneLine(line, maxInt(8, width-2)))
+		builder.WriteString("\n")
+
+		// Show details for selected preset
+		if i == cursor {
+			detailLine := "  " + styleMutedText.Render(p.Provider+" "+p.Model+" @ "+p.BaseURL)
+			if p.APIKeyEnv != "" {
+				detailLine += " " + styleMutedText.Render("key:"+p.APIKeyEnv)
+			}
+			builder.WriteString(oneLine(detailLine, maxInt(8, width-2)))
+			builder.WriteString("\n")
+		}
+	}
+
+	footer := fmt.Sprintf("[%d/%d] enter=create esc=back", cursor+1, len(presets))
 	builder.WriteString(styleMutedText.Render(footer))
 	builder.WriteString("\n")
 
@@ -714,11 +1074,10 @@ func renderSinkDetail(sink app.ProcessSinkDayView, idx int, width int, height in
 func renderApprovalDetailWithTarget(draft model.Draft, review *app.DraftReview, width int, height int) string {
 	var builder strings.Builder
 
-	builder.WriteString(styleSectionHead.Render("Draft Detail") + "\n")
-	builder.WriteString("  ID     " + styleMutedText.Render(draft.ID) + "\n")
-	builder.WriteString("  Kind   " + string(draft.Kind) + "\n")
+	// "What does this change?" summary header
+	builder.WriteString(styleSectionHead.Render("Draft Review") + "\n")
 	builder.WriteString("  Target " + oneLine(draft.Target.Path, maxInt(10, width-10)) + "\n")
-	builder.WriteString("  State  " + string(draft.State) + "\n")
+	builder.WriteString("  Kind   " + renderDraftKindBadge(draft.Kind) + " " + styleMutedText.Render(string(draft.State)) + "\n")
 
 	// Parse ProposedContent for structured display
 	switch draft.Kind {
@@ -738,14 +1097,19 @@ func renderApprovalDetailWithTarget(draft model.Draft, review *app.DraftReview, 
 		builder.WriteString("  " + wrapText(current, maxInt(10, width-2)) + "\n")
 	}
 
+	// Dynamic action footer based on state
 	builder.WriteString("\n")
 	switch draft.State {
 	case model.DraftPendingReview:
-		builder.WriteString(styleOK.Render("a") + "=同意 " + styleErr.Render("r") + "=拒绝 " + styleMutedText.Render("esc=返回"))
+		builder.WriteString(styleOK.Render("a") + "=approve " + styleErr.Render("r") + "=reject " + styleMutedText.Render("esc=back"))
 	case model.DraftApproved:
-		builder.WriteString(styleOK.Render("p") + "=应用 " + styleMutedText.Render("esc=返回"))
+		builder.WriteString(styleOK.Render("p") + "=apply (writes to file) " + styleMutedText.Render("esc=back"))
+	case model.DraftRejected:
+		builder.WriteString(styleMutedText.Render("rejected — candidate can retry/dismiss") + " esc=back")
+	case model.DraftApplied:
+		builder.WriteString(styleOK.Render("applied") + " → written to " + oneLine(draft.Target.Path, maxInt(8, width-20)) + " esc=back")
 	default:
-		builder.WriteString(styleMutedText.Render("esc=返回"))
+		builder.WriteString(styleMutedText.Render("esc=back"))
 	}
 
 	return builder.String()
@@ -759,28 +1123,31 @@ func renderPersonaUpdateDetail(b *strings.Builder, draft model.Draft, width int,
 		return
 	}
 
+	b.WriteString("\n" + styleSectionHead.Render("Persona Change") + "\n")
 	if prop.Field != "" {
-		b.WriteString("\n" + styleSectionHead.Render("Plan") + "\n")
-		b.WriteString("  Field:    " + styleWarn.Render(prop.Field) + "\n")
+		b.WriteString("  Field " + styleWarn.Render(prop.Field) + "\n")
 	}
-	if prop.CurrentValue != "" {
-		b.WriteString("  Current:  " + styleMutedText.Render(oneLine(prop.CurrentValue, maxInt(8, width-14))) + "\n")
-	} else {
-		b.WriteString("  Current:  " + styleMutedText.Render("(empty)") + "\n")
+	// Old → New diff display
+	b.WriteString("  Old   " + styleMutedText.Render(oneLine(prop.CurrentValue, maxInt(8, width-10))) + "\n")
+	b.WriteString("  New   " + styleOK.Render(oneLine(prop.ProposedValue, maxInt(8, width-10))) + "\n")
+
+	if prop.Confidence != "" || prop.Source != "" {
+		b.WriteString("\n")
+		if prop.Confidence != "" {
+			b.WriteString("  Confidence " + prop.Confidence + "\n")
+		}
+		if prop.Source != "" {
+			b.WriteString("  Source     " + styleMutedText.Render(oneLine(prop.Source, maxInt(8, width-14))) + "\n")
+		}
 	}
-	if prop.ProposedValue != "" {
-		b.WriteString("  Proposed: " + styleOK.Render(oneLine(prop.ProposedValue, maxInt(8, width-14))) + "\n")
-	}
+
 	if prop.Evidence != "" {
 		b.WriteString("\n" + styleSectionHead.Render("Evidence") + "\n")
-		b.WriteString("  " + wrapText(prop.Evidence, maxInt(10, width-2)) + "\n")
+		b.WriteString("  " + wrapText(oneLine(prop.Evidence, width*2), maxInt(10, width-2)) + "\n")
 	}
 	if prop.Reason != "" {
 		b.WriteString("\n" + styleSectionHead.Render("Reason") + "\n")
-		b.WriteString("  " + wrapText(prop.Reason, maxInt(10, width-2)) + "\n")
-	}
-	if prop.Confidence != "" {
-		b.WriteString("  Confidence: " + oneLine(prop.Confidence, maxInt(8, width-16)) + "\n")
+		b.WriteString("  " + wrapText(oneLine(prop.Reason, width*2), maxInt(10, width-2)) + "\n")
 	}
 }
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -10,7 +11,9 @@ import (
 	"obsidian-harness/internal/config"
 	"obsidian-harness/internal/console"
 	"obsidian-harness/internal/llm/openai"
+	"obsidian-harness/internal/model"
 	"obsidian-harness/internal/operatoragent"
+	"obsidian-harness/internal/persona"
 	"obsidian-harness/internal/tui"
 )
 
@@ -26,6 +29,12 @@ type interactiveWorkbenchDriver struct {
 
 type llmConfigRuntime interface {
 	ResolveLLMConfig(purpose string) (config.ResolvedLLMConfig, error)
+}
+
+type llmProfileRuntime interface {
+	ListLLMProfiles() ([]app.LLMProfileView, error)
+	UpsertLLMProfile(profileName string, profile config.LLMProfileConfig) error
+	SetActiveLLMProfile(profileName string) error
 }
 
 type operatorAgentModelBuilder interface {
@@ -64,6 +73,10 @@ func loadWorkbenchViewModel(version string, runtime console.Runtime, session *co
 			focusedReview = &review
 		}
 	}
+	candidates, err := loadWorkbenchPersonaCandidates(runtime)
+	if err != nil {
+		return tui.WorkbenchViewModel{}, err
+	}
 
 	vm := tui.NewWorkbenchViewModel(
 		version,
@@ -82,7 +95,24 @@ func loadWorkbenchViewModel(version string, runtime console.Runtime, session *co
 		session.TranscriptInfo().Path,
 	)
 	vm.Snapshot.CurrentModel = modelLabel(session)
+	vm.CandidateList = candidates
+	// Load LLM identity for status panel (key-safe projections)
+	vm.ChatModelIdentity = loadLLMIdentity(runtime, config.LLMPurposeOperator)
+	vm.PersonaModelIdentity = loadLLMIdentity(runtime, config.LLMPurposePersonaExtract)
+	vm.SinkModelIdentity = loadLLMIdentity(runtime, config.LLMPurposeProcessSink)
 	return vm, nil
+}
+
+func loadLLMIdentity(runtime console.Runtime, purpose string) *app.LLMIdentity {
+	rt, ok := runtime.(*app.Runtime)
+	if !ok || rt == nil {
+		return nil
+	}
+	identity, err := rt.LLMIdentity(purpose)
+	if err != nil {
+		return nil
+	}
+	return &identity
 }
 
 // modelLabel returns the active model name from the session's agent.
@@ -303,15 +333,14 @@ func operatorEnvConfig(cfg config.ResolvedLLMConfig) operatoragent.EnvConfig {
 }
 
 func (d interactiveWorkbenchDriver) buildPersonaExtractorForSwitch(profileName string, modelName string) (*app.PersonaExtractorBinding, error) {
-	builder, ok := d.runtime.(personaExtractorModelBuilder)
-	if !ok || builder == nil {
-		return nil, nil
+	if builder, ok := d.runtime.(personaExtractorModelBuilder); ok && builder != nil {
+		binding, err := builder.BuildPersonaExtractorForModel(profileName, modelName)
+		if err != nil {
+			return nil, err
+		}
+		return &binding, nil
 	}
-	binding, err := builder.BuildPersonaExtractorForModel(profileName, modelName)
-	if err != nil {
-		return nil, fmt.Errorf("switch persona extractor: %w", err)
-	}
-	return &binding, nil
+	return nil, nil
 }
 
 func runtimeDiagnostics(runtime console.Runtime) string {
@@ -329,9 +358,20 @@ func keyStatus(apiKey string) string {
 	return "OK"
 }
 
+func keyStatusFromEnvName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if strings.TrimSpace(os.Getenv(name)) == "" {
+		return "missing"
+	}
+	return "present"
+}
+
 func modelPanelProvider(configuredProvider string, modelName string) string {
-	if provider := strings.TrimSpace(configuredProvider); provider != "" {
-		return provider
+	if strings.TrimSpace(configuredProvider) != "" {
+		return strings.TrimSpace(configuredProvider)
 	}
 	return inferProvider(modelName)
 }
@@ -341,14 +381,8 @@ func inferProvider(name string) string {
 	if strings.Contains(lower, "deepseek") {
 		return "deepseek"
 	}
-	if strings.Contains(lower, "claude") || strings.Contains(lower, "anthropic") {
-		return "anthropic"
-	}
 	if strings.Contains(lower, "gpt") || strings.Contains(lower, "o1") || strings.Contains(lower, "o3") || strings.Contains(lower, "o4") {
 		return "openai"
-	}
-	if strings.Contains(lower, "glm") || strings.Contains(lower, "chatglm") {
-		return "zhipu"
 	}
 	return "openai"
 }
@@ -401,6 +435,291 @@ func (d interactiveWorkbenchDriver) ExecuteFindingAction(action string, findingI
 	}
 	viewModel, err := d.Load(lastOutput)
 	return tui.InteractiveWorkbenchUpdate{ViewModel: viewModel, LastOutput: lastOutput}, err
+}
+
+func (d interactiveWorkbenchDriver) ListProfiles() ([]tui.ModelInfo, error) {
+	profileRuntime, ok := d.runtime.(llmProfileRuntime)
+	if !ok || profileRuntime == nil {
+		return nil, fmt.Errorf("llm profile runtime is not available")
+	}
+	profiles, err := profileRuntime.ListLLMProfiles()
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]tui.ModelInfo, 0, len(profiles))
+	for _, profile := range profiles {
+		rows = append(rows, tui.ModelInfo{
+			Name:        profile.Model,
+			Provider:    modelPanelProvider(profile.Provider, profile.Model),
+			BaseURL:     config.SanitizeLLMBaseURL(profile.BaseURL),
+			Source:      "workspace",
+			KeyStatus:   keyStatusFromEnvName(profile.APIKeyEnv),
+			Current:     profile.Active && profile.Model == modelLabel(d.session),
+			ProfileName: profile.Name,
+			IsProfile:   true,
+			Active:      profile.Active,
+			APIKeyEnv:   strings.TrimSpace(profile.APIKeyEnv),
+		})
+	}
+	return rows, nil
+}
+
+func (d interactiveWorkbenchDriver) CreateProfileFromPreset(presetName string, profileName string) error {
+	profileRuntime, ok := d.runtime.(llmProfileRuntime)
+	if !ok || profileRuntime == nil {
+		return fmt.Errorf("llm profile runtime is not available")
+	}
+	profile, err := config.LLMProfileFromPreset(presetName, config.LLMProfileConfig{})
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(profileName) == "" {
+		profileName = strings.TrimSpace(presetName)
+	}
+	return profileRuntime.UpsertLLMProfile(profileName, profile)
+}
+
+func (d interactiveWorkbenchDriver) PersistActiveProfile(profileName string) error {
+	profileRuntime, ok := d.runtime.(llmProfileRuntime)
+	if !ok || profileRuntime == nil {
+		return fmt.Errorf("llm profile runtime is not available")
+	}
+	if d.session == nil {
+		return fmt.Errorf("session is required")
+	}
+	// Pre-flight: resolve the profile and build bindings BEFORE writing to disk.
+	// If resolution or build fails, workspace config stays on the old profile.
+	cfg, err := config.ResolveLLMProfileConfig(d.runtime.WorkDirPath(), config.LLMPurposeOperator, profileName)
+	if err != nil {
+		return fmt.Errorf("persist: cannot resolve profile %q: %w", profileName, err)
+	}
+	agent, personaBinding, err := d.buildModelSwitchBindings(profileName, cfg.Model, cfg)
+	if err != nil {
+		return fmt.Errorf("persist: cannot build agent for profile %q: %w", profileName, err)
+	}
+	// Build succeeded — now it is safe to persist.
+	if err := profileRuntime.SetActiveLLMProfile(profileName); err != nil {
+		return err
+	}
+	// Hot-switch session to the new profile.
+	d.session.DrainPersonaExtractions(consolePersonaDrainTimeout)
+	d.session.Agent = agent
+	if personaBinding != nil {
+		d.session.PersonaExtractor = personaBinding.Extractor
+		d.session.PersonaExtractModelInfo = console.PersonaExtractModelInfo{
+			Provider: personaBinding.Provider,
+			Model:    personaBinding.Model,
+			BaseURL:  personaBinding.BaseURL,
+		}
+	}
+	return nil
+}
+
+func (d interactiveWorkbenchDriver) AvailablePresets() []tui.ModelProfilePreset {
+	presets := config.BuiltinLLMProfilePresets()
+	result := make([]tui.ModelProfilePreset, 0, len(presets))
+	for _, p := range presets {
+		result = append(result, tui.ModelProfilePreset{
+			Name:        p.Name,
+			Provider:    p.Provider,
+			BaseURL:     p.BaseURL,
+			Model:       p.Model,
+			APIKeyEnv:   p.APIKeyEnv,
+			Description: p.Description,
+		})
+	}
+	return result
+}
+
+// --- Persona candidate management ---
+
+type personaCandidateRuntime interface {
+	ListPersonaCandidates(state persona.PersonaCandidateState, limit int) ([]persona.PersonaCandidateRecord, error)
+	GetPersonaCandidateView(id string) (app.PersonaCandidateView, error)
+	CreatePersonaDraftFromCandidate(id string, now time.Time) (persona.PersonaCandidateRecord, model.PersonaUpdateProposalResult, error)
+	DismissPersonaCandidate(id string, now time.Time) (persona.PersonaCandidateRecord, error)
+	ForceDismissPartialPersonaCandidate(id string, now time.Time) (persona.PersonaCandidateRecord, error)
+	RetryRejectedPersonaDraft(id string, now time.Time) (persona.PersonaCandidateRecord, model.PersonaUpdateProposalResult, error)
+	PersonaCandidateActions(rec persona.PersonaCandidateRecord) app.PersonaCandidateActions
+}
+
+func loadWorkbenchPersonaCandidates(runtime console.Runtime) ([]tui.PersonaCandidateInfo, error) {
+	rt, ok := runtime.(personaCandidateRuntime)
+	if !ok || rt == nil {
+		return nil, nil
+	}
+	records, err := rt.ListPersonaCandidates(persona.PersonaCandidateOpen, 64)
+	if err != nil {
+		return nil, err
+	}
+	return convertCandidateRecords(rt, records), nil
+}
+
+func (d interactiveWorkbenchDriver) ListPersonaCandidates() ([]tui.PersonaCandidateInfo, error) {
+	rt, ok := d.runtime.(personaCandidateRuntime)
+	if !ok || rt == nil {
+		return nil, fmt.Errorf("persona candidate management requires app runtime")
+	}
+	records, err := rt.ListPersonaCandidates(persona.PersonaCandidateOpen, 64)
+	if err != nil {
+		return nil, err
+	}
+	// Also include drafted/dismissed for visibility — but surface errors
+	// instead of silently degrading to partial lists (user-facing surface).
+	drafted, draftErr := rt.ListPersonaCandidates(persona.PersonaCandidateDrafted, 64)
+	dismissed, dismissErr := rt.ListPersonaCandidates(persona.PersonaCandidateDismissed, 64)
+	if draftErr != nil {
+		return nil, fmt.Errorf("list drafted candidates: %w", draftErr)
+	}
+	if dismissErr != nil {
+		return nil, fmt.Errorf("list dismissed candidates: %w", dismissErr)
+	}
+	records = append(records, drafted...)
+	records = append(records, dismissed...)
+	return convertCandidateRecords(rt, records), nil
+}
+
+func (d interactiveWorkbenchDriver) DraftPersonaCandidate(id string) ([]tui.PersonaCandidateInfo, error) {
+	rt, ok := d.runtime.(personaCandidateRuntime)
+	if !ok || rt == nil {
+		return nil, fmt.Errorf("persona candidate management requires app runtime")
+	}
+	_, _, err := rt.CreatePersonaDraftFromCandidate(id, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	return d.ListPersonaCandidates()
+}
+
+func (d interactiveWorkbenchDriver) DismissPersonaCandidate(id string) ([]tui.PersonaCandidateInfo, error) {
+	rt, ok := d.runtime.(personaCandidateRuntime)
+	if !ok || rt == nil {
+		return nil, fmt.Errorf("persona candidate management requires app runtime")
+	}
+	// The Dismiss action means "abandon this candidate". For partial-orphan
+	// (drafted+empty DraftID), the B-line says Dismiss should route through
+	// ForceDismissPartialPersonaCandidate, not the normal dismiss path.
+	// Use GetPersonaCandidateView to get the authoritative Actions.
+	view, err := rt.GetPersonaCandidateView(id)
+	if err != nil {
+		return nil, err
+	}
+	if view.State == persona.PersonaCandidateDrafted && view.DraftID == "" {
+		_, err = rt.ForceDismissPartialPersonaCandidate(id, time.Now())
+	} else {
+		_, err = rt.DismissPersonaCandidate(id, time.Now())
+	}
+	if err != nil {
+		return nil, err
+	}
+	return d.ListPersonaCandidates()
+}
+
+func (d interactiveWorkbenchDriver) RecoverPersonaCandidate(id string) ([]tui.PersonaCandidateInfo, error) {
+	rt, ok := d.runtime.(personaCandidateRuntime)
+	if !ok || rt == nil {
+		return nil, fmt.Errorf("persona candidate management requires app runtime")
+	}
+	// Recover is only valid for non-orphan paths where the user provides
+	// a draft ID via CLI (RecoverPersonaCandidateLink). For partial-orphan,
+	// the TUI offers force-dismiss via the f key which routes through
+	// DismissPersonaCandidate → ForceDismissPartialPersonaCandidate.
+	view, err := rt.GetPersonaCandidateView(id)
+	if err != nil {
+		return nil, err
+	}
+	if view.State == persona.PersonaCandidateDrafted && view.DraftID == "" {
+		return nil, fmt.Errorf("partial-orphan: use CLI to link (lore persona candidates recover %s --link <draft_id>) or press f to force-dismiss", id)
+	}
+	return nil, fmt.Errorf("recover unavailable: %s", view.Actions.RecoverReason)
+}
+
+func (d interactiveWorkbenchDriver) RetryPersonaCandidate(id string) ([]tui.PersonaCandidateInfo, error) {
+	rt, ok := d.runtime.(personaCandidateRuntime)
+	if !ok || rt == nil {
+		return nil, fmt.Errorf("persona candidate management requires app runtime")
+	}
+	// B-line contract: CanRetry = true means the linked draft is in a
+	// terminal rejected/expired/superseded state. Call RetryRejectedPersonaDraft.
+	_, _, err := rt.RetryRejectedPersonaDraft(id, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	return d.ListPersonaCandidates()
+}
+
+func convertCandidateRecords(rt personaCandidateRuntime, records []persona.PersonaCandidateRecord) []tui.PersonaCandidateInfo {
+	result := make([]tui.PersonaCandidateInfo, 0, len(records))
+	for _, r := range records {
+		actions := rt.PersonaCandidateActions(r)
+		result = append(result, tui.PersonaCandidateInfo{
+			ID:            r.ID,
+			State:         string(r.State),
+			Field:         r.Candidate.Field,
+			ProposedValue: r.Candidate.ProposedValue,
+			CurrentValue:  r.Candidate.CurrentValue,
+			EvidenceQuote: r.Candidate.EvidenceQuote,
+			Reason:        r.Candidate.Reason,
+			Confidence:    string(r.Candidate.Confidence),
+			Conflict:      r.Candidate.Conflict,
+			SourceKind:    string(r.Candidate.SourceKind),
+			SourceSession: r.Candidate.SourceSessionID,
+			ObservedAt:    r.Candidate.ObservedAt.Format("2006-01-02 15:04"),
+			DraftID:       r.DraftID,
+			DedupKey:      r.DedupKey,
+			Actions: tui.PersonaCandidateActions{
+				CanDraft:      actions.CanDraft,
+				DraftReason:   actions.DraftReason,
+				CanDismiss:    actions.CanDismiss,
+				DismissReason: actions.DismissReason,
+				CanRecover:    actions.CanRecover,
+				RecoverReason: actions.RecoverReason,
+				CanRetry:      actions.CanRetry,
+				RetryReason:   actions.RetryReason,
+			},
+		})
+	}
+	return result
+}
+
+func (d interactiveWorkbenchDriver) ListErrors() ([]tui.ErrorEntry, error) {
+	var errors []tui.ErrorEntry
+	// Load persona extraction errors
+	type personaErrorsLoader interface {
+		ListPersonaExtractErrors(filter app.PersonaErrorsFilter) (app.PersonaExtractErrorsResult, error)
+		PersonaExtractLogPath() string
+	}
+	if loader, ok := d.runtime.(personaErrorsLoader); ok && loader != nil {
+		result, err := loader.ListPersonaExtractErrors(app.PersonaErrorsFilter{Tail: 10})
+		if err == nil {
+			for _, e := range result.Entries {
+				errors = append(errors, tui.ErrorEntry{
+					Time:    e.Timestamp.Format("2006-01-02 15:04"),
+					Stage:   "persona_extract",
+					Model:   e.Model,
+					BaseURL: config.SanitizeLLMBaseURL(e.BaseURL),
+					Error:   safeDiagnosticError(fmt.Errorf("%s", e.Error)),
+				})
+			}
+		}
+	}
+	// Load LLM diagnostics for model errors
+	type llmDiagnosticLoader interface {
+		LLMIdentity(purpose string) (app.LLMIdentity, error)
+	}
+	if loader, ok := d.runtime.(llmDiagnosticLoader); ok && loader != nil {
+		for _, purpose := range []string{config.LLMPurposeOperator, config.LLMPurposePersonaExtract, config.LLMPurposeProcessSink} {
+			_, err := loader.LLMIdentity(purpose)
+			if err != nil {
+				errors = append(errors, tui.ErrorEntry{
+					Time:  time.Now().Format("2006-01-02 15:04"),
+					Stage: purpose,
+					Error: safeDiagnosticError(err),
+				})
+			}
+		}
+	}
+	return errors, nil
 }
 
 func shortID(s string, maxLen int) string {

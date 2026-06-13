@@ -163,7 +163,7 @@ try {
     Invoke-GoGate `
         -Label "interactive model panel LLM config guardrails" `
         -Package "./internal/cli" `
-        -Run "Test(RenderLLMConfigDiagnostics(OmitsSecretsAndShowsSource|ShowsErrorsAndDisabled|RedactsCredentialBearingErrors|KeepsMissingEnvVarName)|SessionLogMetaSanitizesLLMBaseURL|InteractiveWorkbench(ModelPanelUsesWorkspaceLLMProfileOverEnv|ModelDiscoveryFallbackUsesConfiguredModelAndError|SwitchModelUpdatesPersonaExtractor))$"
+        -Run "Test(RenderLLMConfigDiagnostics(OmitsSecretsAndShowsSource|ShowsErrorsAndDisabled|RedactsCredentialBearingErrors|KeepsMissingEnvVarName)|SessionLogMetaSanitizesLLMBaseURL|InteractiveWorkbench(ModelPanelUsesWorkspaceLLMProfileOverEnv|ModelDiscoveryFallbackUsesConfiguredModelAndError|SwitchModelUpdatesPersonaExtractor|CreateProfileFromPresetWritesWorkspaceConfigWithoutSecret|PersistActiveProfileUpdatesWorkspaceAndSession))$"
 
     Invoke-GoGate `
         -Label "persona summary dashboard and JSON guardrails" `
@@ -220,7 +220,7 @@ try {
     Invoke-GoGate `
         -Label "TUI approval state, task-step render, and viewport guardrails" `
         -Package "./internal/tui" `
-        -Run "Test(ApprovalFlow_|InteractiveWorkbenchViewDoesNotRefreshContent|RenderInteractiveConversationShowsTaskSteps|RenderTaskStepsArgSummary|RenderTaskStepsTruncatesObservation|RenderTaskStepsErrorStep|RenderTaskStepsNonErrorLastOutputNotShown|FindingsOffsetUsesFindingsPanelHeight|SinkOffsetUsesSinkPanelHeight|ApprovalOffsetUsesApprovalPanelHeight)"
+        -Run "Test(ApprovalFlow_|InteractiveWorkbenchViewDoesNotRefreshContent|RenderInteractiveConversationShowsTaskSteps|RenderTaskStepsArgSummary|RenderTaskStepsTruncatesObservation|RenderTaskStepsErrorStep|RenderTaskStepsNonErrorLastOutputNotShown|FindingsOffsetUsesFindingsPanelHeight|SinkOffsetUsesSinkPanelHeight|ApprovalOffsetUsesApprovalPanelHeight|ModelPanel(ProfilesPersistSelectedProfile|CreateProfileFromPreset)|ModelProfileAndPresetRenderDoNotLeakSecrets|ErrorsCommand(RendersDiagnosticsWithHintsAndNoSecrets|EmptyState))"
 
     if ($Full) {
         $verifyArgs = @(

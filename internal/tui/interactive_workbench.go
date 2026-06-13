@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -25,6 +26,19 @@ type InteractiveWorkbenchDriver interface {
 	DiscoverModels() ([]ModelInfo, error)
 	SwitchModel(name string) ([]ModelInfo, error)
 	TestModel(name string) error
+	// Profile management: workspace-level profile CRUD.
+	ListProfiles() ([]ModelInfo, error)
+	CreateProfileFromPreset(presetName string, profileName string) error
+	PersistActiveProfile(profileName string) error
+	AvailablePresets() []ModelProfilePreset
+	// Persona candidate management.
+	ListPersonaCandidates() ([]PersonaCandidateInfo, error)
+	DraftPersonaCandidate(id string) ([]PersonaCandidateInfo, error)
+	DismissPersonaCandidate(id string) ([]PersonaCandidateInfo, error)
+	RecoverPersonaCandidate(id string) ([]PersonaCandidateInfo, error)
+	RetryPersonaCandidate(id string) ([]PersonaCandidateInfo, error)
+	// Error diagnostics.
+	ListErrors() ([]ErrorEntry, error)
 }
 
 type InteractiveWorkbenchContextDriver interface {
@@ -44,10 +58,26 @@ type ModelInfo struct {
 	Name       string // e.g. "gpt-5.4", "deepseek-v4-pro"
 	Provider   string // e.g. "openai", "deepseek"
 	BaseURL    string // e.g. "https://api.ikuncode.cc/v1" (never contains key)
-	Source     string // "env", "discovered", "manual"
-	KeyStatus  string // "OK", "missing" (never the key value)
+	Source     string // "env", "workspace", "session", "discovered", "manual"
+	KeyStatus  string // "present", "missing", "" (never the key value)
 	TestStatus string // "", "OK", "failed: reason"
 	Current    bool
+	// Profile fields: when IsProfile is true, this entry represents a saved
+	// workspace profile rather than a discovered model.
+	ProfileName string // workspace profile name, e.g. "deepseek"
+	IsProfile   bool   // true = this row is a profile entry
+	Active      bool   // true = this is the workspace active_profile
+	APIKeyEnv   string // env var name holding the key, e.g. "DEEPSEEK_API_KEY"
+}
+
+// ModelProfilePreset describes a built-in profile template for quick setup.
+type ModelProfilePreset struct {
+	Name        string // preset identifier, e.g. "deepseek"
+	Provider    string
+	BaseURL     string
+	Model       string
+	APIKeyEnv   string
+	Description string
 }
 
 type interactiveFocus int
@@ -59,6 +89,7 @@ const (
 	focusFindings
 	focusProcessSink
 	focusApproval
+	focusCandidates
 )
 
 type interactiveResultMsg struct {
@@ -70,8 +101,81 @@ type interactiveResultMsg struct {
 type modelPanelMsg struct {
 	models []ModelInfo
 	err    error
-	action string // "list", "switch", "test"
-	name   string // model name for switch/test
+	action string // "list", "switch", "test", "profiles", "create", "persist"
+	name   string // model name or profile name
+}
+
+// modelPanelMode tracks which sub-view the model panel is showing.
+type modelPanelMode int
+
+const (
+	modelPanelModels   modelPanelMode = iota // discovered model list
+	modelPanelProfiles                       // workspace profile list
+	modelPanelPresets                        // preset picker (for n=new)
+	modelPanelEditName                       // text input for profile/model name
+)
+
+// PersonaCandidateInfo is the TUI-safe view of a persona candidate record.
+// API key or credential fields MUST NOT appear in any rendered field.
+// Actions derives button availability from the B-line PersonaCandidateActions
+// helper (single source of truth); the TUI MUST NOT re-implement the state machine.
+type PersonaCandidateInfo struct {
+	ID            string
+	State         string // "open", "drafted", "dismissed"
+	Field         string
+	ProposedValue string
+	CurrentValue  string
+	EvidenceQuote string
+	Reason        string
+	Confidence    string
+	Conflict      bool
+	SourceKind    string
+	SourceSession string
+	ObservedAt    string
+	DraftID       string
+	DedupKey      string
+	// Actions is the authoritative button-availability bundle from B-line.
+	// TUI key handlers MUST check CanDraft / CanDismiss / CanRecover / CanRetry
+	// instead of inspecting sel.State directly.
+	Actions PersonaCandidateActions
+}
+
+// PersonaCandidateActions mirrors app.PersonaCandidateActions so the TUI
+// layer stays decoupled from direct app import at the type level while
+// the driver populates it from the B-line helper.
+type PersonaCandidateActions struct {
+	CanDraft      bool
+	DraftReason   string
+	CanDismiss    bool
+	DismissReason string
+	CanRecover    bool
+	RecoverReason string
+	CanRetry      bool
+	RetryReason   string
+}
+
+// candidatePanelMsg carries persona candidate panel operation results.
+type candidatePanelMsg struct {
+	candidates []PersonaCandidateInfo
+	err        error
+	action     string // "list", "dismiss", "draft", "recover", "retry"
+	id         string
+}
+
+// ErrorEntry is a TUI-safe error record for the error diagnostics panel.
+type ErrorEntry struct {
+	Time    string
+	Stage   string // "model", "persona_extract", "process_sink"
+	Model   string
+	BaseURL string
+	Error   string
+}
+
+// errorPanelMsg carries error diagnostics results.
+type errorPanelMsg struct {
+	errors []ErrorEntry
+	err    error
+	action string // "list"
 }
 
 type textSelection struct {
@@ -115,6 +219,13 @@ type interactiveWorkbenchModel struct {
 	modelPanelList     []ModelInfo
 	modelPanelEditing  bool
 	modelPanelEditText string
+	modelPanelMode     modelPanelMode // current sub-view
+	modelPanelPresets  []ModelProfilePreset
+	// Persona candidate panel state.
+	candidatePanelActive bool
+	candidatePanelCursor int
+	candidatePanelDetail bool
+	candidatePanelOffset int
 }
 
 func RunInteractiveWorkbench(input io.Reader, output io.Writer, driver InteractiveWorkbenchDriver) error {
@@ -212,6 +323,10 @@ func (m interactiveWorkbenchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleFindingsResult(msg)
 	case modelPanelMsg:
 		return m.handleModelPanelResult(msg)
+	case candidatePanelMsg:
+		return m.handleCandidatePanelResult(msg)
+	case errorPanelMsg:
+		return m.handleErrorPanelResult(msg)
 	case tea.MouseMsg:
 		return m.handleMouse(tea.MouseEvent(msg))
 	case tea.KeyMsg:
@@ -287,6 +402,8 @@ func (m interactiveWorkbenchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleSinkKeys(msg)
 		case focusApproval:
 			return m.handleApprovalKeys(msg)
+		case focusCandidates:
+			return m.handleCandidateKeys(msg)
 		default:
 			switch msg.String() {
 			case "up", "down":
@@ -371,6 +488,78 @@ func modelPanelTestCmd(driver InteractiveWorkbenchDriver, name string) tea.Cmd {
 			return modelPanelMsg{err: err, action: "test", name: name}
 		}
 		return modelPanelMsg{action: "test", name: name}
+	}
+}
+
+func modelPanelProfilesCmd(driver InteractiveWorkbenchDriver) tea.Cmd {
+	return func() tea.Msg {
+		profiles, err := driver.ListProfiles()
+		return modelPanelMsg{models: profiles, err: err, action: "profiles"}
+	}
+}
+
+func modelPanelCreateProfileCmd(driver InteractiveWorkbenchDriver, presetName string, profileName string) tea.Cmd {
+	return func() tea.Msg {
+		err := driver.CreateProfileFromPreset(presetName, profileName)
+		if err != nil {
+			return modelPanelMsg{err: err, action: "create", name: profileName}
+		}
+		// After create, refresh profiles
+		profiles, listErr := driver.ListProfiles()
+		return modelPanelMsg{models: profiles, err: listErr, action: "create", name: profileName}
+	}
+}
+
+func modelPanelPersistCmd(driver InteractiveWorkbenchDriver, profileName string) tea.Cmd {
+	return func() tea.Msg {
+		err := driver.PersistActiveProfile(profileName)
+		if err != nil {
+			return modelPanelMsg{err: err, action: "persist", name: profileName}
+		}
+		profiles, listErr := driver.ListProfiles()
+		return modelPanelMsg{models: profiles, err: listErr, action: "persist", name: profileName}
+	}
+}
+
+func candidateListCmd(driver InteractiveWorkbenchDriver) tea.Cmd {
+	return func() tea.Msg {
+		candidates, err := driver.ListPersonaCandidates()
+		return candidatePanelMsg{candidates: candidates, err: err, action: "list"}
+	}
+}
+
+func candidateDraftCmd(driver InteractiveWorkbenchDriver, id string) tea.Cmd {
+	return func() tea.Msg {
+		candidates, err := driver.DraftPersonaCandidate(id)
+		return candidatePanelMsg{candidates: candidates, err: err, action: "draft", id: id}
+	}
+}
+
+func candidateDismissCmd(driver InteractiveWorkbenchDriver, id string) tea.Cmd {
+	return func() tea.Msg {
+		candidates, err := driver.DismissPersonaCandidate(id)
+		return candidatePanelMsg{candidates: candidates, err: err, action: "dismiss", id: id}
+	}
+}
+
+func candidateRecoverCmd(driver InteractiveWorkbenchDriver, id string) tea.Cmd {
+	return func() tea.Msg {
+		candidates, err := driver.RecoverPersonaCandidate(id)
+		return candidatePanelMsg{candidates: candidates, err: err, action: "recover", id: id}
+	}
+}
+
+func candidateRetryCmd(driver InteractiveWorkbenchDriver, id string) tea.Cmd {
+	return func() tea.Msg {
+		candidates, err := driver.RetryPersonaCandidate(id)
+		return candidatePanelMsg{candidates: candidates, err: err, action: "retry", id: id}
+	}
+}
+
+func errorListCmd(driver InteractiveWorkbenchDriver) tea.Cmd {
+	return func() tea.Msg {
+		errors, err := driver.ListErrors()
+		return errorPanelMsg{errors: errors, err: err, action: "list"}
 	}
 }
 
@@ -540,8 +729,16 @@ func (m *interactiveWorkbenchModel) handleLocalCommand(line string) (bool, tea.M
 		m.input.Reset()
 		m.modelPanelActive = true
 		m.modelPanelEditing = false
+		m.modelPanelMode = modelPanelModels
 		m.refreshContent(false)
 		return true, m, modelPanelListCmd(m.driver)
+	case lower == "/model profiles":
+		m.input.Reset()
+		m.modelPanelActive = true
+		m.modelPanelEditing = false
+		m.modelPanelMode = modelPanelProfiles
+		m.refreshContent(false)
+		return true, m, modelPanelProfilesCmd(m.driver)
 	case lower == "/model current":
 		m.input.Reset()
 		model := m.viewModel.Snapshot.CurrentModel
@@ -573,6 +770,28 @@ func (m *interactiveWorkbenchModel) handleLocalCommand(line string) (bool, tea.M
 		m.running = true
 		m.refreshContent(true)
 		return true, m, modelPanelTestCmd(m.driver, model)
+	case strings.HasPrefix(lower, "/model persist "):
+		profileName := strings.TrimSpace(line[len("/model persist "):])
+		if profileName == "" {
+			return true, m, nil
+		}
+		m.input.Reset()
+		m.running = true
+		m.pendingLine = "/model persist " + profileName
+		m.refreshContent(true)
+		return true, m, modelPanelPersistCmd(m.driver, profileName)
+	case lower == "/candidates", lower == "/persona candidates":
+		m.input.Reset()
+		m.candidatePanelActive = true
+		m.candidatePanelDetail = false
+		m.candidatePanelCursor = 0
+		m.refreshContent(false)
+		return true, m, candidateListCmd(m.driver)
+	case lower == "/errors":
+		m.input.Reset()
+		m.lastOutput = "Loading errors..."
+		m.refreshContent(true)
+		return true, m, errorListCmd(m.driver)
 	default:
 		return false, m, nil
 	}
@@ -582,7 +801,7 @@ func (m *interactiveWorkbenchModel) handleLocalCommand(line string) (bool, tea.M
 
 func (m interactiveWorkbenchModel) handleModelPanelResult(msg modelPanelMsg) (tea.Model, tea.Cmd) {
 	switch msg.action {
-	case "list":
+	case "list", "profiles":
 		if msg.err != nil {
 			m.lastOutput = "Error: model: " + msg.err.Error()
 		} else {
@@ -592,6 +811,36 @@ func (m interactiveWorkbenchModel) handleModelPanelResult(msg modelPanelMsg) (te
 			}
 		}
 		m.refreshContent(false)
+		return m, nil
+	case "create":
+		m.running = false
+		m.pendingLine = ""
+		if msg.err != nil {
+			m.lastOutput = "Error: create profile: " + msg.err.Error()
+		} else {
+			m.modelPanelList = msg.models
+			m.modelPanelMode = modelPanelProfiles
+			m.lastOutput = "Profile created: " + msg.name
+			if refreshed, loadErr := m.driver.Load(m.lastOutput); loadErr == nil {
+				m.viewModel = refreshed
+			}
+		}
+		m.refreshContent(true)
+		return m, nil
+	case "persist":
+		m.running = false
+		m.pendingLine = ""
+		if msg.err != nil {
+			m.lastOutput = "Error: persist profile: " + msg.err.Error()
+		} else {
+			m.modelPanelList = msg.models
+			m.modelPanelMode = modelPanelProfiles
+			m.lastOutput = "Workspace active profile set to: " + msg.name + " (current session switched)"
+			if refreshed, loadErr := m.driver.Load(m.lastOutput); loadErr == nil {
+				m.viewModel = refreshed
+			}
+		}
+		m.refreshContent(true)
 		return m, nil
 	case "switch":
 		m.running = false
@@ -622,12 +871,25 @@ func (m interactiveWorkbenchModel) handleModelPanelResult(msg modelPanelMsg) (te
 }
 
 func (m interactiveWorkbenchModel) handleModelPanelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Name input mode for edit/create
 	if m.modelPanelEditing {
 		return m.handleModelEditKeys(msg)
 	}
 
+	// Preset picker mode
+	if m.modelPanelMode == modelPanelPresets {
+		return m.handlePresetPickerKeys(msg)
+	}
+
 	switch msg.String() {
 	case "esc":
+		// If in profiles mode, go back to models mode; otherwise close panel
+		if m.modelPanelMode == modelPanelProfiles {
+			m.modelPanelMode = modelPanelModels
+			m.modelPanelCursor = 0
+			m.refreshContent(false)
+			return m, modelPanelListCmd(m.driver)
+		}
 		m.modelPanelActive = false
 		m.modelPanelEditing = false
 		m.modelPanelEditText = ""
@@ -644,10 +906,21 @@ func (m interactiveWorkbenchModel) handleModelPanelKeys(msg tea.KeyMsg) (tea.Mod
 		}
 		return m, nil
 	case "r":
+		if m.modelPanelMode == modelPanelProfiles {
+			return m, modelPanelProfilesCmd(m.driver)
+		}
 		return m, modelPanelListCmd(m.driver)
 	case "t":
 		if m.modelPanelCursor < len(m.modelPanelList) {
 			sel := m.modelPanelList[m.modelPanelCursor]
+			if sel.IsProfile && !sel.Active {
+				m.lastOutput = "Use or persist the profile before testing it."
+				m.refreshContent(true)
+				return m, nil
+			}
+			if sel.Name == "" {
+				return m, nil
+			}
 			m.running = true
 			m.refreshContent(true)
 			return m, modelPanelTestCmd(m.driver, sel.Name)
@@ -656,6 +929,12 @@ func (m interactiveWorkbenchModel) handleModelPanelKeys(msg tea.KeyMsg) (tea.Mod
 	case "enter":
 		if m.modelPanelCursor < len(m.modelPanelList) {
 			sel := m.modelPanelList[m.modelPanelCursor]
+			if sel.IsProfile {
+				m.running = true
+				m.pendingLine = "/model persist " + sel.ProfileName
+				m.refreshContent(true)
+				return m, modelPanelPersistCmd(m.driver, sel.ProfileName)
+			}
 			if sel.Current {
 				return m, nil
 			}
@@ -665,9 +944,103 @@ func (m interactiveWorkbenchModel) handleModelPanelKeys(msg tea.KeyMsg) (tea.Mod
 			return m, modelPanelSwitchCmd(m.driver, sel.Name)
 		}
 		return m, nil
+	case "u":
+		// Use: switch session to selected model/profile (same as enter)
+		if m.modelPanelCursor < len(m.modelPanelList) {
+			sel := m.modelPanelList[m.modelPanelCursor]
+			if sel.IsProfile {
+				m.running = true
+				m.pendingLine = "/model persist " + sel.ProfileName
+				m.refreshContent(true)
+				return m, modelPanelPersistCmd(m.driver, sel.ProfileName)
+			}
+			if sel.Current {
+				return m, nil
+			}
+			m.running = true
+			m.pendingLine = "/model use " + sel.Name
+			m.refreshContent(true)
+			return m, modelPanelSwitchCmd(m.driver, sel.Name)
+		}
+		return m, nil
+	case "n":
+		// New profile: open preset picker
+		m.modelPanelPresets = m.driver.AvailablePresets()
+		if len(m.modelPanelPresets) == 0 {
+			m.lastOutput = "No presets available"
+			m.refreshContent(true)
+			return m, nil
+		}
+		m.modelPanelMode = modelPanelPresets
+		m.modelPanelCursor = 0
+		m.refreshContent(false)
+		return m, nil
+	case "p":
+		// Persist: set selected profile as workspace active
+		if m.modelPanelMode != modelPanelProfiles {
+			// Switch to profiles mode first
+			m.modelPanelMode = modelPanelProfiles
+			m.modelPanelCursor = 0
+			m.refreshContent(false)
+			return m, modelPanelProfilesCmd(m.driver)
+		}
+		if m.modelPanelCursor < len(m.modelPanelList) {
+			sel := m.modelPanelList[m.modelPanelCursor]
+			if !sel.IsProfile {
+				m.lastOutput = "Only profiles can be persisted (press p on a profile row)"
+				m.refreshContent(true)
+				return m, nil
+			}
+			m.running = true
+			m.pendingLine = "/model persist " + sel.ProfileName
+			m.refreshContent(true)
+			return m, modelPanelPersistCmd(m.driver, sel.ProfileName)
+		}
+		return m, nil
+	case "s":
+		// Switch to profiles view (s = see profiles / save context)
+		if m.modelPanelMode != modelPanelProfiles {
+			m.modelPanelMode = modelPanelProfiles
+			m.modelPanelCursor = 0
+			m.refreshContent(false)
+			return m, modelPanelProfilesCmd(m.driver)
+		}
+		return m, nil
 	case "e":
 		m.modelPanelEditing = true
 		m.modelPanelEditText = ""
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m interactiveWorkbenchModel) handlePresetPickerKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		// Back to profiles or models
+		m.modelPanelMode = modelPanelProfiles
+		m.modelPanelCursor = 0
+		m.refreshContent(false)
+		return m, modelPanelProfilesCmd(m.driver)
+	case "up", "k":
+		if m.modelPanelCursor > 0 {
+			m.modelPanelCursor--
+		}
+		return m, nil
+	case "down", "j":
+		if m.modelPanelCursor < len(m.modelPanelPresets)-1 {
+			m.modelPanelCursor++
+		}
+		return m, nil
+	case "enter":
+		if m.modelPanelCursor < len(m.modelPanelPresets) {
+			preset := m.modelPanelPresets[m.modelPanelCursor]
+			profileName := preset.Name
+			m.running = true
+			m.pendingLine = "create profile " + profileName
+			m.refreshContent(true)
+			return m, modelPanelCreateProfileCmd(m.driver, preset.Name, profileName)
+		}
 		return m, nil
 	}
 	return m, nil
@@ -716,6 +1089,10 @@ func nextFocus(current interactiveFocus) interactiveFocus {
 		return focusProcessSink
 	case focusProcessSink:
 		return focusApproval
+	case focusApproval:
+		return focusCandidates
+	case focusCandidates:
+		return focusInput
 	default:
 		return focusInput
 	}
@@ -724,15 +1101,19 @@ func nextFocus(current interactiveFocus) interactiveFocus {
 func previousFocus(current interactiveFocus) interactiveFocus {
 	switch current {
 	case focusInput:
-		return focusApproval
-	case focusApproval:
-		return focusProcessSink
-	case focusProcessSink:
-		return focusFindings
-	case focusFindings:
-		return focusStatus
+		return focusCandidates
+	case focusConversation:
+		return focusInput
 	case focusStatus:
 		return focusConversation
+	case focusFindings:
+		return focusStatus
+	case focusProcessSink:
+		return focusFindings
+	case focusApproval:
+		return focusProcessSink
+	case focusCandidates:
+		return focusApproval
 	default:
 		return focusInput
 	}
@@ -748,6 +1129,266 @@ func isTerminalWriter(output io.Writer) bool {
 		return false
 	}
 	return info.Mode()&os.ModeCharDevice != 0
+}
+
+// --- Error diagnostics handlers ---
+
+func (m interactiveWorkbenchModel) handleErrorPanelResult(msg errorPanelMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.lastOutput = "Error loading diagnostics: " + msg.err.Error()
+		m.refreshContent(true)
+		return m, nil
+	}
+	if len(msg.errors) == 0 {
+		m.lastOutput = "No recent errors."
+		m.refreshContent(true)
+		return m, nil
+	}
+	var builder strings.Builder
+	builder.WriteString("Recent Errors\n")
+	builder.WriteString("=============\n")
+	for _, e := range msg.errors {
+		builder.WriteString(fmt.Sprintf("  %s [%s] %s @ %s\n", e.Time, e.Stage, e.Model, oneLine(e.BaseURL, 30)))
+		builder.WriteString("    " + oneLine(e.Error, 60) + "\n")
+		// Local hints for common errors
+		hint := diagnoseErrorHint(e)
+		if hint != "" {
+			builder.WriteString("    " + styleWarn.Render("hint: "+hint) + "\n")
+		}
+	}
+	m.lastOutput = builder.String()
+	m.refreshContent(true)
+	return m, nil
+}
+
+func diagnoseErrorHint(e ErrorEntry) string {
+	lower := strings.ToLower(e.Error)
+	switch {
+	case strings.Contains(lower, "401") || strings.Contains(lower, "403"):
+		return "API key wrong or insufficient permissions. Check " + findAPIKeyEnv(e) + " value."
+	case strings.Contains(lower, "400") && strings.Contains(lower, "model"):
+		return "Model name may be incorrect. E.g. use 'deepseek-v4-pro' not 'v4-pro'."
+	case strings.Contains(lower, "eof"):
+		return "Endpoint/proxy/upstream disconnected. Check base_url and network."
+	case strings.Contains(lower, "missing env") || strings.Contains(lower, "not set"):
+		return "Set the environment variable " + findAPIKeyEnv(e) + " with your API key."
+	case strings.Contains(lower, "timeout"):
+		return "Request timed out. Endpoint may be slow or unreachable."
+	}
+	return ""
+}
+
+func findAPIKeyEnv(e ErrorEntry) string {
+	if e.BaseURL != "" {
+		if strings.Contains(e.BaseURL, "deepseek") {
+			return "DEEPSEEK_API_KEY"
+		}
+	}
+	return "LORE_LLM_API_KEY"
+}
+
+// --- Persona candidate panel handlers ---
+
+func (m interactiveWorkbenchModel) handleCandidatePanelResult(msg candidatePanelMsg) (tea.Model, tea.Cmd) {
+	switch msg.action {
+	case "list":
+		if msg.err != nil {
+			m.lastOutput = "Error: candidates: " + msg.err.Error()
+		}
+		m.refreshContent(true)
+		return m, nil
+	case "draft":
+		m.running = false
+		m.pendingLine = ""
+		if msg.err != nil {
+			m.lastOutput = "Error: draft candidate: " + msg.err.Error()
+		} else {
+			m.lastOutput = "Candidate drafted: " + msg.id
+			if refreshed, loadErr := m.driver.Load(m.lastOutput); loadErr == nil {
+				m.viewModel = refreshed
+			}
+		}
+		m.candidatePanelDetail = false
+		m.refreshContent(true)
+		return m, candidateListCmd(m.driver)
+	case "dismiss":
+		m.running = false
+		m.pendingLine = ""
+		if msg.err != nil {
+			m.lastOutput = "Error: dismiss candidate: " + msg.err.Error()
+		} else {
+			m.lastOutput = "Candidate dismissed: " + msg.id
+		}
+		m.candidatePanelDetail = false
+		m.refreshContent(true)
+		return m, candidateListCmd(m.driver)
+	case "recover":
+		m.running = false
+		m.pendingLine = ""
+		if msg.err != nil {
+			m.lastOutput = "Error: recover candidate: " + msg.err.Error()
+		} else {
+			m.lastOutput = "Candidate recovered: " + msg.id
+		}
+		m.refreshContent(true)
+		return m, candidateListCmd(m.driver)
+	case "retry":
+		m.running = false
+		m.pendingLine = ""
+		if msg.err != nil {
+			m.lastOutput = "Error: retry rejected draft: " + msg.err.Error()
+		} else {
+			m.lastOutput = "Rejected draft retried for candidate: " + msg.id
+			if refreshed, loadErr := m.driver.Load(m.lastOutput); loadErr == nil {
+				m.viewModel = refreshed
+			}
+		}
+		m.refreshContent(true)
+		return m, candidateListCmd(m.driver)
+	}
+	return m, nil
+}
+
+func (m interactiveWorkbenchModel) handleCandidateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.candidatePanelDetail {
+		return m.handleCandidateDetailKeys(msg)
+	}
+
+	candidates := m.viewModel.CandidateList
+	switch msg.String() {
+	case "up", "k":
+		if m.candidatePanelCursor > 0 {
+			m.candidatePanelCursor--
+		}
+		m.refreshContent(false)
+		return m, nil
+	case "down", "j":
+		if m.candidatePanelCursor < len(candidates)-1 {
+			m.candidatePanelCursor++
+		}
+		m.refreshContent(false)
+		return m, nil
+	case "enter":
+		if m.candidatePanelCursor < len(candidates) {
+			m.candidatePanelDetail = true
+			m.refreshContent(false)
+		}
+		return m, nil
+	case "d":
+		return m.candidateAction(candidates, func(sel PersonaCandidateInfo) (tea.Cmd, string) {
+			if !sel.Actions.CanDraft {
+				return nil, sel.Actions.DraftReason
+			}
+			m.running = true
+			m.pendingLine = "draft candidate " + sel.ID
+			return candidateDraftCmd(m.driver, sel.ID), ""
+		})
+	case "x":
+		return m.candidateAction(candidates, func(sel PersonaCandidateInfo) (tea.Cmd, string) {
+			if !sel.Actions.CanDismiss {
+				return nil, sel.Actions.DismissReason
+			}
+			m.running = true
+			m.pendingLine = "dismiss candidate " + sel.ID
+			return candidateDismissCmd(m.driver, sel.ID), ""
+		})
+	case "r":
+		return m.candidateAction(candidates, func(sel PersonaCandidateInfo) (tea.Cmd, string) {
+			if sel.Actions.CanRetry {
+				m.running = true
+				m.pendingLine = "retry rejected draft " + sel.ID
+				return candidateRetryCmd(m.driver, sel.ID), ""
+			}
+			// Partial-orphan: CanRecover but no sub-flow for link in TUI.
+			// Show instructions instead of silently force-dismissing.
+			if sel.Actions.CanRecover {
+				return nil, "Partial-orphan candidate: use CLI to link to a draft (lore persona candidates recover " + sel.ID + " --link <draft_id>) or press f to force-dismiss."
+			}
+			if sel.Actions.RecoverReason != "" {
+				return nil, sel.Actions.RecoverReason
+			}
+			return nil, sel.Actions.RetryReason
+		})
+	case "f":
+		// Force-dismiss a partial-orphan (CanRecover && DraftID=="")
+		return m.candidateAction(candidates, func(sel PersonaCandidateInfo) (tea.Cmd, string) {
+			if !sel.Actions.CanRecover || sel.DraftID != "" {
+				return nil, "Force-dismiss only available for orphan partial candidates (drafted, no draft_id)."
+			}
+			m.running = true
+			m.pendingLine = "force-dismiss candidate " + sel.ID
+			return candidateDismissCmd(m.driver, sel.ID), ""
+		})
+	case "esc":
+		return m, nil
+	}
+	return m, nil
+}
+
+// candidateAction is a helper that extracts the selected candidate, calls fn,
+// and either dispatches the returned Cmd or shows the reason string.
+func (m interactiveWorkbenchModel) candidateAction(candidates []PersonaCandidateInfo, fn func(PersonaCandidateInfo) (tea.Cmd, string)) (tea.Model, tea.Cmd) {
+	if m.candidatePanelCursor < len(candidates) {
+		sel := candidates[m.candidatePanelCursor]
+		cmd, reason := fn(sel)
+		if reason != "" {
+			m.lastOutput = reason
+			m.refreshContent(true)
+			return m, nil
+		}
+		m.refreshContent(true)
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m interactiveWorkbenchModel) handleCandidateDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	candidates := m.viewModel.CandidateList
+	switch msg.String() {
+	case "esc":
+		m.candidatePanelDetail = false
+		m.refreshContent(false)
+		return m, nil
+	case "d":
+		return m.candidateAction(candidates, func(sel PersonaCandidateInfo) (tea.Cmd, string) {
+			if !sel.Actions.CanDraft {
+				return nil, sel.Actions.DraftReason
+			}
+			m.running = true
+			return candidateDraftCmd(m.driver, sel.ID), ""
+		})
+	case "x":
+		return m.candidateAction(candidates, func(sel PersonaCandidateInfo) (tea.Cmd, string) {
+			if !sel.Actions.CanDismiss {
+				return nil, sel.Actions.DismissReason
+			}
+			m.running = true
+			return candidateDismissCmd(m.driver, sel.ID), ""
+		})
+	case "r":
+		return m.candidateAction(candidates, func(sel PersonaCandidateInfo) (tea.Cmd, string) {
+			if sel.Actions.CanRetry {
+				m.running = true
+				return candidateRetryCmd(m.driver, sel.ID), ""
+			}
+			if sel.Actions.CanRecover {
+				return nil, "Partial-orphan candidate: use CLI to link to a draft (lore persona candidates recover " + sel.ID + " --link <draft_id>) or press f to force-dismiss."
+			}
+			if sel.Actions.RecoverReason != "" {
+				return nil, sel.Actions.RecoverReason
+			}
+			return nil, sel.Actions.RetryReason
+		})
+	case "f":
+		return m.candidateAction(candidates, func(sel PersonaCandidateInfo) (tea.Cmd, string) {
+			if !sel.Actions.CanRecover || sel.DraftID != "" {
+				return nil, "Force-dismiss only available for orphan partial candidates."
+			}
+			m.running = true
+			return candidateDismissCmd(m.driver, sel.ID), ""
+		})
+	}
+	return m, nil
 }
 
 // Approval pane keyboard handler.
