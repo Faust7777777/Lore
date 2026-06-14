@@ -349,6 +349,40 @@ func (s *stateStoreWithPersonaWrapper) PersonaCandidates() store.PersonaCandidat
 	return s.persona
 }
 
+// claimConflictAfterLinkPersonaStore simulates the narrow race where
+// this caller saw the candidate as Open, then lost ClaimCandidateForDraft
+// after a peer had already linked the winning draft.
+type claimConflictAfterLinkPersonaStore struct {
+	inner    store.PersonaCandidateStore
+	draftID  string
+	linkedAt time.Time
+}
+
+func (s *claimConflictAfterLinkPersonaStore) UpsertCandidate(record persona.PersonaCandidateRecord) (persona.PersonaCandidateRecord, bool, error) {
+	return s.inner.UpsertCandidate(record)
+}
+func (s *claimConflictAfterLinkPersonaStore) GetCandidate(id string) (persona.PersonaCandidateRecord, error) {
+	return s.inner.GetCandidate(id)
+}
+func (s *claimConflictAfterLinkPersonaStore) ListCandidatesByState(state persona.PersonaCandidateState, limit int) ([]persona.PersonaCandidateRecord, error) {
+	return s.inner.ListCandidatesByState(state, limit)
+}
+func (s *claimConflictAfterLinkPersonaStore) UpdateCandidateState(id string, state persona.PersonaCandidateState, updatedAt time.Time) (persona.PersonaCandidateRecord, error) {
+	return s.inner.UpdateCandidateState(id, state, updatedAt)
+}
+func (s *claimConflictAfterLinkPersonaStore) LinkCandidateDraft(id string, draftID string, updatedAt time.Time) (persona.PersonaCandidateRecord, error) {
+	return s.inner.LinkCandidateDraft(id, draftID, updatedAt)
+}
+func (s *claimConflictAfterLinkPersonaStore) ClaimCandidateForDraft(id string, now time.Time) (persona.PersonaCandidateRecord, error) {
+	if _, err := s.inner.LinkCandidateDraft(id, s.draftID, s.linkedAt); err != nil {
+		return persona.PersonaCandidateRecord{}, err
+	}
+	return persona.PersonaCandidateRecord{}, store.ErrConflict
+}
+func (s *claimConflictAfterLinkPersonaStore) ClaimCandidateForRetry(id string, expectedDraftID string, now time.Time) (persona.PersonaCandidateRecord, error) {
+	return s.inner.ClaimCandidateForRetry(id, expectedDraftID, now)
+}
+
 func TestCreatePersonaDraftFromCandidateRetryAfterLinkFailureDoesNotDuplicate(t *testing.T) {
 	// Load-bearing duplicate-prevention proof. Sequence:
 	//   1. Inject LinkCandidateDraft failure on the first attempt.
@@ -485,6 +519,56 @@ func TestCreatePersonaDraftFromCandidateRollsBackOnProposalFailure(t *testing.T)
 	}
 	if post.State != persona.PersonaCandidateOpen {
 		t.Fatalf("candidate state = %q, want open after proposal-validation rollback", post.State)
+	}
+}
+
+func TestCreatePersonaDraftFromCandidateClaimConflictAfterPeerLinkedReturnsAlreadyDrafted(t *testing.T) {
+	runtime := openTestRuntime(t)
+	candidateID := seedPersonaCandidate(t, runtime, "major", "economics", "I major in economics")
+	now := time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC)
+	peerDraftID := "draft-peer-winner"
+	if err := runtime.Store.Drafts().SaveDraft(model.Draft{
+		ID:    peerDraftID,
+		Kind:  model.DraftKindPersonaUpdate,
+		State: model.DraftPendingReview,
+		Target: model.DocumentRef{
+			Path:        runtime.Config.Vault.ManagedCore.Persona,
+			Class:       model.DocClassPersona,
+			BaseVersion: "persona-v1",
+		},
+		Title:           "peer persona update",
+		Summary:         "fixture",
+		ProposedContent: "{}",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}); err != nil {
+		t.Fatalf("SaveDraft(peer winner): %v", err)
+	}
+
+	originalStore := runtime.Store
+	runtime.Store = &stateStoreWithPersonaWrapper{
+		inner: originalStore,
+		persona: &claimConflictAfterLinkPersonaStore{
+			inner:    originalStore.PersonaCandidates(),
+			draftID:  peerDraftID,
+			linkedAt: now.Add(time.Second),
+		},
+	}
+	t.Cleanup(func() { runtime.Store = originalStore })
+
+	_, result, err := runtime.CreatePersonaDraftFromCandidate(candidateID, now.Add(2*time.Second))
+	if !errors.Is(err, ErrPersonaCandidateAlreadyDrafted) {
+		t.Fatalf("err = %v, want ErrPersonaCandidateAlreadyDrafted", err)
+	}
+	if result.DraftID != "" {
+		t.Fatalf("result DraftID = %q, want empty result for concurrent claim loser", result.DraftID)
+	}
+	linked, err := originalStore.PersonaCandidates().GetCandidate(candidateID)
+	if err != nil {
+		t.Fatalf("GetCandidate() after simulated peer link: %v", err)
+	}
+	if linked.DraftID != peerDraftID {
+		t.Fatalf("linked DraftID = %q, want %q", linked.DraftID, peerDraftID)
 	}
 }
 

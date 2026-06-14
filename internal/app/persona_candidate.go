@@ -191,9 +191,9 @@ func (r *Runtime) CreatePersonaDraftFromCandidate(id string, now time.Time) (per
 		return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, err
 	}
 	// Fast pre-check: terminal states bypass the claim path entirely.
-	// The same evaluator runs again after a claim-conflict so two
-	// concurrent callers route through identical idempotency logic
-	// regardless of who lost the race.
+	// Claim conflicts below are handled more strictly because a caller
+	// that observed Open and then lost the CAS is a concurrent loser,
+	// not an ordinary later idempotent retry.
 	if result, evalErr, handled := r.evaluateNonOpenPersonaCandidate(current); handled {
 		if evalErr != nil {
 			return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, evalErr
@@ -212,11 +212,11 @@ func (r *Runtime) CreatePersonaDraftFromCandidate(id string, now time.Time) (per
 			if gerr != nil {
 				return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, gerr
 			}
-			if result, evalErr, handled := r.evaluateNonOpenPersonaCandidate(recheck); handled {
-				if evalErr != nil {
-					return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, evalErr
-				}
-				return recheck, result, nil
+			switch persona.NormalizeCandidateState(recheck.State) {
+			case persona.PersonaCandidateDrafted:
+				return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, ErrPersonaCandidateAlreadyDrafted
+			case persona.PersonaCandidateDismissed:
+				return persona.PersonaCandidateRecord{}, model.PersonaUpdateProposalResult{}, ErrPersonaCandidateDismissed
 			}
 			// Claim returned conflict but the recheck saw Open: a
 			// peer must have transitioned through and back during

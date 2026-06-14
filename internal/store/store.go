@@ -107,8 +107,8 @@ type PersonaCandidateStore interface {
 	//   - ErrNotFound when the ID does not exist;
 	//   - ErrConflict when the candidate exists but is not in the
 	//     Open state (already claimed, drafted, or dismissed); the
-	//     caller should re-read and route through the same
-	//     non-Open branches the pre-check uses;
+	//     caller should re-read and decide whether this was a
+	//     concurrent claim loser or an ordinary terminal-state retry;
 	//   - ErrInvalidKey when id is empty.
 	ClaimCandidateForDraft(id string, now time.Time) (persona.PersonaCandidateRecord, error)
 	// ClaimCandidateForRetry is the retry-path counterpart to
