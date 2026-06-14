@@ -100,3 +100,22 @@ func TestReleaseGateIncludesPostScanReconciliationCoverage(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseGatePinsExternalTranscriptProcessSinkOnlyBoundary(t *testing.T) {
+	scriptPath := filepath.Join("..", "..", "scripts", "release-gate.ps1")
+	raw, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", scriptPath, err)
+	}
+	script := string(raw)
+
+	required := []string{
+		"V1 beta external transcript import",
+		"TestRuntimeImportExternalTranscriptJSONLStaysProcessSinkOnly",
+	}
+	for _, want := range required {
+		if !strings.Contains(script, want) {
+			t.Fatalf("release-gate.ps1 missing %q", want)
+		}
+	}
+}

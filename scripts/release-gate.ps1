@@ -133,7 +133,7 @@ function Invoke-V1BetaAcceptanceGate {
     Invoke-GoGate `
         -Label "V1 beta external transcript import" `
         -Package "./internal/app" `
-        -Run "TestRuntimeImportExternalTranscriptJSONL"
+        -Run "(TestRuntimeImportExternalTranscriptJSONLWritesCheckpointsAndRollup|TestRuntimeImportExternalTranscriptJSONLStaysProcessSinkOnly|TestRuntimeImportExternalTranscriptJSONLRequiresInput)$"
 
     Invoke-GoGate `
         -Label "V1 beta external transcript import CLI" `
