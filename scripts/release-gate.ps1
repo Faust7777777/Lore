@@ -2,6 +2,7 @@ param(
     [switch]$Full,
     [switch]$E2E,
     [switch]$PersonaAcceptance,
+    [switch]$V1BetaAcceptance,
     [int]$Repeat = 1,
     [switch]$SkipDiffCheck,
     [switch]$AssertClean
@@ -113,6 +114,58 @@ function Invoke-SDKGate {
     }
 }
 
+function Invoke-V1BetaAcceptanceGate {
+    Invoke-GoGate `
+        -Label "V1 beta MCP external boundary" `
+        -Package "./internal/mcp" `
+        -Run "Test(MCPV1ExposesOnlyReadAndProposalTools|ExternalMCPDoesNotExposeDirectWrites)$"
+
+    Invoke-GoGate `
+        -Label "V1 beta governed markdown intake" `
+        -Package "./internal/app" `
+        -Run "TestRuntimeSmokeExternalMCPGovernedMarkdownNoteIntake$"
+
+    Invoke-GoGate `
+        -Label "V1 beta persona memory candidate acceptance" `
+        -Package "./cmd/obsidian-harness" `
+        -Run "TestRunPersonaMemoryCandidateAcceptanceScaffold$"
+
+    Invoke-GoGate `
+        -Label "V1 beta external transcript import" `
+        -Package "./internal/app" `
+        -Run "TestRuntimeImportExternalTranscriptJSONL"
+
+    Invoke-GoGate `
+        -Label "V1 beta external transcript import CLI" `
+        -Package "./cmd/obsidian-harness" `
+        -Run "TestRunImportExternalJSONL"
+
+    Invoke-GoGate `
+        -Label "V1 beta operator queue and inbox" `
+        -Package "./internal/app" `
+        -Run "TestRuntimeOperatorQueue"
+
+    Invoke-GoGate `
+        -Label "V1 beta operator queue and inbox command" `
+        -Package "./cmd/obsidian-harness" `
+        -Run "TestRunInboxJSONCommand"
+
+    Invoke-GoGate `
+        -Label "V1 beta operator queue and inbox render" `
+        -Package "./internal/cli" `
+        -Run "Test(RenderOperatorQueue|EmitOperatorQueueJSON|OperatorQueueNudge)$"
+
+    Invoke-GoGate `
+        -Label "V1 beta usage purpose/model breakdown" `
+        -Package "./internal/store" `
+        -Run "Test(SummarizeUsageByModel(SplitsSamePurposeAcrossModels|DoesNotMixAcrossPurposes|FallsBackToUnknown)|SummarizeUsageBreakdownEmptyPurposeFoldsIntoChat)$"
+
+    Invoke-GoGate `
+        -Label "V1 beta usage purpose/model breakdown CLI" `
+        -Package "./internal/cli" `
+        -Run "Test(EmitUsageJSONIncludesByModelBreakdown|RenderUsageReportShowsModelDetailUnderPurpose|RenderUsageReportShowsCrossPurposeModelTotals)$"
+}
+
 function Assert-RepoClean {
     if (Test-Path -LiteralPath (Join-Path $RepoRoot ".smoke-workdir")) {
         throw ".smoke-workdir was created in the repository"
@@ -133,6 +186,15 @@ try {
         Invoke-NativeChecked -Label "git diff --check" -FilePath "git" -Arguments @("diff", "--check")
     }
 
+    if ($V1BetaAcceptance) {
+        Invoke-V1BetaAcceptanceGate
+        if ($AssertClean) {
+            Assert-RepoClean
+        }
+        Write-Host "[gate] release gate passed"
+        return
+    }
+
     if ($PersonaAcceptance) {
         Invoke-GoGate `
             -Label "persona memory candidate acceptance" `
@@ -149,6 +211,11 @@ try {
         -Label "MCP registry contract and external boundary" `
         -Package "./internal/mcp" `
         -Run "Test(LiveMCPToolContractV1Snapshot|SDKFacingToolContractSnapshot|MCPV1ExposesOnlyReadAndProposalTools|ExternalMCPDoesNotExposeDirectWrites)$"
+
+    Invoke-GoGate `
+        -Label "MCP onboarding docs and example configs" `
+        -Package "./internal/mcp" `
+        -Run "Test(ExternalClientExamplesStartLoreMCP|OpenCodeExampleStartsLoreMCP|ClientSetupDocAvailableToolsMatchV1Contract)$"
 
     Invoke-GoGate `
         -Label "LLM config resolver and workspace persistence guardrails" `
@@ -186,6 +253,11 @@ try {
         -Run "Test(VaultReadRejects(SymlinkFile|ParentSymlink)OutsideRoot|WriteLowRiskNoteRejectsParentSymlinkOutsideRoot|ApplyDraftRejectsParentSymlinkOutsideRoot)$"
 
     Invoke-GoGate `
+        -Label "orchestrator apply failure-semantics guardrails" `
+        -Package "./internal/orchestrator" `
+        -Run "Test(ApplyDraftEmitsGovernanceFindingWhenStateUpdateFails|ApplyDraftSurfacesFindingSaveFailureInError|MarkDraftConflictedSurfacesStatePersistFailure)$"
+
+    Invoke-GoGate `
         -Label "governed smoke, daemon watcher, and post-scan guardrails" `
         -Package "./internal/app" `
         -Run "Test(RuntimeSmokeP0|RuntimeSmokeGovernedMarkdownNoteIntake|RuntimeSmokeExternalMCPGovernedMarkdownNoteIntake|RunVaultDaemonWatcherCreatesDraftAfterFileChange|RunVaultDaemonWatcherIgnoresObsidianDirectory|RunVaultDaemonWatcherSyncsCodexJSONLBeforePoll|RuntimeScanVaultChangesPrimesThenCreatesDraft|RuntimeScanVaultChangesWaitsForDebounceBeforeCreatingDraft|RuntimeScanVaultChangesAuditsOutOfBandOrdinaryNote|RuntimeScanVaultChangesAuditsGovernedCoreOutOfBandChange|RuntimeScanVaultChangesAuditsProcessSinkOutOfBandChange|RuntimeScanVaultChangesAuditsNewOutOfBandOrdinaryNoteAfterBaseline|RuntimeScanVaultChangesAuditsRecreatedGovernedCoreAfterBaseline|RuntimeScanVaultChangesAuditsNewProcessSinkAfterBaseline)$"
@@ -220,7 +292,7 @@ try {
     Invoke-GoGate `
         -Label "TUI approval state, task-step render, and viewport guardrails" `
         -Package "./internal/tui" `
-        -Run "Test(ApprovalFlow_|InteractiveWorkbenchViewDoesNotRefreshContent|RenderInteractiveConversationShowsTaskSteps|RenderTaskStepsArgSummary|RenderTaskStepsTruncatesObservation|RenderTaskStepsErrorStep|RenderTaskStepsNonErrorLastOutputNotShown|FindingsOffsetUsesFindingsPanelHeight|SinkOffsetUsesSinkPanelHeight|ApprovalOffsetUsesApprovalPanelHeight|ModelPanel(ProfilesPersistSelectedProfile|CreateProfileFromPreset)|ModelProfileAndPresetRenderDoNotLeakSecrets|ErrorsCommand(RendersDiagnosticsWithHintsAndNoSecrets|EmptyState))"
+        -Run "Test(ApprovalFlow_|InteractiveWorkbenchViewDoesNotRefreshContent|RenderInteractiveConversationShowsTaskSteps|RenderTaskStepsArgSummary|RenderTaskStepsTruncatesObservation|RenderTaskStepsErrorStep|RenderTaskStepsNonErrorLastOutputNotShown|FindingsOffsetUsesFindingsPanelHeight|FindingsListQuick(ResolveAction|IgnoreAction|ActionNoOpOnNonOpenState)|SinkOffsetUsesSinkPanelHeight|ApprovalOffsetUsesApprovalPanelHeight|ModelPanel(ProfilesPersistSelectedProfile|CreateProfileFromPreset)|ModelProfileAndPresetRenderDoNotLeakSecrets|ErrorsCommand(RendersDiagnosticsWithHintsAndNoSecrets|EmptyState))"
 
     if ($Full) {
         $verifyArgs = @(

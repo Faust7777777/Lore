@@ -240,6 +240,108 @@ func TestFindingsNoOpOnNonOpenState(t *testing.T) {
 	}
 }
 
+func TestFindingsListQuickResolveAction(t *testing.T) {
+	findings := []model.Finding{
+		{ID: "f1", Title: "Finding A", State: model.FindingOpen, Severity: model.FindingSeverityWarning},
+		{ID: "f2", Title: "Finding B", State: model.FindingOpen, Severity: model.FindingSeverityCritical},
+	}
+	driver := &panelDriverStub{findings: findings}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+	m.focus = focusFindings
+
+	// Move cursor to the second finding while staying in list view.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(interactiveWorkbenchModel)
+	if m.findingsDetail {
+		t.Fatal("should remain in list view before action")
+	}
+	if m.findingsCursor != 1 {
+		t.Fatalf("cursor = %d, want 1", m.findingsCursor)
+	}
+
+	// Press x to resolve the selected finding directly from the list.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = updated.(interactiveWorkbenchModel)
+	if cmd == nil {
+		t.Fatal("expected a command after pressing 'x' in list view")
+	}
+
+	result := cmd()
+	msg, ok := result.(findingsResultMsg)
+	if !ok {
+		t.Fatalf("expected findingsResultMsg, got %T", result)
+	}
+	if msg.action != "resolve" {
+		t.Fatalf("action = %q, want resolve", msg.action)
+	}
+	if msg.findingID != "f2" {
+		t.Fatalf("findingID = %q, want f2", msg.findingID)
+	}
+
+	updated, _ = m.Update(msg)
+	m = updated.(interactiveWorkbenchModel)
+	if m.viewModel.Findings[1].State != model.FindingResolved {
+		t.Fatalf("finding state = %s, want resolved", m.viewModel.Findings[1].State)
+	}
+}
+
+func TestFindingsListQuickIgnoreAction(t *testing.T) {
+	findings := []model.Finding{
+		{ID: "f1", Title: "Finding A", State: model.FindingOpen, Severity: model.FindingSeverityWarning},
+	}
+	driver := &panelDriverStub{findings: findings}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+	m.focus = focusFindings
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	m = updated.(interactiveWorkbenchModel)
+	if cmd == nil {
+		t.Fatal("expected a command after pressing 'i' in list view")
+	}
+	result := cmd()
+	msg, ok := result.(findingsResultMsg)
+	if !ok {
+		t.Fatalf("expected findingsResultMsg, got %T", result)
+	}
+	if msg.action != "ignore" {
+		t.Fatalf("action = %q, want ignore", msg.action)
+	}
+}
+
+func TestFindingsListQuickActionNoOpOnNonOpenState(t *testing.T) {
+	findings := []model.Finding{
+		{ID: "f1", Title: "Finding A", State: model.FindingResolved, Severity: model.FindingSeverityWarning},
+	}
+	driver := &panelDriverStub{findings: findings}
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+	m.focus = focusFindings
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = updated.(interactiveWorkbenchModel)
+	if cmd != nil {
+		t.Fatal("x on resolved finding in list view should be no-op (nil cmd)")
+	}
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if cmd != nil {
+		t.Fatal("i on resolved finding in list view should be no-op (nil cmd)")
+	}
+}
+
 // --- Process-sink timeline state machine tests ---
 
 func TestSinkTimelineCursorMovement(t *testing.T) {

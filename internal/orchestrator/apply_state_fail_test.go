@@ -334,6 +334,84 @@ func TestApplyDraftSurfacesFindingSaveFailureInError(t *testing.T) {
 	}
 }
 
+func TestMarkDraftConflictedSurfacesStatePersistFailure(t *testing.T) {
+	// Phase 5 governance hardening: the apply guard can detect a
+	// conflict (the target changed out-of-band so its hash no longer
+	// matches the draft's BaseVersion) and then fail to PERSIST
+	// State=conflicted. The previous markDraftConflicted swallowed that
+	// store error and still returned a clean store.ErrConflict, so the
+	// operator was told "conflict" while `drafts list` kept showing the
+	// draft as approved -- a silently divergent governance view that
+	// violates the "mutations fail loud" invariant recorded in
+	// docs/review-b-line-failure-semantics-2026-06-04.md.
+	//
+	// After the fix the returned error must still satisfy
+	// errors.Is(store.ErrConflict) for callers that branch on it (e.g.
+	// persona candidate re-routing), AND also wrap the underlying
+	// persist error so the operator learns the conflict state was NOT
+	// recorded and the draft is still approved.
+	workDir := t.TempDir()
+	cfg := config.Default(workDir)
+	inner := memory.New()
+
+	bootstrap, err := New(cfg, inner)
+	if err != nil {
+		t.Fatalf("bootstrap New: %v", err)
+	}
+	if _, err := bootstrap.BootstrapManagedVault(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("BootstrapManagedVault: %v", err)
+	}
+	relPath := filepath.Join("0-排期", "04-执行", "week.md")
+	draft, err := bootstrap.ObserveDocumentChange(relPath, []byte("first pass"), time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ObserveDocumentChange: %v", err)
+	}
+	if _, err := bootstrap.ApproveDraft(draft.ID, time.Date(2026, 4, 22, 10, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("ApproveDraft: %v", err)
+	}
+
+	// Mutate the draft's target (the managed progress index) out-of-band
+	// so its hash no longer matches draft.Target.BaseVersion -- the apply
+	// guard will then route through markDraftConflicted.
+	progressAbs := filepath.Join(cfg.Paths.VaultRoot, filepath.FromSlash(cfg.Vault.ManagedCore.ProgressIndex))
+	if err := os.WriteFile(progressAbs, []byte("# changed out of band\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(progress out-of-band): %v", err)
+	}
+
+	injected := errors.New("simulated conflict-state persist failure")
+	failingHarness, err := New(cfg, &stateUpdateFailingStore{inner: inner, updateErr: injected})
+	if err != nil {
+		t.Fatalf("failing New: %v", err)
+	}
+
+	_, applyErr := failingHarness.ApplyDraft(draft.ID, time.Date(2026, 4, 22, 10, 6, 0, 0, time.UTC))
+	if applyErr == nil {
+		t.Fatal("ApplyDraft should error when the conflict state cannot be persisted")
+	}
+	// Callers still branch on ErrConflict, so it must remain in the chain.
+	if !errors.Is(applyErr, store.ErrConflict) {
+		t.Fatalf("err = %v, must still satisfy errors.Is(store.ErrConflict)", applyErr)
+	}
+	// But it must NOT hide the persist failure behind a clean conflict.
+	if !errors.Is(applyErr, injected) {
+		t.Fatalf("err = %v, must wrap the underlying state-persist error %v", applyErr, injected)
+	}
+	if !strings.Contains(applyErr.Error(), "approved") {
+		t.Fatalf("err = %v, should warn the operator the draft is still approved", applyErr)
+	}
+
+	// The draft must remain approved in the store (the persist failed),
+	// matching what the error now tells the operator -- no silent claim
+	// that it became conflicted.
+	stalled, err := inner.Drafts().GetDraft(draft.ID)
+	if err != nil {
+		t.Fatalf("GetDraft: %v", err)
+	}
+	if stalled.State != model.DraftApproved {
+		t.Fatalf("draft state = %q, want approved (conflict persist failed)", stalled.State)
+	}
+}
+
 // Compile-time guard that stateUpdateFailingStore satisfies
 // store.StateStore. Without this, a future interface addition
 // would only fail at the New() call site inside the test.

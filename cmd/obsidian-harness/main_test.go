@@ -917,6 +917,51 @@ func TestRunImportExternalJSONLMissingInput(t *testing.T) {
 	}
 }
 
+func TestRunInboxJSONCommand(t *testing.T) {
+	clearOperatorEnv(t)
+	workDir := t.TempDir()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"inbox", "--json", workDir}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected zero exit code, got %d, stderr = %q", exitCode, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no stderr output, got %q", stderr.String())
+	}
+
+	var payload struct {
+		Day                   string            `json:"day"`
+		ActionItems           int               `json:"action_items"`
+		PendingDrafts         []json.RawMessage `json:"pending_drafts"`
+		OpenFindings          []json.RawMessage `json:"open_findings"`
+		OpenPersonaCandidates []json.RawMessage `json:"open_persona_candidates"`
+		TodayUsage            struct {
+			Calls       int `json:"calls"`
+			TotalTokens int `json:"total_tokens"`
+		} `json:"today_usage"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &payload); err != nil {
+		t.Fatalf("Unmarshal(inbox JSON) error = %v, output = %q", err, stdout.String())
+	}
+	if payload.Day == "" {
+		t.Fatalf("inbox JSON day is empty: %#v", payload)
+	}
+	if payload.ActionItems != 0 {
+		t.Fatalf("action_items = %d, want 0", payload.ActionItems)
+	}
+	if payload.PendingDrafts == nil || payload.OpenFindings == nil || payload.OpenPersonaCandidates == nil {
+		t.Fatalf("inbox JSON arrays should be present as empty arrays, got %#v", payload)
+	}
+	if len(payload.PendingDrafts) != 0 || len(payload.OpenFindings) != 0 || len(payload.OpenPersonaCandidates) != 0 {
+		t.Fatalf("empty inbox returned pending items: %#v", payload)
+	}
+	if payload.TodayUsage.Calls != 0 || payload.TodayUsage.TotalTokens != 0 {
+		t.Fatalf("today_usage = %#v, want zero usage", payload.TodayUsage)
+	}
+}
+
 func TestRunImportCodexJSONLMissingInput(t *testing.T) {
 	workDir := t.TempDir()
 	var stdout bytes.Buffer

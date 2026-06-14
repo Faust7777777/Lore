@@ -637,15 +637,25 @@ func (h *Harness) markDraftConflicted(draft model.Draft, at time.Time) error {
 		return ErrDraftNotReady
 	}
 	conflicted, updateErr := h.store.Drafts().UpdateDraftState(draft.ID, model.DraftConflicted, at)
-	if updateErr == nil {
-		h.publishEvent(hruntime.Event{
-			ID:         conflicted.ID,
-			Type:       hruntime.EventDraftStateChanged,
-			Source:     "apply_draft_conflict",
-			OccurredAt: at,
-			Payload:    conflicted,
-		})
+	if updateErr != nil {
+		// The apply guard detected a conflict but the store could not
+		// persist State=conflicted. Returning a clean store.ErrConflict
+		// here would tell the operator the draft is now conflicted while
+		// `drafts list` keeps showing it approved -- a silently divergent
+		// governance view. Surface both: callers that branch on
+		// errors.Is(store.ErrConflict) still work, AND the wrapped persist
+		// error tells the operator the conflict was NOT recorded and the
+		// draft remains approved. Mirrors the "mutations fail loud"
+		// invariant in docs/review-b-line-failure-semantics-2026-06-04.md.
+		return fmt.Errorf("apply: draft %s conflicts with the current target but persisting State=conflicted failed: %w; the draft still shows approved and was not recorded as conflicted: %w", draft.ID, updateErr, store.ErrConflict)
 	}
+	h.publishEvent(hruntime.Event{
+		ID:         conflicted.ID,
+		Type:       hruntime.EventDraftStateChanged,
+		Source:     "apply_draft_conflict",
+		OccurredAt: at,
+		Payload:    conflicted,
+	})
 	return store.ErrConflict
 }
 

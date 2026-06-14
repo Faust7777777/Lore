@@ -1504,6 +1504,16 @@ func (m interactiveWorkbenchModel) handleFindingsKeys(msg tea.KeyMsg) (tea.Model
 			m.refreshContent(false)
 		}
 		return m, nil
+	case "x":
+		if len(findings) > 0 && m.findingsCursor < len(findings) && findings[m.findingsCursor].State == model.FindingOpen {
+			return m.executeFindingsAction("resolve", findings[m.findingsCursor].ID)
+		}
+		return m, nil
+	case "i":
+		if len(findings) > 0 && m.findingsCursor < len(findings) && findings[m.findingsCursor].State == model.FindingOpen {
+			return m.executeFindingsAction("ignore", findings[m.findingsCursor].ID)
+		}
+		return m, nil
 	}
 	return m, nil
 }

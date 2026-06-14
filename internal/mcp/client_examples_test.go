@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -59,6 +60,54 @@ func TestOpenCodeExampleStartsLoreMCP(t *testing.T) {
 	assertClientKeyEnv(t, "opencode.jsonc", server.Environment)
 }
 
+func TestClientSetupDocAvailableToolsMatchV1Contract(t *testing.T) {
+	contract := loadLiveMCPToolContractSnapshot(t)
+	docTools := loadClientSetupAvailableTools(t)
+	if len(docTools) != len(contract) {
+		t.Fatalf("mcp-client-setup.md Available Tools count = %d, want %d (v1 contract)", len(docTools), len(contract))
+	}
+	for index, want := range contract {
+		if docTools[index] != want.Name {
+			t.Fatalf("Available Tools[%d] = %q, want %q (v1 contract order)", index, docTools[index], want.Name)
+		}
+	}
+}
+
+func loadClientSetupAvailableTools(t *testing.T) []string {
+	t.Helper()
+	path := filepath.Join("..", "..", "docs", "integrations", "mcp-client-setup.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	const heading = "## Available Tools"
+	start := strings.Index(string(data), heading)
+	if start < 0 {
+		t.Fatalf("mcp-client-setup.md missing section %q", heading)
+	}
+	section := string(data)[start+len(heading):]
+	if end := strings.Index(section, "\n## "); end >= 0 {
+		section = section[:end]
+	}
+	var tools []string
+	for _, line := range strings.Split(section, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "| `") || strings.Contains(line, "---") {
+			continue
+		}
+		columns := strings.Split(line, "|")
+		if len(columns) < 3 {
+			continue
+		}
+		name := strings.Trim(strings.TrimSpace(columns[1]), "`")
+		if name == "" || name == "Tool" {
+			continue
+		}
+		tools = append(tools, name)
+	}
+	return tools
+}
+
 type stdioExampleServer struct {
 	Command string            `json:"command"`
 	Args    []string          `json:"args"`
@@ -78,7 +127,7 @@ func readExampleJSON(t *testing.T, path string, out any) {
 
 func assertStdioLoreCommand(t *testing.T, name string, command string, args []string) {
 	t.Helper()
-	commandBase := strings.ToLower(filepath.Base(command))
+	commandBase := strings.ToLower(path.Base(strings.ReplaceAll(command, "\\", "/")))
 	if commandBase != "lore" && commandBase != "lore.exe" {
 		t.Fatalf("%s command = %q, want lore executable", name, command)
 	}

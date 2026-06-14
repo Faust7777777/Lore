@@ -933,7 +933,11 @@ func renderFindingsList(findings []model.Finding, cursor int, offset int, width 
 		builder.WriteString("\n")
 	}
 
-	builder.WriteString(styleMutedText.Render(fmt.Sprintf("[%d/%d] enter=detail", cursor+1, len(findings))))
+	footer := fmt.Sprintf("[%d/%d] enter=detail", cursor+1, len(findings))
+	if cursor < len(findings) && findings[cursor].State == model.FindingOpen {
+		footer += " x=resolve i=ignore"
+	}
+	builder.WriteString(styleMutedText.Render(footer))
 	builder.WriteString("\n")
 
 	return builder.String()
