@@ -284,6 +284,57 @@ func TestRenderInteractiveStatusBasic(t *testing.T) {
 	}
 }
 
+func TestRenderInteractiveStatusShowsTodayUsageBreakdown(t *testing.T) {
+	vm := WorkbenchViewModel{
+		Snapshot: WorkbenchSnapshot{
+			Profile:      "local",
+			Ready:        true,
+			HealthStatus: "ok",
+			AgentID:      "codex",
+		},
+		TodayUsage: model.UsageSummary{
+			Calls:            3,
+			PromptTokens:     400,
+			CompletionTokens: 120,
+			TotalTokens:      520,
+			PurposeBreakdown: map[string]model.UsagePurposeStats{
+				model.UsagePurposeChat: {
+					Calls:            2,
+					PromptTokens:     260,
+					CompletionTokens: 80,
+					ByModel: map[string]model.UsagePurposeStats{
+						"deepseek/deepseek-chat": {Calls: 2, PromptTokens: 260, CompletionTokens: 80},
+					},
+				},
+				model.UsagePurposePersonaExtract: {
+					Calls:            1,
+					PromptTokens:     140,
+					CompletionTokens: 40,
+					ByModel: map[string]model.UsagePurposeStats{
+						"openai/gpt-5": {Calls: 1, PromptTokens: 140, CompletionTokens: 40},
+					},
+				},
+			},
+		},
+		UsageSoftWarningTokens: 500,
+	}
+
+	result := renderInteractiveStatus(vm)
+	for _, want := range []string{
+		"Today Usage",
+		"3 calls / 520 tokens",
+		"chat",
+		"persona_extract",
+		"deepseek/deepseek-chat",
+		"openai/gpt-5",
+		"Soft budget",
+	} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("status panel missing %q:\n%s", want, result)
+		}
+	}
+}
+
 func TestRenderInputHeaderRunning(t *testing.T) {
 	result := renderInputHeader(true, true)
 	if !strings.Contains(result, "agent running") {

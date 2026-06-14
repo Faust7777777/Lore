@@ -45,6 +45,10 @@ type personaExtractorModelBuilder interface {
 	BuildPersonaExtractorForModel(profileName string, modelName string) (app.PersonaExtractorBinding, error)
 }
 
+type usageSummaryRuntime interface {
+	SummarizeUsage(day time.Time) (model.UsageSummary, error)
+}
+
 func loadWorkbenchViewModel(version string, runtime console.Runtime, session *console.Session, agentID string, day time.Time, localExec bool, shellEnabled bool, lastOutput string) (tui.WorkbenchViewModel, error) {
 	managed, err := runtime.ManagedStatus()
 	if err != nil {
@@ -77,6 +81,7 @@ func loadWorkbenchViewModel(version string, runtime console.Runtime, session *co
 	if err != nil {
 		return tui.WorkbenchViewModel{}, err
 	}
+	todayUsage, usageSoftWarningTokens := loadWorkbenchUsage(runtime, day)
 
 	vm := tui.NewWorkbenchViewModel(
 		version,
@@ -95,6 +100,8 @@ func loadWorkbenchViewModel(version string, runtime console.Runtime, session *co
 		session.TranscriptInfo().Path,
 	)
 	vm.Snapshot.CurrentModel = modelLabel(session)
+	vm.TodayUsage = todayUsage
+	vm.UsageSoftWarningTokens = usageSoftWarningTokens
 	vm.CandidateList = candidates
 	vm.PendingActions = session.PendingActions()
 	vm.Snapshot.PendingActions = len(vm.PendingActions)
@@ -103,6 +110,21 @@ func loadWorkbenchViewModel(version string, runtime console.Runtime, session *co
 	vm.PersonaModelIdentity = loadLLMIdentity(runtime, config.LLMPurposePersonaExtract)
 	vm.SinkModelIdentity = loadLLMIdentity(runtime, config.LLMPurposeProcessSink)
 	return vm, nil
+}
+
+func loadWorkbenchUsage(runtime console.Runtime, day time.Time) (model.UsageSummary, int) {
+	summary := model.UsageSummary{Day: day}
+	if rt, ok := runtime.(usageSummaryRuntime); ok {
+		if usage, err := rt.SummarizeUsage(day); err == nil {
+			summary = usage
+		}
+	}
+
+	softWarningTokens := 0
+	if rt, ok := runtime.(*app.Runtime); ok && rt != nil {
+		softWarningTokens = rt.Config.Usage.SoftWarningTokens
+	}
+	return summary, softWarningTokens
 }
 
 func loadLLMIdentity(runtime console.Runtime, purpose string) *app.LLMIdentity {

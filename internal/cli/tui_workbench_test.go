@@ -28,6 +28,7 @@ type workbenchRuntimeStub struct {
 	drafts      []model.Draft
 	processSink app.ProcessSinkDayView
 	review      app.DraftReview
+	usage       model.UsageSummary
 }
 
 func (s workbenchRuntimeStub) ManagedStatus() (model.ManagedStatusView, error) {
@@ -64,6 +65,14 @@ func (s workbenchRuntimeStub) ApplyDraft(id string) (model.Draft, error) {
 
 func (s workbenchRuntimeStub) ProcessSinkDay(agentID string, day time.Time) (app.ProcessSinkDayView, error) {
 	return s.processSink, nil
+}
+
+func (s workbenchRuntimeStub) SummarizeUsage(day time.Time) (model.UsageSummary, error) {
+	usage := s.usage
+	if usage.Day.IsZero() {
+		usage.Day = day
+	}
+	return usage, nil
 }
 
 func (s workbenchRuntimeStub) ListFindings(limit int) ([]model.Finding, error) {
@@ -180,6 +189,13 @@ func TestLoadWorkbenchViewModelBuildsSnapshotFromRuntimeAndSession(t *testing.T)
 			},
 			BaseVersionMatches: true,
 		},
+		usage: model.UsageSummary{
+			Day:              day,
+			Calls:            2,
+			PromptTokens:     180,
+			CompletionTokens: 40,
+			TotalTokens:      220,
+		},
 	}
 
 	session := console.NewSession("test")
@@ -215,6 +231,53 @@ func TestLoadWorkbenchViewModelBuildsSnapshotFromRuntimeAndSession(t *testing.T)
 	}
 	if got, want := viewModel.Conversation.LastOutput, "ready"; got != want {
 		t.Fatalf("viewModel.Conversation.LastOutput = %q, want %q", got, want)
+	}
+	if got, want := viewModel.TodayUsage.TotalTokens, 220; got != want {
+		t.Fatalf("viewModel.TodayUsage.TotalTokens = %d, want %d", got, want)
+	}
+}
+
+func TestLoadWorkbenchViewModelIncludesTodayUsage(t *testing.T) {
+	day := time.Date(2026, 4, 23, 0, 0, 0, 0, time.Local)
+	runtime := workbenchRuntimeStub{
+		managed: model.ManagedStatusView{
+			Ready:     true,
+			WorkDir:   "work",
+			VaultRoot: "vault",
+			Health:    model.HealthSnapshot{Outcome: model.NewOutcome(model.StatusOK)},
+		},
+		processSink: app.ProcessSinkDayView{AgentID: "codex", Day: day},
+		usage: model.UsageSummary{
+			Day:              day,
+			Calls:            2,
+			PromptTokens:     100,
+			CompletionTokens: 30,
+			TotalTokens:      130,
+			PurposeBreakdown: map[string]model.UsagePurposeStats{
+				model.UsagePurposeChat: {
+					Calls:            2,
+					PromptTokens:     100,
+					CompletionTokens: 30,
+					ByModel: map[string]model.UsagePurposeStats{
+						"deepseek/deepseek-chat": {Calls: 2, PromptTokens: 100, CompletionTokens: 30},
+					},
+				},
+			},
+		},
+	}
+	session := console.NewSession("test")
+
+	viewModel, err := loadWorkbenchViewModel("test", runtime, session, "codex", day, true, false, "")
+	if err != nil {
+		t.Fatalf("loadWorkbenchViewModel returned error: %v", err)
+	}
+
+	if got, want := viewModel.TodayUsage.TotalTokens, 130; got != want {
+		t.Fatalf("viewModel.TodayUsage.TotalTokens = %d, want %d", got, want)
+	}
+	chat := viewModel.TodayUsage.PurposeBreakdown[model.UsagePurposeChat]
+	if chat.ByModel["deepseek/deepseek-chat"].TotalTokens() != 130 {
+		t.Fatalf("viewModel.TodayUsage chat model breakdown = %+v, want deepseek/deepseek-chat total 130", chat.ByModel)
 	}
 }
 

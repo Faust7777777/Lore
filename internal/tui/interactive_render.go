@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -271,6 +272,7 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 		builder.WriteString("  Actions  " + styleWarn.Render(fmt.Sprintf("%d pending", viewModel.Snapshot.PendingActions)) + "\n")
 	}
 	builder.WriteString("  Agent    " + oneLine(viewModel.Snapshot.AgentID, 20) + "\n")
+	renderStatusUsage(&builder, viewModel.TodayUsage, viewModel.UsageSoftWarningTokens)
 
 	// Three-line model identity display
 	builder.WriteString("\n" + styleSectionHead.Render("Models") + "\n")
@@ -318,6 +320,76 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 	}
 
 	return builder.String()
+}
+
+const (
+	statusUsagePurposeLimit = 3
+	statusUsageModelLimit   = 2
+)
+
+func renderStatusUsage(builder *strings.Builder, usage model.UsageSummary, softWarningTokens int) {
+	if usage.Calls == 0 {
+		return
+	}
+
+	builder.WriteString("\n" + styleSectionHead.Render("Today Usage") + "\n")
+	builder.WriteString(fmt.Sprintf("  Total   %d calls / %d tokens\n", usage.Calls, usage.TotalTokens))
+	builder.WriteString(fmt.Sprintf("  Tokens  %d prompt + %d completion\n", usage.PromptTokens, usage.CompletionTokens))
+	if softWarningTokens > 0 && usage.TotalTokens >= softWarningTokens {
+		builder.WriteString("  " + styleWarn.Render(fmt.Sprintf("Soft budget %d/%d tokens", usage.TotalTokens, softWarningTokens)) + "\n")
+	}
+
+	purposes := sortedUsagePurposeKeys(usage.PurposeBreakdown)
+	if len(purposes) > statusUsagePurposeLimit {
+		purposes = purposes[:statusUsagePurposeLimit]
+	}
+	for _, purpose := range purposes {
+		stats := usage.PurposeBreakdown[purpose]
+		label := purpose
+		if strings.TrimSpace(label) == "" {
+			label = "unspecified"
+		}
+		builder.WriteString(fmt.Sprintf("  %-15s %d calls / %d tokens\n", oneLine(label, 15), stats.Calls, stats.TotalTokens()))
+
+		models := sortedUsageModelKeys(stats.ByModel)
+		if len(models) > statusUsageModelLimit {
+			models = models[:statusUsageModelLimit]
+		}
+		for _, modelKey := range models {
+			modelStats := stats.ByModel[modelKey]
+			builder.WriteString(fmt.Sprintf("    %-22s %d tokens\n", oneLine(modelKey, 22), modelStats.TotalTokens()))
+		}
+	}
+}
+
+func sortedUsagePurposeKeys(breakdown map[string]model.UsagePurposeStats) []string {
+	keys := make([]string, 0, len(breakdown))
+	for key := range breakdown {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		left, right := breakdown[keys[i]].TotalTokens(), breakdown[keys[j]].TotalTokens()
+		if left != right {
+			return left > right
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
+}
+
+func sortedUsageModelKeys(byModel map[string]model.UsagePurposeStats) []string {
+	keys := make([]string, 0, len(byModel))
+	for key := range byModel {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		left, right := byModel[keys[i]].TotalTokens(), byModel[keys[j]].TotalTokens()
+		if left != right {
+			return left > right
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
 }
 
 func renderApprovalPane(drafts []model.Draft, cursor int, offset int, detail bool, focusedReview *app.DraftReview, width int, height int) string {

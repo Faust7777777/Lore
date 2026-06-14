@@ -164,6 +164,16 @@ function Invoke-V1BetaAcceptanceGate {
         -Label "V1 beta usage purpose/model breakdown CLI" `
         -Package "./internal/cli" `
         -Run "Test(EmitUsageJSONIncludesByModelBreakdown|RenderUsageReportShowsModelDetailUnderPurpose|RenderUsageReportShowsCrossPurposeModelTotals)$"
+
+    Invoke-GoGate `
+        -Label "V1 beta TUI usage visibility" `
+        -Package "./internal/cli" `
+        -Run "TestLoadWorkbenchViewModelIncludesTodayUsage$"
+
+    Invoke-GoGate `
+        -Label "V1 beta TUI usage rendering" `
+        -Package "./internal/tui" `
+        -Run "TestRenderInteractiveStatusShowsTodayUsageBreakdown$"
 }
 
 function Assert-RepoClean {
