@@ -2,12 +2,15 @@
 
 Standalone index for the review handoff documents under `docs/archive/review-handoff/`.
 
-Updated: 2026-06-04
+Updated: 2026-06-14
 
-Total handoff documents indexed: 116
+Total handoff documents indexed: 119
 
 ## Current Workstreams
 
+- [V1 RC Analysis Findings (2026-06-14)](archive/review-handoff/review-handoff-v1-rc-analysis-findings-2026-06-14.md)
+- [V1 RC Progress Log (2026-06-14)](archive/review-handoff/review-handoff-v1-rc-progress-log-2026-06-14.md)
+- [V1 RC Task Plan (2026-06-14)](archive/review-handoff/review-handoff-v1-rc-task-plan-2026-06-14.md)
 - [B-line Hermes Audit Follow-ups (2026-06-04)](archive/review-handoff/review-handoff-b-line-audit-followups-2026-06-04.md)
 - [B-line Persona Gate Activation](archive/review-handoff/review-handoff-b-line-cross-boundary-persona-gate-activation-2026-05-21.md)
 - [B-P8 Candidate Lifecycle Recovery](archive/review-handoff/review-handoff-b-line-p8-candidate-lifecycle-recovery-2026-05-22.md)
@@ -37,6 +40,9 @@ Total handoff documents indexed: 116
 
 ## All Handoff Documents
 
+- [review-handoff-v1-rc-analysis-findings-2026-06-14.md](archive/review-handoff/review-handoff-v1-rc-analysis-findings-2026-06-14.md)
+- [review-handoff-v1-rc-progress-log-2026-06-14.md](archive/review-handoff/review-handoff-v1-rc-progress-log-2026-06-14.md)
+- [review-handoff-v1-rc-task-plan-2026-06-14.md](archive/review-handoff/review-handoff-v1-rc-task-plan-2026-06-14.md)
 - [review-handoff-b-line-audit-followups-2026-06-04.md](archive/review-handoff/review-handoff-b-line-audit-followups-2026-06-04.md)
 - [review-handoff-backend-stability-workset.md](archive/review-handoff/review-handoff-backend-stability-workset.md)
 - [review-handoff-b-line-cli-hint-batch-2026-05-23.md](archive/review-handoff/review-handoff-b-line-cli-hint-batch-2026-05-23.md)
