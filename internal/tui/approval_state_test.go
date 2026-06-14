@@ -11,22 +11,29 @@ import (
 
 // approvalDriverStub tracks actions and returns deterministic results.
 type approvalDriverStub struct {
-	drafts  []model.Draft
-	actions []string
-	lastID  string
+	drafts         []model.Draft
+	pendingActions []PendingActionInfo
+	actions        []string
+	executedLines  []string
+	lastID         string
 }
 
 func (d *approvalDriverStub) Load(lastOutput string) (WorkbenchViewModel, error) {
 	vm := WorkbenchViewModel{
-		PendingDrafts: d.drafts,
-		Snapshot:      WorkbenchSnapshot{PendingDrafts: len(d.drafts)},
+		PendingDrafts:  d.drafts,
+		PendingActions: append([]PendingActionInfo(nil), d.pendingActions...),
+		Snapshot:       WorkbenchSnapshot{PendingDrafts: len(d.drafts), PendingActions: len(d.pendingActions)},
 	}
 	return vm, nil
 }
 
 func (d *approvalDriverStub) Execute(line string, lastOutput string) (InteractiveWorkbenchUpdate, error) {
+	d.executedLines = append(d.executedLines, line)
+	if line == "confirm" || line == "cancel" {
+		d.pendingActions = nil
+	}
 	vm, _ := d.Load(lastOutput)
-	return InteractiveWorkbenchUpdate{ViewModel: vm, LastOutput: lastOutput}, nil
+	return InteractiveWorkbenchUpdate{ViewModel: vm, LastOutput: line}, nil
 }
 
 func (d *approvalDriverStub) ExecuteFindingAction(action string, findingID string) (InteractiveWorkbenchUpdate, error) {
@@ -124,7 +131,73 @@ func newApprovalModel(drafts []model.Draft) interactiveWorkbenchModel {
 	return m
 }
 
+func newApprovalModelWithDriver(driver *approvalDriverStub) interactiveWorkbenchModel {
+	vm, _ := driver.Load("")
+	m := newInteractiveWorkbenchModel(driver, vm)
+	m.width = 100
+	m.height = 30
+	m.resize()
+	m.refreshContent(true)
+	return m
+}
+
 // --- State machine tests ---
+
+func TestApprovalFlowPendingShellActionConfirmUsesExecutePath(t *testing.T) {
+	driver := &approvalDriverStub{pendingActions: []PendingActionInfo{{
+		ID:          "shell_exec",
+		Kind:        "shell_exec",
+		Title:       "Shell command pending confirmation",
+		Detail:      "echo lore",
+		ApproveText: "confirm",
+		RejectText:  "cancel",
+	}}}
+	m := newApprovalModelWithDriver(driver)
+	m.focus = focusApproval
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = updated.(interactiveWorkbenchModel)
+	if cmd == nil {
+		t.Fatal("expected command for pending shell confirm")
+	}
+
+	updated, _ = m.Update(cmd())
+	m = updated.(interactiveWorkbenchModel)
+	if got, want := driver.executedLines, []string{"confirm"}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("executed lines = %v, want %v", got, want)
+	}
+	if len(m.viewModel.PendingActions) != 0 {
+		t.Fatalf("pending actions = %+v, want cleared after confirm", m.viewModel.PendingActions)
+	}
+}
+
+func TestApprovalFlowPendingShellActionCancelUsesExecutePath(t *testing.T) {
+	driver := &approvalDriverStub{pendingActions: []PendingActionInfo{{
+		ID:          "shell_exec",
+		Kind:        "shell_exec",
+		Title:       "Shell command pending confirmation",
+		Detail:      "echo lore",
+		ApproveText: "confirm",
+		RejectText:  "cancel",
+	}}}
+	m := newApprovalModelWithDriver(driver)
+	m.focus = focusApproval
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m = updated.(interactiveWorkbenchModel)
+	if cmd == nil {
+		t.Fatal("expected command for pending shell cancel")
+	}
+
+	updated, _ = m.Update(cmd())
+	m = updated.(interactiveWorkbenchModel)
+	if got, want := driver.executedLines, []string{"cancel"}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("executed lines = %v, want %v", got, want)
+	}
+	if len(m.viewModel.PendingActions) != 0 {
+		t.Fatalf("pending actions = %+v, want cleared after cancel", m.viewModel.PendingActions)
+	}
+}
 
 func TestApprovalFlow_PendingApproveStillVisibleThenApply(t *testing.T) {
 	drafts := []model.Draft{

@@ -139,6 +139,25 @@ type pendingShellCommand struct {
 	TimeoutSeconds int
 }
 
+func (s *Session) PendingActions() []tui.PendingActionInfo {
+	if s == nil || s.PendingShellCommand == nil {
+		return nil
+	}
+	command := strings.TrimSpace(s.PendingShellCommand.Command)
+	detail := command
+	if s.PendingShellCommand.TimeoutSeconds > 0 {
+		detail = fmt.Sprintf("%s (timeout %ds)", command, s.PendingShellCommand.TimeoutSeconds)
+	}
+	return []tui.PendingActionInfo{{
+		ID:          "shell_exec",
+		Kind:        "shell_exec",
+		Title:       "Shell command pending confirmation",
+		Detail:      detail,
+		ApproveText: "confirm",
+		RejectText:  "cancel",
+	}}
+}
+
 // PersonaExtractModelInfo captures the upstream model identity for
 // persona-extract failure logging. All fields are optional. The API
 // key is deliberately absent: the log file is in workdir and must

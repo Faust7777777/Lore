@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -214,6 +215,69 @@ func TestLoadWorkbenchViewModelBuildsSnapshotFromRuntimeAndSession(t *testing.T)
 	}
 	if got, want := viewModel.Conversation.LastOutput, "ready"; got != want {
 		t.Fatalf("viewModel.Conversation.LastOutput = %q, want %q", got, want)
+	}
+}
+
+type shellPendingLoopAgent struct{}
+
+func (shellPendingLoopAgent) Decide(_ string, _ operatoragent.Context) (operatoragent.Decision, error) {
+	return operatoragent.Decision{}, nil
+}
+
+func (shellPendingLoopAgent) Respond(_ string, _ operatoragent.Context, runtime operatoragent.ToolRuntime) (operatoragent.Response, error) {
+	result, err := runtime.CallTool("shell_exec", map[string]any{
+		"command":         "echo lore",
+		"timeout_seconds": 5,
+	})
+	if err != nil {
+		return operatoragent.Response{}, err
+	}
+	return operatoragent.Response{
+		Final:      result.Content,
+		StopReason: operatoragent.TurnStopFinal,
+		StepCount:  1,
+	}, nil
+}
+
+func TestLoadWorkbenchViewModelIncludesPendingShellAction(t *testing.T) {
+	t.Setenv("LORE_AGENT_ENABLE_SHELL", "1")
+	day := time.Date(2026, 4, 23, 0, 0, 0, 0, time.Local)
+	workDir := t.TempDir()
+	runtime := workbenchRuntimeStub{
+		managed: model.ManagedStatusView{
+			Ready:     true,
+			WorkDir:   workDir,
+			VaultRoot: filepath.Join(workDir, "vault"),
+			Health:    model.HealthSnapshot{Outcome: model.NewOutcome(model.StatusOK)},
+		},
+		processSink: app.ProcessSinkDayView{AgentID: "codex", Day: day},
+	}
+	session := console.NewSessionWithAgent("test", shellPendingLoopAgent{})
+	session.EnableLocalWorkTools = true
+
+	if _, err := session.HandleContext(context.Background(), "queue shell", runtime); err != nil {
+		t.Fatalf("HandleContext(shell pending) error = %v", err)
+	}
+
+	viewModel, err := loadWorkbenchViewModel("test", runtime, session, "codex", day, true, true, "")
+	if err != nil {
+		t.Fatalf("loadWorkbenchViewModel returned error: %v", err)
+	}
+	if got, want := len(viewModel.PendingActions), 1; got != want {
+		t.Fatalf("len(viewModel.PendingActions) = %d, want %d", got, want)
+	}
+	action := viewModel.PendingActions[0]
+	if action.Kind != "shell_exec" {
+		t.Fatalf("PendingActions[0].Kind = %q, want shell_exec", action.Kind)
+	}
+	if !strings.Contains(action.Detail, "echo lore") {
+		t.Fatalf("PendingActions[0].Detail = %q, want command", action.Detail)
+	}
+	if action.ApproveText != "confirm" || action.RejectText != "cancel" {
+		t.Fatalf("PendingActions[0] actions = %+v, want confirm/cancel", action)
+	}
+	if viewModel.Snapshot.PendingActions != 1 {
+		t.Fatalf("Snapshot.PendingActions = %d, want 1", viewModel.Snapshot.PendingActions)
 	}
 }
 

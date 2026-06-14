@@ -80,7 +80,7 @@ func renderInteractiveWorkbenchLayout(model interactiveWorkbenchModel) string {
 		default:
 			// focusApproval (and any other) shows drafts
 			rightBottomTitle = approvalTitle
-			rightBottomContent = renderApprovalPane(model.viewModel.PendingDrafts, model.approvalCursor, model.approvalOffset, model.approvalDetail, model.viewModel.FocusedReview, rightWidth-4, visiblePanelHeight(model.approvalHeight, rightBottomHeight-4))
+			rightBottomContent = renderApprovalPaneWithActions(model.viewModel.PendingActions, model.viewModel.PendingDrafts, model.approvalCursor, model.approvalOffset, model.approvalDetail, model.viewModel.FocusedReview, rightWidth-4, visiblePanelHeight(model.approvalHeight, rightBottomHeight-4))
 		case focusCandidates:
 			rightBottomTitle = "Persona Candidates"
 			rightBottomContent = renderCandidatePanel(model.viewModel.CandidateList, model.candidatePanelCursor, model.candidatePanelDetail, rightWidth-4, visiblePanelHeight(model.approvalHeight, rightBottomHeight-4))
@@ -267,6 +267,9 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 		builder.WriteString("  " + styleMutedText.Render(msg) + "\n")
 	}
 	builder.WriteString("  Drafts   " + viewModel.Snapshot.DraftSummary() + "\n")
+	if viewModel.Snapshot.PendingActions > 0 {
+		builder.WriteString("  Actions  " + styleWarn.Render(fmt.Sprintf("%d pending", viewModel.Snapshot.PendingActions)) + "\n")
+	}
 	builder.WriteString("  Agent    " + oneLine(viewModel.Snapshot.AgentID, 20) + "\n")
 
 	// Three-line model identity display
@@ -318,16 +321,54 @@ func renderInteractiveStatus(viewModel WorkbenchViewModel) string {
 }
 
 func renderApprovalPane(drafts []model.Draft, cursor int, offset int, detail bool, focusedReview *app.DraftReview, width int, height int) string {
-	if len(drafts) == 0 {
+	return renderApprovalPaneWithActions(nil, drafts, cursor, offset, detail, focusedReview, width, height)
+}
+
+func renderApprovalPaneWithActions(actions []PendingActionInfo, drafts []model.Draft, cursor int, offset int, detail bool, focusedReview *app.DraftReview, width int, height int) string {
+	if len(actions) == 0 && len(drafts) == 0 {
 		return styleMutedText.Render("No reviewable drafts.") + "\n" +
 			styleMutedText.Render("Proposals appear here for review.")
 	}
 
-	if detail && cursor < len(drafts) {
+	if len(actions) == 0 && detail && cursor < len(drafts) {
 		return renderApprovalDetailWithTarget(drafts[cursor], focusedReview, width, height)
+	}
+	if len(actions) > 0 {
+		return renderPendingActionList(actions, drafts, width, height)
 	}
 
 	return renderApprovalList(drafts, cursor, offset, width, height)
+}
+
+func renderPendingActionList(actions []PendingActionInfo, drafts []model.Draft, width int, height int) string {
+	var builder strings.Builder
+
+	builder.WriteString(styleSectionHead.Render("Pending Actions") + "\n")
+	action := actions[0]
+	title := strings.TrimSpace(action.Title)
+	if title == "" {
+		title = "Pending action"
+	}
+	builder.WriteString("  " + styleWarn.Render("act") + " " + oneLine(title, maxInt(8, width-8)) + "\n")
+	if strings.TrimSpace(action.Detail) != "" && height > 3 {
+		builder.WriteString("  " + styleMutedText.Render(oneLine(action.Detail, maxInt(8, width-4))) + "\n")
+	}
+
+	approve := strings.TrimSpace(action.ApproveText)
+	if approve == "" {
+		approve = "confirm"
+	}
+	reject := strings.TrimSpace(action.RejectText)
+	if reject == "" {
+		reject = "cancel"
+	}
+	builder.WriteString(styleMutedText.Render("a=" + approve + " r=" + reject))
+	if len(drafts) > 0 {
+		builder.WriteString(styleMutedText.Render(fmt.Sprintf("  %d draft(s) waiting", len(drafts))))
+	}
+	builder.WriteString("\n")
+
+	return builder.String()
 }
 
 // --- Model panel ---

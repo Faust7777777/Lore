@@ -292,7 +292,12 @@ try {
     Invoke-GoGate `
         -Label "TUI approval state, task-step render, and viewport guardrails" `
         -Package "./internal/tui" `
-        -Run "Test(ApprovalFlow_|InteractiveWorkbenchViewDoesNotRefreshContent|RenderInteractiveConversationShowsTaskSteps|RenderTaskStepsArgSummary|RenderTaskStepsTruncatesObservation|RenderTaskStepsErrorStep|RenderTaskStepsNonErrorLastOutputNotShown|FindingsOffsetUsesFindingsPanelHeight|FindingsListQuick(ResolveAction|IgnoreAction|ActionNoOpOnNonOpenState)|SinkOffsetUsesSinkPanelHeight|ApprovalOffsetUsesApprovalPanelHeight|ModelPanel(ProfilesPersistSelectedProfile|CreateProfileFromPreset)|ModelProfileAndPresetRenderDoNotLeakSecrets|ErrorsCommand(RendersDiagnosticsWithHintsAndNoSecrets|EmptyState))"
+        -Run "Test(ApprovalFlow_|ApprovalFlowPendingShellAction(ConfirmUsesExecutePath|CancelUsesExecutePath)|InteractiveWorkbenchViewDoesNotRefreshContent|RenderApprovalPaneWithPendingShellAction|RenderInteractiveConversationShowsTaskSteps|RenderTaskStepsArgSummary|RenderTaskStepsTruncatesObservation|RenderTaskStepsErrorStep|RenderTaskStepsNonErrorLastOutputNotShown|FindingsOffsetUsesFindingsPanelHeight|FindingsListQuick(ResolveAction|IgnoreAction|ActionNoOpOnNonOpenState)|SinkOffsetUsesSinkPanelHeight|ApprovalOffsetUsesApprovalPanelHeight|ModelPanel(ProfilesPersistSelectedProfile|CreateProfileFromPreset)|ModelProfileAndPresetRenderDoNotLeakSecrets|ErrorsCommand(RendersDiagnosticsWithHintsAndNoSecrets|EmptyState))"
+
+    Invoke-GoGate `
+        -Label "TUI pending action workbench model" `
+        -Package "./internal/cli" `
+        -Run "TestLoadWorkbenchViewModelIncludesPendingShellAction$"
 
     if ($Full) {
         $verifyArgs = @(

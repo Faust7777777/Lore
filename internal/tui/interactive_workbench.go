@@ -1396,6 +1396,15 @@ func (m interactiveWorkbenchModel) handleCandidateDetailKeys(msg tea.KeyMsg) (te
 // Detail view: a=approve, r=reject, p=apply, esc=back to list.
 func (m interactiveWorkbenchModel) handleApprovalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	drafts := m.viewModel.PendingDrafts
+	if len(m.viewModel.PendingActions) > 0 {
+		action := m.viewModel.PendingActions[0]
+		switch msg.String() {
+		case "a":
+			return m.executePendingAction(action, action.ApproveText)
+		case "r":
+			return m.executePendingAction(action, action.RejectText)
+		}
+	}
 
 	if m.approvalDetail {
 		return m.handleApprovalDetailKeys(msg)
@@ -1434,6 +1443,20 @@ func (m interactiveWorkbenchModel) handleApprovalKeys(msg tea.KeyMsg) (tea.Model
 		return m, nil
 	}
 	return m, nil
+}
+
+func (m interactiveWorkbenchModel) executePendingAction(action PendingActionInfo, input string) (tea.Model, tea.Cmd) {
+	line := strings.TrimSpace(input)
+	if line == "" {
+		return m, nil
+	}
+	m.running = true
+	m.pendingLine = action.Title
+	m.refreshContent(true)
+	return m, func() tea.Msg {
+		update, err := m.driver.Execute(line, m.lastOutput)
+		return interactiveResultMsg{update: update, err: err}
+	}
 }
 
 // clampApprovalOffset keeps the cursor inside the visible window.

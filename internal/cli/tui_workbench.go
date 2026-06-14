@@ -96,6 +96,8 @@ func loadWorkbenchViewModel(version string, runtime console.Runtime, session *co
 	)
 	vm.Snapshot.CurrentModel = modelLabel(session)
 	vm.CandidateList = candidates
+	vm.PendingActions = session.PendingActions()
+	vm.Snapshot.PendingActions = len(vm.PendingActions)
 	// Load LLM identity for status panel (key-safe projections)
 	vm.ChatModelIdentity = loadLLMIdentity(runtime, config.LLMPurposeOperator)
 	vm.PersonaModelIdentity = loadLLMIdentity(runtime, config.LLMPurposePersonaExtract)

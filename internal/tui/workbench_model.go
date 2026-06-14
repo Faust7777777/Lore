@@ -14,6 +14,7 @@ type WorkbenchViewModel struct {
 	Header               WorkbenchHeader
 	Snapshot             WorkbenchSnapshot
 	ManagedCore          []model.ManagedCoreStatus
+	PendingActions       []PendingActionInfo
 	PendingDrafts        []model.Draft
 	FocusedReview        *app.DraftReview
 	ProcessSink          app.ProcessSinkDayView
@@ -41,6 +42,7 @@ type WorkbenchSnapshot struct {
 	Profile         string
 	GitEnabled      bool
 	ShellEnabled    bool
+	PendingActions  int
 	PendingDrafts   int
 	TotalDrafts     int
 	Checkpoints     int
@@ -54,6 +56,15 @@ type WorkbenchSnapshot struct {
 	DailyReportPath string
 	SessionID       string
 	TranscriptPath  string
+}
+
+type PendingActionInfo struct {
+	ID          string
+	Kind        string
+	Title       string
+	Detail      string
+	ApproveText string
+	RejectText  string
 }
 
 type WorkbenchConversation struct {

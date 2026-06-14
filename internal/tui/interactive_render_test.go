@@ -314,6 +314,28 @@ func TestRenderApprovalPaneEmpty(t *testing.T) {
 	}
 }
 
+func TestRenderApprovalPaneWithPendingShellAction(t *testing.T) {
+	actions := []PendingActionInfo{{
+		ID:          "shell_exec",
+		Kind:        "shell_exec",
+		Title:       "Shell command pending confirmation",
+		Detail:      "echo lore",
+		ApproveText: "confirm",
+		RejectText:  "cancel",
+	}}
+
+	result := renderApprovalPaneWithActions(actions, nil, 0, 0, false, nil, 44, 10)
+	if !strings.Contains(result, "Pending Actions") {
+		t.Fatalf("approval pane should show pending action section, got: %q", result)
+	}
+	if !strings.Contains(result, "Shell command pending confirmation") || !strings.Contains(result, "echo lore") {
+		t.Fatalf("approval pane should show shell confirmation and command, got: %q", result)
+	}
+	if !strings.Contains(result, "a=confirm") || !strings.Contains(result, "r=cancel") {
+		t.Fatalf("approval pane should show confirm/cancel keys, got: %q", result)
+	}
+}
+
 func TestRenderApprovalListWithDrafts(t *testing.T) {
 	drafts := []model.Draft{
 		{ID: "d1", Kind: model.DraftKindMarkdownNoteWrite, Title: "Test note", State: model.DraftPendingReview},
