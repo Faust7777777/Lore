@@ -194,6 +194,61 @@ func TestRuntimeScanVaultChangesAuditsGovernedCoreOutOfBandChange(t *testing.T) 
 	})
 }
 
+func TestRuntimePostScanFindingReconcilesThroughOperatorQueue(t *testing.T) {
+	workDir := t.TempDir()
+	runtime, err := openRuntimeForTest(t, workDir)
+	if err != nil {
+		t.Fatalf("OpenRuntime() error = %v", err)
+	}
+	runtime.Config.Vault.DebounceWindow = 500 * time.Millisecond
+
+	now := time.Date(2026, 4, 28, 10, 30, 0, 0, time.Local)
+	if _, err := runtime.Bootstrap(now); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if _, err := runtime.ScanVaultChanges(now); err != nil {
+		t.Fatalf("ScanVaultChanges(prime) error = %v", err)
+	}
+
+	secondNow := now.Add(5 * time.Second)
+	target := vault.NormalizeRelativePath(runtime.Config.Vault.ManagedCore.Persona)
+	absPath := filepath.Join(runtime.Config.Paths.VaultRoot, runtime.Config.Vault.ManagedCore.Persona)
+	writeTestPlan(t, runtime, absPath, "# Persona\n\nOut-of-band update that needs review.", secondNow.Add(-time.Second))
+	result, err := runtime.ScanVaultChanges(secondNow)
+	if err != nil {
+		t.Fatalf("ScanVaultChanges(changed) error = %v", err)
+	}
+	if result.GovernanceFindings != 1 || len(result.FindingIDs) != 1 {
+		t.Fatalf("scan findings = %d ids=%v, want one governed finding", result.GovernanceFindings, result.FindingIDs)
+	}
+
+	queue, err := runtime.OperatorQueue(secondNow)
+	if err != nil {
+		t.Fatalf("OperatorQueue() error = %v", err)
+	}
+	if len(queue.OpenFindings) != 1 {
+		t.Fatalf("OpenFindings = %+v, want one post-scan finding", queue.OpenFindings)
+	}
+	finding := queue.OpenFindings[0]
+	if finding.ID != result.FindingIDs[0] {
+		t.Fatalf("queue finding ID = %q, want scan finding ID %q", finding.ID, result.FindingIDs[0])
+	}
+	if finding.Kind != model.FindingGovernanceReviewNeeded || finding.Target.Path != target || finding.State != model.FindingOpen {
+		t.Fatalf("queue finding = %+v, want open governance finding for %s", finding, target)
+	}
+
+	if _, err := runtime.ResolveFinding(finding.ID); err != nil {
+		t.Fatalf("ResolveFinding(%s) error = %v", finding.ID, err)
+	}
+	afterResolve, err := runtime.OperatorQueue(secondNow.Add(time.Second))
+	if err != nil {
+		t.Fatalf("OperatorQueue(after resolve) error = %v", err)
+	}
+	if len(afterResolve.OpenFindings) != 0 {
+		t.Fatalf("OpenFindings after resolve = %+v, want none", afterResolve.OpenFindings)
+	}
+}
+
 func TestRuntimeScanVaultChangesAuditsProcessSinkOutOfBandChange(t *testing.T) {
 	workDir := t.TempDir()
 	runtime, err := openRuntimeForTest(t, workDir)

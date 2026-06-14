@@ -81,3 +81,22 @@ func TestReleaseGateIncludesTUIUsageVisibilityCoverage(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseGateIncludesPostScanReconciliationCoverage(t *testing.T) {
+	scriptPath := filepath.Join("..", "..", "scripts", "release-gate.ps1")
+	raw, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", scriptPath, err)
+	}
+	script := string(raw)
+
+	required := []string{
+		"V1 beta post-scan reconciliation",
+		"TestRuntimePostScanFindingReconcilesThroughOperatorQueue$",
+	}
+	for _, want := range required {
+		if !strings.Contains(script, want) {
+			t.Fatalf("release-gate.ps1 missing %q", want)
+		}
+	}
+}

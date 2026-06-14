@@ -156,6 +156,11 @@ function Invoke-V1BetaAcceptanceGate {
         -Run "Test(RenderOperatorQueue|EmitOperatorQueueJSON|OperatorQueueNudge)$"
 
     Invoke-GoGate `
+        -Label "V1 beta post-scan reconciliation" `
+        -Package "./internal/app" `
+        -Run "TestRuntimePostScanFindingReconcilesThroughOperatorQueue$"
+
+    Invoke-GoGate `
         -Label "V1 beta usage purpose/model breakdown" `
         -Package "./internal/store" `
         -Run "Test(SummarizeUsageByModel(SplitsSamePurposeAcrossModels|DoesNotMixAcrossPurposes|FallsBackToUnknown)|SummarizeUsageBreakdownEmptyPurposeFoldsIntoChat)$"
@@ -270,7 +275,7 @@ try {
     Invoke-GoGate `
         -Label "governed smoke, daemon watcher, and post-scan guardrails" `
         -Package "./internal/app" `
-        -Run "Test(RuntimeSmokeP0|RuntimeSmokeGovernedMarkdownNoteIntake|RuntimeSmokeExternalMCPGovernedMarkdownNoteIntake|RunVaultDaemonWatcherCreatesDraftAfterFileChange|RunVaultDaemonWatcherIgnoresObsidianDirectory|RunVaultDaemonWatcherSyncsCodexJSONLBeforePoll|RuntimeScanVaultChangesPrimesThenCreatesDraft|RuntimeScanVaultChangesWaitsForDebounceBeforeCreatingDraft|RuntimeScanVaultChangesAuditsOutOfBandOrdinaryNote|RuntimeScanVaultChangesAuditsGovernedCoreOutOfBandChange|RuntimeScanVaultChangesAuditsProcessSinkOutOfBandChange|RuntimeScanVaultChangesAuditsNewOutOfBandOrdinaryNoteAfterBaseline|RuntimeScanVaultChangesAuditsRecreatedGovernedCoreAfterBaseline|RuntimeScanVaultChangesAuditsNewProcessSinkAfterBaseline)$"
+        -Run "Test(RuntimeSmokeP0|RuntimeSmokeGovernedMarkdownNoteIntake|RuntimeSmokeExternalMCPGovernedMarkdownNoteIntake|RunVaultDaemonWatcherCreatesDraftAfterFileChange|RunVaultDaemonWatcherIgnoresObsidianDirectory|RunVaultDaemonWatcherSyncsCodexJSONLBeforePoll|RuntimeScanVaultChangesPrimesThenCreatesDraft|RuntimeScanVaultChangesWaitsForDebounceBeforeCreatingDraft|RuntimeScanVaultChangesAuditsOutOfBandOrdinaryNote|RuntimeScanVaultChangesAuditsGovernedCoreOutOfBandChange|RuntimeScanVaultChangesAuditsProcessSinkOutOfBandChange|RuntimeScanVaultChangesAuditsNewOutOfBandOrdinaryNoteAfterBaseline|RuntimeScanVaultChangesAuditsRecreatedGovernedCoreAfterBaseline|RuntimeScanVaultChangesAuditsNewProcessSinkAfterBaseline|RuntimePostScanFindingReconcilesThroughOperatorQueue)$"
 
     Invoke-GoGate `
         -Label "CLI smoke and daemon command guardrails" `
